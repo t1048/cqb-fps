@@ -32,6 +32,8 @@ export interface ShotResult {
 export class WeaponSystem {
   private current: WeaponDef;
   private readonly ammo = new Map<string, number>();
+  /** 予備弾数（reserveMagazines 指定の武器のみ。未登録 = 無限） */
+  private readonly reserve = new Map<string, number>();
   private cooldown = 0;
   private reloadLeft = 0;
   private recoilPitch = 0; // 蓄積した上向きキック（ラジアン）
@@ -59,7 +61,28 @@ export class WeaponSystem {
     const first = weapons.find((w) => w.category !== 'throwable');
     if (!first) throw new Error('[WeaponSystem] no fireable weapon defined in weapons.json');
     this.current = first;
-    for (const w of weapons) this.ammo.set(w.id, w.magazineSize);
+    for (const w of weapons) {
+      this.ammo.set(w.id, w.magazineSize);
+      if (w.reserveMagazines !== undefined) this.reserve.set(w.id, w.reserveMagazines * w.magazineSize);
+    }
+  }
+
+  /** 現在武器の予備弾数（無限なら null） */
+  get reserveAmmo(): number | null {
+    return this.reserve.get(this.current.id) ?? null;
+  }
+
+  /** 予備弾を追加（有限弾数の主武器すべてに magazines 本分）。 */
+  addReserveMagazines(magazines: number): void {
+    for (const w of this.weapons) {
+      const r = this.reserve.get(w.id);
+      if (r !== undefined) this.reserve.set(w.id, r + magazines * w.magazineSize);
+    }
+  }
+
+  private canReload(w: WeaponDef): boolean {
+    const r = this.reserve.get(w.id);
+    return r === undefined || r > 0;
   }
 
   get weapon(): WeaponDef {
@@ -108,9 +131,16 @@ export class WeaponSystem {
       this.reloadLeft -= dt;
       if (this.reloadLeft <= 0) {
         this.reloadLeft = 0;
-        this.ammo.set(w.id, w.magazineSize);
+        const r = this.reserve.get(w.id);
+        if (r === undefined) {
+          this.ammo.set(w.id, w.magazineSize);
+        } else {
+          const take = Math.min(r, w.magazineSize - this.ammoInMagazine);
+          this.reserve.set(w.id, r - take);
+          this.ammo.set(w.id, this.ammoInMagazine + take);
+        }
       }
-    } else if (!this.suppressFire && this.input.wasPressed('reload') && this.ammoInMagazine < w.magazineSize) {
+    } else if (!this.suppressFire && this.input.wasPressed('reload') && this.ammoInMagazine < w.magazineSize && this.canReload(w)) {
       this.reloadLeft = w.reloadTime;
     }
 
@@ -120,7 +150,7 @@ export class WeaponSystem {
       if (this.ammoInMagazine > 0) {
         this.fire();
         this.cooldown = 1 / w.fireRate;
-      } else {
+      } else if (this.canReload(w)) {
         this.reloadLeft = w.reloadTime; // 弾切れで自動リロード
       }
     }

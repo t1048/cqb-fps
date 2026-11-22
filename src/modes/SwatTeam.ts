@@ -30,21 +30,21 @@ const SWAT_COMBAT: CombatParams = {
   hesitateRetreatMax: 1.5,
   hesitateShakeDeg: 0,
   moveSpeed: 2.5,
-  fireInterval: 0.2,
-  shotsPerPeek: 4,
+  fireInterval: 0.13,
+  shotsPerPeek: 6,
   magazineSize: 30,
-  reloadSec: 2.4,
-  coverSecMin: 0.6,
-  coverSecMax: 1.3,
-  peekSecMax: 2.4,
+  reloadSec: 2.0,
+  coverSecMin: 0.4,
+  coverSecMax: 0.9,
+  peekSecMax: 3.0,
   engageRange: 30,
   coverSearchRange: 6,
   coverMargin: 0.45,
   crouchCoverMaxHeight: 1.5,
-  flinchSec: 0.3,
+  flinchSec: 0.15,
   gunshotNoiseRadius: 40,
-  shotDamage: 15,
-  baseSpreadDeg: 3.6,
+  shotDamage: 21,
+  baseSpreadDeg: 2.2,
 };
 
 const SWAT_MOBILITY: MobilityParams = {
@@ -58,24 +58,25 @@ const SWAT_MOBILITY: MobilityParams = {
   investigateMaxDist: 40,
   investigateSpeedScale: 0.9,
   reinforceOnGunshot: true,
-  repositionAfterLostSec: 2.6,
-  flankChance: 0.35,
+  repositionAfterLostSec: 1.6,
+  flankChance: 0.5,
   guardHostageRoom: false,
 };
 
 const DEG2RAD = Math.PI / 180;
-const HP = 100;
+/** ボディアーマー込みの耐久（改造拳銃で 8 発程度） */
+const HP = 150;
 const VISION_FOV_DEG = 115;
-const VISION_RANGE = 24;
-const VISION_RANGE_CROUCH = 15;
-const REACTION_SEC = 0.42;
-const HEARING_MUL = 1.15;
+const VISION_RANGE = 28;
+const VISION_RANGE_CROUCH = 18;
+const REACTION_SEC = 0.28;
+const HEARING_MUL = 1.4;
 const OCCLUDED_MUL = 0.5;
-const ENGAGE_LOST_SEC = 7;
-const SWEEP_SPEED = 0.72;
-const HUNT_SPEED = 0.95;
-const FLASH_TEAM_CD = 14;
-const FLASH_PER_TEAM = 4;
+const ENGAGE_LOST_SEC = 5;
+const SWEEP_SPEED = 0.8;
+const HUNT_SPEED = 1.05;
+const FLASH_TEAM_CD = 10;
+const FLASH_PER_TEAM = 6;
 const FLASH_MIN_DIST = 3.2;
 const FLASH_MAX_DIST = 9;
 const SELF_NOISE_RADIUS = 3.2;
@@ -87,7 +88,11 @@ type HunterState = 'staging' | 'sweep' | 'hunt' | 'breach' | 'engage' | 'down';
 interface ShieldBody {
   readonly alive: boolean;
   readonly body: HumanoidBody;
+  readonly shieldedBy?: string | null;
 }
+
+/** プレイヤーが抱えた人質の正面 ±この角度にいる隊員は発砲しない */
+const HOSTAGE_COVER_DEG = 40;
 
 export interface SwatSpawn {
   x: number;
@@ -270,7 +275,7 @@ class SwatHunter implements HitTarget {
     this.known = { x: threat.x, y: p.position.y, z: threat.z };
     this.team.shareSighting(this.known);
     const from = { x: this.body.px, y: eyeY, z: this.body.pz };
-    if (this.team.civilianInLine(from, threat.point)) return; // 人質が射線上: 発砲しない
+    if (this.team.civilianInLine(from, threat.point) || this.team.coveredByHostage(this.body.px, this.body.pz)) return; // 人質が射線上: 発砲しない
     this.sees = true;
     this.threat = threat;
   }
@@ -582,6 +587,17 @@ export class SwatTeam {
     return this.started;
   }
 
+  /** 交渉で突入班を 1 名下げる（最後尾の隊員を撤収）。成功で true */
+  withdraw(): boolean {
+    if (this.started || this.hunters.length <= 1) return false;
+    const h = this.hunters.pop()!;
+    for (const x of this.hunters) if (x.leader === h) x.leader = null;
+    this.d.weapons.removeTarget(h);
+    this.root.remove(h.body.group);
+    h.dispose();
+    return true;
+  }
+
   /** 突入開始 */
   beginAssault(): void {
     if (this.started) return;
@@ -837,6 +853,23 @@ export class SwatTeam {
       }
     }
     return best;
+  }
+
+  /** プレイヤーが人質を盾にしており、(x,z) がその人質の正面方向（±HOSTAGE_COVER_DEG）にある */
+  coveredByHostage(x: number, z: number): boolean {
+    const p = this.d.player.position;
+    for (const c of this.d.civilians()) {
+      if (!c.alive || c.shieldedBy !== 'player') continue;
+      const hx = c.body.px - p.x;
+      const hz = c.body.pz - p.z;
+      const tx = x - p.x;
+      const tz = z - p.z;
+      const hl = Math.hypot(hx, hz);
+      const tl = Math.hypot(tx, tz);
+      if (hl < 1e-3 || tl < 1e-3) return true;
+      if ((hx * tx + hz * tz) / (hl * tl) >= Math.cos(HOSTAGE_COVER_DEG * DEG2RAD)) return true;
+    }
+    return false;
   }
 
   /** from→to の射線上に生存民間人の体がある */

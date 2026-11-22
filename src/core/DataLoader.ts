@@ -1081,6 +1081,8 @@ export function validateWeapons(raw: unknown, source = 'weapons'): WeaponDef[] {
       recoilRecovery: r.num(e, 'recoilRecovery', p, 0),
       moraleDamage: r.num(e, 'moraleDamage', p, 0, 100),
       noiseRadius: r.num(e, 'noiseRadius', p, 0),
+      ...(e.faction !== undefined ? { faction: r.oneOf(e, 'faction', p, ['swat', 'suspect'] as const) } : {}),
+      ...(e.reserveMagazines !== undefined ? { reserveMagazines: r.num(e, 'reserveMagazines', p, 0, 99) } : {}),
     };
   });
   r.uniqueIds(weapons, 'weapons');

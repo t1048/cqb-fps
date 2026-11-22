@@ -17,8 +17,8 @@ export function parseGameMode(v: string | null | undefined): GameMode {
 
 /** 容疑者モードのルール定数 */
 export const SUSPECT_MODE = {
-  /** SWAT 突入までの準備時間（秒） */
-  prepSec: 20,
+  /** SWAT 突入までの準備時間（秒）。交渉で増減する */
+  prepSec: 30,
   /** 突入後、籠城成功までの時間（秒） */
   holdSec: 240,
   /** SWAT 隊員数 */
@@ -65,7 +65,8 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   const summary =
     'あなたは立てこもり犯だ。まもなく SWAT 4 名が突入してくる。' +
     `突入から ${Math.round(SUSPECT_MODE.holdSec / 60)} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
-    'ドアを施錠（F 長押し）して時間を稼ぎ、足音を殺して待ち伏せろ。民間人が射線上にいる間、SWAT は発砲できない。';
+    '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
+    'ドアを施錠（F 長押し）し、人質を盾に連れ回せ（民間人の前で F 長押し）。民間人が射線上にいる間、SWAT は発砲できない。';
   return {
     map: {
       ...map,
@@ -82,9 +83,15 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   };
 }
 
-/** 容疑者が使える武器（非致死性装備・交渉無線は無し） */
+/** 容疑者が使える武器（faction='suspect' の改造拳銃のみ。非致死性装備・SWAT 装備は無し） */
 export function suspectWeapons(defs: readonly WeaponDef[]): WeaponDef[] {
-  return defs.filter((w) => w.category === 'primary' || w.category === 'throwable');
+  const own = defs.filter((w) => w.faction === 'suspect');
+  return own.length > 0 ? own : defs.filter((w) => w.category === 'primary');
+}
+
+/** SWAT（通常モード）が使える武器 */
+export function swatWeapons(defs: readonly WeaponDef[]): WeaponDef[] {
+  return defs.filter((w) => w.faction !== 'suspect');
 }
 
 export type SuspectOutcome = 'repelled' | 'survived' | 'killed' | 'arrested';
@@ -220,6 +227,21 @@ export class SuspectMission {
     );
   }
 
+  /** 突入までの残り準備時間（秒） */
+  get prepLeft(): number {
+    return Math.max(0, this.assaultAt - this.elapsed);
+  }
+
+  /** 交渉で準備時間を加算 */
+  addPrep(sec: number): void {
+    if (!this.team.hasStarted) this.assaultAt += sec;
+  }
+
+  /** 交渉決裂: 準備時間を短縮 */
+  breakdown(): void {
+    if (!this.team.hasStarted) this.assaultAt = Math.min(this.assaultAt, this.elapsed + 8);
+  }
+
   setVisible(v: boolean): void {
     this.el.style.display = v ? 'block' : 'none';
   }
@@ -294,7 +316,7 @@ export class SuspectMission {
   private gaugeLabel = '';
 
   /** 今フレームの長押しゲージを要求（最後の要求を flushGauge で反映） */
-  private showGauge(label: string, ratio: number): void {
+  showGauge(label: string, ratio: number): void {
     this.gaugeReq = Math.max(0, Math.min(1, ratio));
     this.gaugeLabel = label;
   }

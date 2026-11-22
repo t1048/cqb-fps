@@ -29,6 +29,13 @@
       "moraleDamage": 65, "noiseRadius": 6
     },
     {
+      "id": "machine_pistol", "name": "改造フルオート拳銃", "category": "primary", "slot": 1, "faction": "suspect",
+      "damage": 19, "fireRate": 13, "magazineSize": 15, "reloadTime": 2.0, "range": 28, "reserveMagazines": 3,
+      "hipSpread": 2.6, "adsSpread": 2.6, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 3.5,
+      "recoilPitch": 1.7, "recoilYawRange": 1.1, "recoilRecovery": 5,
+      "moraleDamage": 0, "noiseRadius": 32
+    },
+    {
       "id": "flashbang", "name": "フラッシュバン", "category": "throwable", "slot": 4,
       "damage": 0, "fireRate": 0.5, "magazineSize": 2, "reloadTime": 0, "range": 12,
       "hipSpread": 0, "adsSpread": 0, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 0,

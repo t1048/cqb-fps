@@ -67,8 +67,16 @@ export class PlayerController {
     return this.hpValue > 0;
   }
 
+  /** 防弾チョッキの耐久値（0 = 未装着）。被弾の 60% を耐久が尽きるまで肩代わりする */
+  armor = 0;
+
   takeDamage(amount: number): number {
     if (this.disposed || this.hpValue <= 0 || amount <= 0) return this.hpValue;
+    if (this.armor > 0) {
+      const absorbed = Math.min(this.armor, amount * 0.6);
+      this.armor -= absorbed;
+      amount -= absorbed;
+    }
     this.hpValue = Math.max(0, this.hpValue - amount);
     return this.hpValue;
   }

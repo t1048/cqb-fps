@@ -169,6 +169,18 @@ export class Civilian implements HitTarget {
     return true;
   }
 
+  /** 交渉で解放され建物外へ退避した（SECURED 扱い・非表示）。 */
+  evacuated = false;
+
+  evacuate(): boolean {
+    if (!this.alive || this.shieldedBy || this.evacuated) return false;
+    this.secure();
+    this.evacuated = true;
+    this.body.group.visible = false;
+    this.body.setPosition(this.body.px, this.body.pz, this.body.footY - 50);
+    return true;
+  }
+
   damage(amount: number): boolean {
     if (!this.alive) return false;
     this.hp = Math.max(0, this.hp - amount);

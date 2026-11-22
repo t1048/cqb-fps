@@ -30,7 +30,8 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   moveLeft: ['KeyA'],
   moveRight: ['KeyD'],
   walk: ['ShiftLeft', 'ShiftRight'],
-  crouch: ['ControlLeft', 'KeyC'],
+  // Ctrl は Ctrl+W 等のブラウザショートカットと衝突する（ページ側で阻止できない）ため割り当てない
+  crouch: ['KeyC'],
   leanLeft: ['KeyQ'],
   leanRight: ['KeyE'],
   interact: ['KeyF'],
@@ -62,6 +63,8 @@ export class InputManager {
   private blockFireUntilRelease = false;
   /** 交渉中など、Z/X/T/Tab の部隊指示ショートカットを一時抑止するフラグ */
   suppressSquadShortcuts = false;
+  /** false の間は Tab / 右クリックで部隊指揮メニューを開かない（容疑者モード） */
+  orderMenuEnabled = true;
   private contextMenu = (event: Event) => event.preventDefault();
 
   private cancelGesture(): void {
@@ -163,10 +166,12 @@ export class InputManager {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    // プレイ中（ポインタロック中）は Ctrl/⌘ との組み合わせによるブラウザ既定動作（保存・ブックマーク等）を抑止する
+    if (this.isPointerLocked && (e.ctrlKey || e.metaKey)) e.preventDefault();
     const orderMenuCodes = this.actionToCodes.get('orderMenu') ?? ['Tab'];
     if (orderMenuCodes.includes(e.code)) {
       if (this.isPointerLocked) e.preventDefault();
-      if (!e.repeat && this.isPointerLocked && this.onOrderMenu && !this.choosing && !this.suppressSquadShortcuts) {
+      if (!e.repeat && this.isPointerLocked && this.onOrderMenu && this.orderMenuEnabled && !this.choosing && !this.suppressSquadShortcuts) {
         this.choosing = true;
         this.choosingTrigger = 'tab';
         this.mouseDX = this.mouseDY = 0;
@@ -217,7 +222,7 @@ export class InputManager {
   private onMouseDown = (e: MouseEvent): void => {
     if (e.button === 1 && this.isPointerLocked) e.preventDefault();
     if (e.button === 2 && this.isPointerLocked) {
-      if (this.onOrderMenu && !this.choosing && !this.suppressSquadShortcuts) {
+      if (this.onOrderMenu && this.orderMenuEnabled && !this.choosing && !this.suppressSquadShortcuts) {
         this.choosing = true;
         this.choosingTrigger = 'right';
         this.mouseDX = this.mouseDY = 0;
