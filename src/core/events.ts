@@ -42,7 +42,7 @@ export interface GameEvents {
   noise: { pos: Vec3; radius: number; kind: NoiseKind; source?: NoiseSource };
   warningCall: { pos: Vec3; dir: Vec3 };
   /** radius = 効果半径(m)。視線判定は受け手側（Flashbang.hasLineOfSight 利用可）。blindSec = 最大白飛び時間 */
-  flashDetonated: { pos: Vec3; radius: number; blindSec: number };
+  flashDetonated: { pos: Vec3; radius: number; blindSec: number; thrower?: ActorId };
   /** radius = 室内近距離の影響半径、dir = 部屋の内側方向（水平単位ベクトル）。士気-20 は T3 が消費 */
   doorBreached: { doorId: string; pos: Vec3; radius: number; dir: Vec3 };
   shotFired: { shooter: ActorId; pos: Vec3 };

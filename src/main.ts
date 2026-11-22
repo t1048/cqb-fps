@@ -31,6 +31,16 @@ import { TextureLibrary } from './world/Materials';
 import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { SquadSystem } from './ai/Squad';
+import { SwatTeam } from './modes/SwatTeam';
+import {
+  SUSPECT_MODE,
+  SuspectMission,
+  parseGameMode,
+  prepareSuspectMode,
+  suspectWeapons,
+  type GameMode,
+  type ResultReport,
+} from './modes/SuspectMode';
 
 type AppPhase = 'briefing' | 'playing' | 'ended';
 
@@ -54,17 +64,20 @@ class App {
   private readonly flashbang: Flashbang;
   private readonly subtitle: Subtitle;
   private pendingReply = '';
-  private readonly warningCall: WarningCall;
-  private readonly arrest: Arrest;
+  private readonly warningCall: WarningCall | null = null;
+  private readonly arrest: Arrest | null = null;
   private readonly entities: EntityManager;
   private readonly hud: Hud;
   private readonly minimap: Minimap;
   private readonly briefingScreen: BriefingScreen;
   private readonly negotiationUI: NegotiationUI;
-  private readonly negotiationRadio: NegotiationRadio;
+  private readonly negotiationRadio: NegotiationRadio | null = null;
   private readonly roe: RoE;
-  private readonly mission: Mission;
-  private readonly scoreHud: ScoreHud;
+  private readonly mission: Mission | null = null;
+  private readonly scoreHud: ScoreHud | null = null;
+  private readonly swatTeam: SwatTeam | null = null;
+  private readonly suspectMission: SuspectMission | null = null;
+  private readonly mode: GameMode;
   private readonly resultScreen: ResultScreen;
   private readonly textures: TextureLibrary;
   private readonly viewModel: ViewModel;
@@ -88,7 +101,17 @@ class App {
     onSelectStage: (stageId: string) => void,
     onRetry: () => void,
     onRegenerate: (seed?: number) => void,
+    mode: GameMode,
+    onSelectMode: (mode: GameMode) => void,
   ) {
+    this.mode = mode;
+    const suspect = mode === 'suspect';
+    let swatSpawns: { x: number; y: number; z: number }[] = [];
+    if (suspect) {
+      const setup = prepareSuspectMode(map);
+      map = setup.map;
+      swatSpawns = setup.swatSpawns;
+    }
     this.mapId = map.id;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -110,7 +133,7 @@ class App {
     this.interaction = new Interaction(this.input, doorCfg.wheelStepThreshold);
     this.doors = new DoorSystem(map, doorCfg, this.world.colliders, this.bus, this.player, playerCfg.radius, this.interaction, this.input, this.textures);
     this.scene.add(this.doors.root);
-    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, weaponDefs, this.bus);
+    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : weaponDefs, this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.entities = new EntityManager(
       map.entities,
@@ -176,21 +199,66 @@ class App {
         this.pendingReply = '容疑者「' + reply + '」';
       }
     });
-    this.warningCall = new WarningCall(playerCfg.warning, this.player, this.bus, this.subtitle, this.input);
-    this.arrest = new Arrest(playerCfg.arrest, this.player, this.entities, this.bus, this.interaction);
+    if (!suspect) {
+      this.warningCall = new WarningCall(playerCfg.warning, this.player, this.bus, this.subtitle, this.input);
+      this.arrest = new Arrest(playerCfg.arrest, this.player, this.entities, this.bus, this.interaction);
+    }
     this.flashOverlay = new FlashOverlay(document.body);
     this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight);
     this.scene.add(this.flashbang.root);
     this.negotiationUI = new NegotiationUI(document.body, negotiationCfg);
-    this.negotiationRadio = new NegotiationRadio(negotiationCfg, this.player, this.input, this.world.colliders, this.entities, this.bus, this.subtitle, this.negotiationUI, this.weapons, this.flashbang, this.interaction);
-    this.mission = new Mission(
-      this.entities,
-      (failed) => this.endMission(failed),
+    if (suspect) {
+      this.swatTeam = new SwatTeam({
+        spawns: swatSpawns,
+        count: SUSPECT_MODE.swatCount,
+        player: this.player,
+        colliders: this.world.colliders,
+        bus: this.bus,
+        weapons: this.weapons,
+        doors: this.doors,
+        bounds: map.floor,
+        stairs: this.world.stairs,
+        rooms: map.rooms,
+        flashbang: this.flashbang,
+        subtitle: this.subtitle,
+        civilians: () => this.entities.civilians.values(),
+        textures: this.textures,
+      });
+      this.scene.add(this.swatTeam.root);
+      this.suspectMission = new SuspectMission(
+        this.swatTeam,
+        this.player,
+        this.entities,
+        this.doors,
+        this.input,
+        this.subtitle,
+        this.bus,
+        this.interaction,
+        (report, failed) => this.endMission(failed, report),
+      );
+    } else {
+      this.negotiationRadio = new NegotiationRadio(negotiationCfg, this.player, this.input, this.world.colliders, this.entities, this.bus, this.subtitle, this.negotiationUI, this.weapons, this.flashbang, this.interaction);
+      this.mission = new Mission(
+        this.entities,
+        (failed) => this.endMission(failed),
+        this.input,
+        () => this.player.alive,
+        (active) => this.squad.setPostClearActive(active),
+      );
+    }
+    this.hud = new Hud(
+      document.body,
+      this.player,
+      this.weapons,
       this.input,
-      () => this.player.alive,
-      (active) => this.squad.setPostClearActive(active),
+      this.camera,
+      this.bus,
+      this.flashbang,
+      this.interaction,
+      this.negotiationRadio ?? undefined,
+      this.mission ?? undefined,
+      suspect ? undefined : this.squad,
     );
-    this.hud = new Hud(document.body, this.player, this.weapons, this.input, this.camera, this.bus, this.flashbang, this.interaction, this.negotiationRadio, this.mission, this.squad);
     this.minimap = new Minimap(
       document.body,
       map,
@@ -207,9 +275,11 @@ class App {
       currentStageId: map.id,
       onSelectStage,
       onRegenerate,
+      mode,
+      onSelectMode,
     });
     this.briefingScreen.show();
-    this.scoreHud = new ScoreHud(this.hud.topRightSlot, this.roe);
+    if (!suspect) this.scoreHud = new ScoreHud(this.hud.topRightSlot, this.roe);
     this.resultScreen = new ResultScreen(document.body, this.roe, onRetry, {
       stages,
       currentStageId: map.id,
@@ -220,6 +290,13 @@ class App {
       configurable: true,
       get: () => this.getDebugInfo(),
     });
+    if (import.meta.env.DEV) {
+      // 開発時のみ: 描画せずにシミュレーションを進める（AI 挙動の自動検証用）
+      (window as unknown as { __cqbStep?: (sec: number) => void }).__cqbStep = (sec: number) => {
+        for (let t = 0; t < sec; t += 1 / 30) this.update(1 / 30);
+      };
+      (window as unknown as { __cqbApp?: unknown }).__cqbApp = this;
+    }
 
     this.loop = new GameLoop(
       (dt) => this.update(dt),
@@ -234,6 +311,7 @@ class App {
     this.audio.unlock();
     this.briefingScreen.hide();
     this.minimap.setVisible(true);
+    this.suspectMission?.setVisible(true);
     try {
       void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
         // ポインタロックが拒否された場合は通常の画面クリック待機にフォールバック
@@ -243,13 +321,14 @@ class App {
     }
   }
 
-  private endMission(failed = false): void {
+  private endMission(failed = false, report?: ResultReport): void {
     if (this.phase === 'ended') return;
     this.phase = 'ended';
     this.briefingScreen.hide();
     this.minimap.setVisible(false);
+    this.suspectMission?.setVisible(false);
     if (document.pointerLockElement) document.exitPointerLock();
-    this.resultScreen.show(failed);
+    this.resultScreen.show(failed, report);
   }
 
   private update(dt: number): void {
@@ -272,16 +351,17 @@ class App {
     this.interaction.update(dt);
     this.doors.update(dt);
     this.flashbang.update(dt);
-    this.negotiationRadio.update(dt);
+    this.negotiationRadio?.update(dt);
     this.weapons.update(dt);
     this.entities.update(dt);
-    this.squad.update(dt);
-    const viewStyle = this.negotiationRadio.isEquipped ? 'radio' : this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
+    if (this.swatTeam) this.swatTeam.update(dt);
+    else this.squad.update(dt);
+    const viewStyle = this.negotiationRadio?.isEquipped ? 'radio' : this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
     this.viewModel.update(dt, this.player.isMoving);
     this.avatar.update(this.player);
-    this.arrest.update(dt);
-    this.warningCall.update(dt);
+    this.arrest?.update(dt);
+    this.warningCall?.update(dt);
     this.subtitle.update(dt);
     this.hud.update(dt);
     if (this.pendingReply) {
@@ -289,7 +369,8 @@ class App {
       this.pendingReply = '';
     }
     this.minimap.update(dt);
-    this.mission.update(dt);
+    this.mission?.update(dt);
+    this.suspectMission?.update(dt);
     this.input.endFrame();
   }
 
@@ -312,13 +393,17 @@ class App {
 
   getDebugInfo(): {
     mapId: string;
+    mode: GameMode;
     phase: AppPhase;
+    swat?: { id: string; state: string; hp: number; x: number; z: number; y: number }[];
     memory: { geometries: number; textures: number };
     programs: number;
   } {
     return {
       mapId: this.mapId,
+      mode: this.mode,
       phase: this.phase,
+      swat: this.swatTeam?.hunters.map((h) => ({ id: h.id, state: h.state, hp: h.hp, x: h.body.px, z: h.body.pz, y: h.body.footY })),
       memory: {
         geometries: this.renderer.info.memory.geometries,
         textures: this.renderer.info.memory.textures,
@@ -329,14 +414,18 @@ class App {
 
   destroy(): void {
     delete (window as unknown as { __cqbDebug?: unknown }).__cqbDebug;
+    delete (window as unknown as { __cqbStep?: unknown }).__cqbStep;
+    delete (window as unknown as { __cqbApp?: unknown }).__cqbApp;
     this.loop.destroy();
     this.briefingScreen.dispose();
     this.minimap.dispose();
     this.resultScreen.dispose();
-    this.scoreHud.dispose();
-    this.mission.dispose();
+    this.scoreHud?.dispose();
+    this.mission?.dispose();
+    this.suspectMission?.dispose();
+    this.swatTeam?.dispose();
     this.roe.dispose();
-    this.negotiationRadio.dispose();
+    this.negotiationRadio?.dispose();
     this.negotiationUI.dispose();
     this.hud.dispose();
     this.flashbang.dispose();
@@ -345,8 +434,8 @@ class App {
     this.viewModel.dispose();
     this.avatar.dispose();
     this.entities.dispose();
-    this.arrest.dispose();
-    this.warningCall.dispose();
+    this.arrest?.dispose();
+    this.warningCall?.dispose();
     this.subtitle.dispose();
     this.weapons.dispose();
     this.doors.dispose();
@@ -370,6 +459,7 @@ let errorEl: HTMLElement | null = null;
 let startToken = 0;
 let currentMapId: string | null = null;
 let currentSeed: number | undefined;
+let currentMode: GameMode = 'swat';
 let stagesPromise: Promise<StageEntry[]> | null = null;
 
 function ensureStages(): Promise<StageEntry[]> {
@@ -391,7 +481,9 @@ function showError(err: unknown): void {
   document.body.appendChild(errorEl);
 }
 
-function start(mapId?: string, seed?: number): void {
+function start(mapId?: string, seed?: number, mode?: GameMode): void {
+  if (mode !== undefined) currentMode = mode;
+  const runMode = currentMode;
   app?.destroy();
   app = null;
   errorEl?.remove();
@@ -433,6 +525,14 @@ function start(mapId?: string, seed?: number): void {
         (nextStageId) => start(nextStageId),
         () => start(),
         (nextSeed) => start(targetId, nextSeed ?? randomSeed()),
+        runMode,
+        (nextMode) => {
+          // モード切替は同じステージ・同じシードで再構築する
+          const url = new URL(window.location.href);
+          url.searchParams.set('mode', nextMode);
+          window.history.replaceState(null, '', url);
+          start(targetId, useSeed, nextMode);
+        },
       );
     } catch (err: unknown) {
       console.error(err);
@@ -447,11 +547,12 @@ function start(mapId?: string, seed?: number): void {
   const qStage = params.get('stage') ?? undefined;
   const qSeedRaw = params.get('seed');
   const qSeed = qSeedRaw !== null && /^\d+$/.test(qSeedRaw) ? Number(qSeedRaw) : undefined;
-  start(qStage, qSeed);
+  start(qStage, qSeed, parseGameMode(params.get('mode')));
 }
 
 // リトライ・ステージ切替検証用: コンソールから `__cqbRetry()` / `__cqbRetry('stage02_house')` / `__cqbRetry('random_house', 12345)` で destroy→再生成。HMR 時は破棄のみ。
-(window as unknown as { __cqbRetry: (mapId?: string, seed?: number) => void }).__cqbRetry = (mapId?: string, seed?: number) => start(mapId, seed);
+(window as unknown as { __cqbRetry: (mapId?: string, seed?: number, mode?: GameMode) => void }).__cqbRetry = (mapId?: string, seed?: number, mode?: GameMode) =>
+  start(mapId, seed, mode);
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
