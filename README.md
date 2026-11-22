@@ -136,7 +136,18 @@ public/data/
 
 ## GitHub Pages での公開
 
+公開 URL: https://t1048.github.io/cqb-fps/
+
 `main` ブランチへのプッシュをトリガーに、`.github/workflows/deploy.yml` によって自動ビルドおよび GitHub Pages へのデプロイが行われます。GitHub リポジトリの **Settings → Pages → Build and deployment → Source** で **GitHub Actions** を選択すると有効になります。
+
+---
+
+## ☕ サポート
+
+このゲームが気に入っていただけたら、ぜひサポートをお願いします！  
+いただいたご支援は、制作者の糧となり活力になります。
+
+[![Support on Ko-fi](https://img.shields.io/badge/Support%20on%20Ko--fi-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/t1048)
 
 ---
 
