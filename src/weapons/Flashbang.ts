@@ -122,6 +122,12 @@ export class Flashbang {
   get remaining(): number {
     return this.count;
   }
+
+  /** 所持数を設定（容疑者モードでは 0 = 所持なし） */
+  setCount(n: number): void {
+    this.count = Math.max(0, Math.floor(n));
+    if (this.count === 0 && this.isEquipped) this.setEquipped(false);
+  }
   get weapon(): WeaponDef {
     return this.def;
   }
@@ -133,7 +139,7 @@ export class Flashbang {
 
     // 構え切替: 4 でトグル、1〜3 で通常武器へ戻る（指揮メニュー展開中は抑止）
     if (!this.input.isOrderMenuOpen) {
-      if (this.input.wasPressed('slot4')) this.setEquipped(!this.isEquipped);
+      if (this.input.wasPressed('slot4')) this.setEquipped(!this.isEquipped && this.count > 0);
       else if (this.input.wasPressed('slot1') || this.input.wasPressed('slot2') || this.input.wasPressed('slot3')) {
         this.setEquipped(false);
       }

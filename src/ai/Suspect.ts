@@ -235,6 +235,20 @@ export class Suspect implements HitTarget {
     }
   }
 
+  /** 突入前交渉の結果を反映する: 士気の増減（正 = 強気） */
+  adjustMorale(delta: number): void {
+    if (!this.managed) return;
+    this.morale.shift(delta);
+    this.prevMorale = this.morale.value;
+  }
+
+  /** 突入前交渉で説得に応じた: その場で投降（拘束待ち） */
+  forceSurrender(): boolean {
+    if (!this.managed) return false;
+    this.setState(SuspectState.SURRENDER);
+    return true;
+  }
+
   /** フラッシュ直撃。士気低下は MoraleSystem が行い、こちらは視界喪失。 */
   onFlashed(seconds: number): void {
     if (!this.alive) return;

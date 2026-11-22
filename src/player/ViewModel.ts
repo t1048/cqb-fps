@@ -57,6 +57,7 @@ export class ViewModel {
     else if (style === 'taser') this.buildTaser();
     else if (style === 'pepperball') this.buildPepper();
     else if (style === 'smg') this.buildGun(0.28, 0.16);
+    else if (style === 'machine_pistol') this.buildPistol();
     else this.buildGun(0.46, 0.22);
   }
 
@@ -91,6 +92,18 @@ export class ViewModel {
     this.add(new THREE.BoxGeometry(0.022, 0.035, 0.055), dark, 0, 0.05, -0.08);
     this.add(new THREE.BoxGeometry(0.05, 0.095, 0.055), metal, 0, -0.065, 0.012);
     this.buildHand(0.015, -0.08, 0.026);
+  }
+
+  /** 改造フルオート拳銃: 短いスライド＋延長マガジン（ストックなし） */
+  private buildPistol(): void {
+    const slide = this.metal(0x2e3338);
+    const frame = this.metal(0x45403a);
+    this.add(new THREE.BoxGeometry(0.042, 0.045, 0.19), slide, 0, 0.012, -0.19);
+    this.add(new THREE.BoxGeometry(0.038, 0.03, 0.16), frame, 0, -0.022, -0.18);
+    this.add(new THREE.CylinderGeometry(0.014, 0.014, 0.06, 10).rotateX(Math.PI / 2), slide, 0, 0.012, -0.31);
+    this.add(new THREE.BoxGeometry(0.036, 0.11, 0.05).rotateX(-0.25), frame, 0, -0.08, -0.12);
+    this.add(new THREE.BoxGeometry(0.03, 0.16, 0.035).rotateX(-0.2), this.metal(0x1d2024), 0, -0.13, -0.125);
+    this.buildHand(0.012, -0.085, -0.11);
   }
 
   private buildHand(x: number, y: number, z: number): void {

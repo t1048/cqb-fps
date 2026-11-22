@@ -2,7 +2,6 @@ import type * as THREE from 'three';
 import type { InputManager } from '../core/InputManager';
 import type { GameEventBus } from '../core/events';
 import type { Interaction } from '../player/Interaction';
-import type { NegotiationRadio } from '../player/NegotiationRadio';
 import type { PlayerController } from '../player/PlayerController';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import type { Flashbang } from '../weapons/Flashbang';
@@ -132,7 +131,6 @@ export class Hud {
     bus: GameEventBus,
     private readonly flashbang?: Flashbang,
     private readonly interaction?: Interaction,
-    private readonly negotiationRadio?: NegotiationRadio,
     private readonly mission?: Mission,
     private readonly squad?: SquadSystem,
   ) {
@@ -279,13 +277,13 @@ export class Hud {
 
     // 弾数・武器・装備
     const fb = this.flashbang;
-    const radio = this.negotiationRadio;
-    const ammoText = radio?.isEquipped
-      ? '交渉無線|RADIO'
-      : fb?.equipped
-        ? `${fb.weapon.name}|${fb.remaining}/${fb.weapon.magazineSize}`
-        : w.isReloading
-          ? `${w.weapon.name}|RELOADING`
+    const reserve = w.reserveAmmo;
+    const ammoText = fb?.equipped
+      ? `${fb.weapon.name}|${fb.remaining}/${fb.weapon.magazineSize}`
+      : w.isReloading
+        ? `${w.weapon.name}|RELOADING`
+        : reserve !== null
+          ? `${w.weapon.name}  予備 ${reserve}|${w.ammoInMagazine}/${w.weapon.magazineSize}`
           : `${w.weapon.name}|${w.ammoInMagazine}/${w.weapon.magazineSize}`;
     if (ammoText !== this.lastAmmoText) {
       this.lastAmmoText = ammoText;
@@ -299,10 +297,11 @@ export class Hud {
 
     // プレイヤーHP & 姿勢
     const hp = Math.round(this.player.hp);
-    if (hp !== this.lastHp) {
-      this.lastHp = hp;
+    const armor = Math.round(this.player.armor);
+    if (hp * 1000 + armor !== this.lastHp) {
+      this.lastHp = hp * 1000 + armor;
       const pct = Math.max(0, Math.min(100, (hp / Math.max(1, this.player.maxHp)) * 100));
-      this.hpTextEl.textContent = `HP ${hp}`;
+      this.hpTextEl.textContent = armor > 0 ? `HP ${hp}  防弾 ${armor}` : `HP ${hp}`;
       this.hpFillEl.style.width = `${pct}%`;
       this.hpFillEl.style.background = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
     }
@@ -402,7 +401,7 @@ export class Hud {
 
     // インタラクト対象プロンプト
     const target =
-      this.input.isPointerLocked && !this.input.isOrderMenuOpen && !radio?.negotiating && this.player.alive
+      this.input.isPointerLocked && !this.input.isOrderMenuOpen && this.player.alive
         ? (this.interaction?.getInteractTarget() ?? null)
         : null;
     const interactKey = target && target.label ? `${target.providerId}:${target.label}` : '';
@@ -418,7 +417,7 @@ export class Hud {
 
     // Zクイック指示ヒント（画面下部）
     const quickHint =
-      this.squad && this.input.isPointerLocked && !this.input.isOrderMenuOpen && !this.input.suppressSquadShortcuts && !radio?.negotiating && this.player.alive
+      this.squad && this.input.isPointerLocked && !this.input.isOrderMenuOpen && !this.input.suppressSquadShortcuts && this.player.alive
         ? this.squad.quickOrderHint(dt)
         : '';
     if (quickHint !== this.lastQuickHint) {

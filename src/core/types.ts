@@ -650,6 +650,10 @@ export interface WeaponDef {
   noiseRadius: number;
   /** category='throwable' のみ */
   throwable?: ThrowableDef;
+  /** 使用陣営。省略時 'swat'（通常モード）。'suspect' は容疑者モード専用 */
+  faction?: 'swat' | 'suspect';
+  /** 予備マガジン数。指定時は弾数が有限（リロードで予備を消費）。省略時は無限 */
+  reserveMagazines?: number;
 }
 
 export interface WeaponsData {

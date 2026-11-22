@@ -3,8 +3,9 @@ import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
 import { DataLoader } from './core/DataLoader';
-import type { AIProfile, DoorConfig, MapData, NegotiationConfig, PerceptionConfig, PlayerConfig, RoeConfig, SquadConfig, StageEntry, WeaponDef } from './core/types';
-import { createGameEventBus, type GameEventBus } from './core/events';
+import type { AIProfile, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SquadConfig, StageEntry, WeaponDef } from './core/types';
+import { CivilianState, createGameEventBus, type GameEventBus } from './core/events';
+import type { Civilian } from './ai/Civilian';
 import { AudioEngine } from './core/Audio';
 import { AudioBridge } from './core/AudioBridge';
 import { PlayerController } from './player/PlayerController';
@@ -19,8 +20,9 @@ import { EntityManager } from './ai/EntityManager';
 import { Hud } from './ui/Hud';
 import { Minimap } from './ui/Minimap';
 import { BriefingScreen } from './ui/BriefingScreen';
-import { NegotiationUI } from './ui/NegotiationUI';
-import { NegotiationRadio } from './player/NegotiationRadio';
+import { NegotiationPhase } from './ui/NegotiationPhase';
+import { buildSuspectNegotiation, buildSwatNegotiation } from './modes/PreAssaultNegotiation';
+import { HostageGrab } from './modes/HostageGrab';
 import { ResultScreen, ScoreHud } from './ui/ResultScreen';
 import { RoE } from './rules/RoE';
 import { Mission } from './rules/Mission';
@@ -38,11 +40,12 @@ import {
   parseGameMode,
   prepareSuspectMode,
   suspectWeapons,
+  swatWeapons,
   type GameMode,
   type ResultReport,
 } from './modes/SuspectMode';
 
-type AppPhase = 'briefing' | 'playing' | 'ended';
+type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'ended';
 
 /** 1 回の起動で生成した全リソースをまとめて破棄できるアプリ。リトライ = destroy → 再 create。 */
 class App {
@@ -70,8 +73,8 @@ class App {
   private readonly hud: Hud;
   private readonly minimap: Minimap;
   private readonly briefingScreen: BriefingScreen;
-  private readonly negotiationUI: NegotiationUI;
-  private readonly negotiationRadio: NegotiationRadio | null = null;
+  private readonly negotiationPhase: NegotiationPhase;
+  private readonly hostageGrab: HostageGrab | null = null;
   private readonly roe: RoE;
   private readonly mission: Mission | null = null;
   private readonly scoreHud: ScoreHud | null = null;
@@ -95,7 +98,6 @@ class App {
     aiProfiles: AIProfile[],
     roeCfg: RoeConfig,
     perceptionCfg: PerceptionConfig,
-    negotiationCfg: NegotiationConfig,
     stages: readonly StageEntry[],
     squadCfg: SquadConfig,
     onSelectStage: (stageId: string) => void,
@@ -133,7 +135,7 @@ class App {
     this.interaction = new Interaction(this.input, doorCfg.wheelStepThreshold);
     this.doors = new DoorSystem(map, doorCfg, this.world.colliders, this.bus, this.player, playerCfg.radius, this.interaction, this.input, this.textures);
     this.scene.add(this.doors.root);
-    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : weaponDefs, this.bus);
+    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.entities = new EntityManager(
       map.entities,
@@ -206,8 +208,16 @@ class App {
     this.flashOverlay = new FlashOverlay(document.body);
     this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight);
     this.scene.add(this.flashbang.root);
-    this.negotiationUI = new NegotiationUI(document.body, negotiationCfg);
+    const releaseHostage = (c: Civilian): void => {
+      if (c.evacuate()) this.weapons.removeTarget(c);
+    };
+    const hostages = (): Civilian[] =>
+      [...this.entities.civilians.values()].filter((c) => c.alive && !c.evacuated && !c.shieldedBy && c.state !== CivilianState.SECURED);
     if (suspect) {
+      this.flashbang.setCount(0); // 容疑者は閃光弾を持たない
+      // 容疑者モード: 部隊指揮メニュー（Tab / 右クリック）を無効化
+      this.input.orderMenuEnabled = false;
+      this.input.onOrderMenu = undefined;
       this.swatTeam = new SwatTeam({
         spawns: swatSpawns,
         count: SUSPECT_MODE.swatCount,
@@ -236,8 +246,56 @@ class App {
         this.interaction,
         (report, failed) => this.endMission(failed, report),
       );
+      const sm = this.suspectMission;
+      this.hostageGrab = new HostageGrab(
+        this.player,
+        this.entities,
+        this.world.colliders,
+        this.subtitle,
+        this.weapons,
+        this.interaction,
+        (label, ratio) => sm.showGauge(label, ratio),
+        () => this.doors.aimed(2.6) !== null,
+      );
+      const team = this.swatTeam;
+      this.negotiationPhase = new NegotiationPhase(
+        document.body,
+        buildSuspectNegotiation({
+          hostages,
+          releaseHostage,
+          addPrep: (sec) => sm.addPrep(sec),
+          breakdown: () => sm.breakdown(),
+          prepSec: () => sm.prepLeft,
+          giveArmor: (pts) => {
+            this.player.armor = Math.max(this.player.armor, pts);
+          },
+          hasArmor: () => this.player.armor > 0,
+          giveMagazines: (n) => this.weapons.addReserveMagazines(n),
+          withdrawSwat: () => team.withdraw(),
+          swatCount: () => team.total,
+        }),
+        () => this.startMission(),
+      );
     } else {
-      this.negotiationRadio = new NegotiationRadio(negotiationCfg, this.player, this.input, this.world.colliders, this.entities, this.bus, this.subtitle, this.negotiationUI, this.weapons, this.flashbang, this.interaction);
+      this.negotiationPhase = new NegotiationPhase(
+        document.body,
+        buildSwatNegotiation({
+          suspects: () => [...this.entities.suspects.values()],
+          hostages,
+          releaseHostage,
+          executeHostage: (c) => {
+            if (c.damage(9999)) this.weapons.removeTarget(c);
+          },
+          roomName: (s) =>
+            map.rooms.find(
+              (r) =>
+                Math.abs((r.floorY ?? 0) - s.body.footY) < 0.75 &&
+                Math.abs(s.body.px - r.x) <= r.width / 2 &&
+                Math.abs(s.body.pz - r.z) <= r.depth / 2,
+            )?.name ?? '不明な区画',
+        }),
+        () => this.startMission(),
+      );
       this.mission = new Mission(
         this.entities,
         (failed) => this.endMission(failed),
@@ -255,7 +313,6 @@ class App {
       this.bus,
       this.flashbang,
       this.interaction,
-      this.negotiationRadio ?? undefined,
       this.mission ?? undefined,
       suspect ? undefined : this.squad,
     );
@@ -270,7 +327,7 @@ class App {
     );
     this.minimap.setVisible(false);
     this.briefingScreen = new BriefingScreen(document.body, map, {
-      onStart: () => this.startMission(),
+      onStart: () => this.openNegotiation(),
       stages,
       currentStageId: map.id,
       onSelectStage,
@@ -305,11 +362,22 @@ class App {
     this.loop.start();
   }
 
-  private startMission(): void {
+  /** ブリーフィング → 突入前交渉 */
+  private openNegotiation(): void {
     if (this.phase !== 'briefing') return;
+    this.phase = 'negotiation';
+    this.audio.unlock();
+    this.briefingScreen.hide();
+    this.negotiationPhase.show();
+  }
+
+  private startMission(): void {
+    if (this.phase !== 'briefing' && this.phase !== 'negotiation') return;
     this.phase = 'playing';
     this.audio.unlock();
     this.briefingScreen.hide();
+    this.negotiationPhase.hide();
+    window.addEventListener('beforeunload', this.onBeforeUnload);
     this.minimap.setVisible(true);
     this.suspectMission?.setVisible(true);
     try {
@@ -321,9 +389,17 @@ class App {
     }
   }
 
+  /** プレイ中の誤操作（Ctrl+W 等）によるタブ閉じ・離脱を確認する */
+  private onBeforeUnload = (e: BeforeUnloadEvent): void => {
+    if (this.phase !== 'playing') return;
+    e.preventDefault();
+    e.returnValue = '';
+  };
+
   private endMission(failed = false, report?: ResultReport): void {
     if (this.phase === 'ended') return;
     this.phase = 'ended';
+    window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.briefingScreen.hide();
     this.minimap.setVisible(false);
     this.suspectMission?.setVisible(false);
@@ -332,7 +408,7 @@ class App {
   }
 
   private update(dt: number): void {
-    if (this.phase === 'briefing') {
+    if (this.phase === 'briefing' || this.phase === 'negotiation') {
       this.input.consumeWheel();
       this.input.consumeMouseDelta();
       this.input.endFrame();
@@ -351,12 +427,12 @@ class App {
     this.interaction.update(dt);
     this.doors.update(dt);
     this.flashbang.update(dt);
-    this.negotiationRadio?.update(dt);
     this.weapons.update(dt);
     this.entities.update(dt);
     if (this.swatTeam) this.swatTeam.update(dt);
     else this.squad.update(dt);
-    const viewStyle = this.negotiationRadio?.isEquipped ? 'radio' : this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
+    this.hostageGrab?.update();
+    const viewStyle = this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
     this.viewModel.update(dt, this.player.isMoving);
     this.avatar.update(this.player);
@@ -425,8 +501,9 @@ class App {
     this.suspectMission?.dispose();
     this.swatTeam?.dispose();
     this.roe.dispose();
-    this.negotiationRadio?.dispose();
-    this.negotiationUI.dispose();
+    this.hostageGrab?.dispose();
+    this.negotiationPhase.dispose();
+    window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.hud.dispose();
     this.flashbang.dispose();
     this.flashOverlay.dispose();
@@ -519,7 +596,6 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
         data.aiProfiles,
         data.roe,
         data.perception,
-        data.negotiation,
         loadedStages,
         data.squad,
         (nextStageId) => start(nextStageId),

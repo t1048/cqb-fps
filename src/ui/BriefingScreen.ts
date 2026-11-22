@@ -222,22 +222,22 @@ export class BriefingScreen {
       ? [
           ['WASD / Shift / C', '移動 / 静音（足音小） / しゃがみ（発見されにくい）'],
           ['Q / E', '左右リーン'],
-          ['左クリック', '射撃'],
-          ['1 / 4', '主武器切替 / フラッシュバン'],
+          ['左クリック / R', '射撃（改造フルオート拳銃） / リロード（予備弾は有限）'],
           ['F / F 長押し', 'ドア開閉 / 閉じたドアを施錠・解錠'],
+          ['民間人に F 長押し', '人質を拘束して連れ回す（もう一度 F で解放）'],
           ['ホイール', 'ドア段階開閉'],
           ['Space / Space 長押し', '準備完了（即突入） / 投降'],
           ['M', 'ミニマップ表示切替'],
         ]
       : [
-      ['WASD / Shift / C', '移動 / 静音 / しゃがみ'],
+      ['WASD / Shift / C', '移動 / 静音 / しゃがみ（Ctrl は不使用）'],
       ['Q / E', '左右リーン'],
       ['左 / 右クリック', '射撃（高精度） / 部隊指揮メニュー（保持）'],
       ['Z / X / T', 'クイック指示 / 隊員集合 / 指揮対象切替'],
       ['Tab', '部隊指揮メニュー（予備キー）'],
       ['Space', '警告コール（投降勧告）'],
-      ['F / ホイール / G', '開閉・拘束・交渉 / 段階開閉 / ブリーチ'],
-      ['1 / 2 / 3 / 4', '主武器 / 非致死 / 交渉無線 / フラッシュ'],
+      ['F / ホイール / G', '開閉・拘束 / 段階開閉 / ブリーチ'],
+      ['1 / 2 / 4', '主武器 / 非致死 / フラッシュ'],
       ['M', 'ミニマップ表示切替'],
         ];
     for (const [k, desc] of controls) {
@@ -257,7 +257,7 @@ export class BriefingScreen {
     const footer = document.createElement('div');
     footer.style.cssText = 'margin-top:20px;padding-top:14px;border-top:1px solid #263649;display:flex;justify-content:flex-end';
     this.startBtn.type = 'button';
-    this.startBtn.textContent = suspectMode ? '籠城開始 (Enter)' : '突入開始 (Enter)';
+    this.startBtn.textContent = '交渉フェーズへ (Enter)';
     this.startBtn.style.cssText = `padding:11px 28px;font:bold 16px sans-serif;color:#0a121a;background:${suspectMode ? '#ff7b7b' : '#56c8d8'};border:none;border-radius:6px;cursor:pointer;letter-spacing:0.04em`;
     this.startBtn.addEventListener('click', this.handleStart);
     footer.appendChild(this.startBtn);
