@@ -172,6 +172,7 @@ class SwatHunter implements HitTarget {
   }
 
   setState(next: HunterState): void {
+    if (this.state === 'down') return; // 倒れた隊員は二度と行動しない
     if (this.state === next) return;
     if (this.state === 'engage') this.engage.exit();
     this.state = next;
@@ -602,7 +603,7 @@ export class SwatTeam {
   beginAssault(): void {
     if (this.started) return;
     this.started = true;
-    for (const h of this.hunters) h.setState('sweep');
+    for (const h of this.hunters) if (h.alive) h.setState('sweep');
     this.radio(this.hunters[0], '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.');
   }
 
