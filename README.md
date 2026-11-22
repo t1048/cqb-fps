@@ -6,6 +6,14 @@ SWAT 4 テイストのブラウザ完結型 3D CQB タクティカル FPS（Thre
 
 ---
 
+## 🎮 公開ページ
+
+ゲームはここからブラウザで遊べます：
+
+[https://t1048.github.io/cqb-fps/](https://t1048.github.io/cqb-fps/)
+
+---
+
 ## 起動・ビルド方法
 
 Node.js（v20 以降推奨）環境で以下を実行します。
