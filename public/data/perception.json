@@ -1,0 +1,16 @@
+{
+  "hearing": {
+    "occludedMultiplier": 0.65,
+    "unoccludedKinds": ["door", "breach"],
+    "kinds": { "footstep": 1.0, "gunshot": 1.0, "door": 1.0, "breach": 1.0, "flash": 1.0, "voice": 1.0 }
+  },
+  "vision": {
+    "fovDeg": 110,
+    "range": 18,
+    "alertFovDeg": 140,
+    "eyeHeight": 1.55,
+    "bodyPointDrop": 0.6,
+    "crouchRangeMultiplier": 0.7,
+    "alertReactionMultiplier": 0.6
+  }
+}

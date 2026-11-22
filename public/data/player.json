@@ -1,0 +1,19 @@
+{
+  "maxHp": 100,
+  "adsFovDeg": 58,
+  "adsLerpSpeed": 12,
+  "radius": 0.3,
+  "standEyeHeight": 1.6,
+  "crouchEyeHeight": 1.05,
+  "eyeHeightLerpSpeed": 10,
+  "mouseSensitivity": 0.0022,
+  "maxPitchDeg": 85,
+  "arrest": { "range": 2.3, "coneDeg": 75, "holdSec": 2.0, "evidenceRange": 2.2, "evidenceHoldSec": 0.7, "arrestText": "F長押し: 容疑者拘束", "evidenceText": "F長押し: 証拠品押収", "civilianRange": 2.3, "civilianHoldSec": 1.5, "civilianText": "F長押し: 人質確保", "radioReportChance": 0.38 },
+  "warning": { "range": 15, "coneDeg": 90, "cooldown": 2, "subtitleSec": 2.5, "text": "警察だ！武器を捨てろ！", "noiseRadius": 25 },
+  "lean": { "maxOffset": 0.5, "maxRollDeg": 12, "lerpSpeed": 12, "headRadius": 0.15 },
+  "speeds": { "run": 2.95, "quiet": 1.45, "crouch": 1.25 },
+  "footstep": {
+    "interval": { "run": 0.48, "quiet": 0.78, "crouch": 0.82 },
+    "radius": { "run": 12, "quiet": 3, "crouch": 3 }
+  }
+}

@@ -1,0 +1,177 @@
+{
+  "id": "stage02_house",
+  "name": "Stage 02: 郊外のL字型邸宅",
+  "briefing": {
+    "summary": "前庭・私道を備える郊外のL字型ヴィラ住宅に武装グループが立てこもり中。中庭側・ガレージ勝手口と正面玄関の複数経路を活かし、広々としたギャラリー廊下・リビング・キッチン・施錠された主寝室をクリアリングせよ。",
+    "estimatedSuspects": { "min": 4, "max": 5 },
+    "estimatedHostages": { "min": 2, "max": 3 }
+  },
+  "ceilingHeight": 3.1,
+  "storyHeight": 2.4,
+  "floor": { "width": 42, "depth": 38 },
+  "playerSpawn": { "x": 0.0, "y": 0, "z": 14.5, "yaw": 0 },
+  "rooms": [
+    { "id": "front_driveway", "name": "前庭・私道", "x": 0.0, "z": 14.5, "width": 28.0, "depth": 7.0, "outdoor": true },
+    { "id": "front_courtyard", "name": "玄関前中庭", "x": 0.0, "z": 8.5, "width": 10.0, "depth": 5.0, "outdoor": true },
+    { "id": "west_border", "name": "西側植栽帯", "x": -9.0, "z": 10.5, "width": 8.0, "depth": 1.0, "outdoor": true },
+    { "id": "rear_patio", "name": "北東中庭テラス", "x": 8.5, "z": -10.0, "width": 9.0, "depth": 4.0, "outdoor": true },
+    { "id": "foyer", "name": "玄関ホール", "x": 0.0, "z": 4.0, "width": 10.0, "depth": 4.0 },
+    { "id": "study", "name": "西側書斎ウイング", "x": -9.0, "z": 6.0, "width": 8.0, "depth": 8.0 },
+    { "id": "garage", "name": "東側ガレージ", "x": 9.0, "z": 6.5, "width": 8.0, "depth": 9.0 },
+    { "id": "hallway", "name": "ギャラリー廊下", "x": 0.0, "z": -1.5, "width": 8.0, "depth": 7.0 },
+    { "id": "living", "name": "大リビング", "x": -8.5, "z": -4.0, "width": 9.0, "depth": 12.0 },
+    { "id": "bedroom", "name": "主寝室", "x": 0.0, "z": -8.5, "width": 8.0, "depth": 7.0 },
+    { "id": "kitchen", "name": "ダイニングキッチン", "x": 8.5, "z": -3.0, "width": 9.0, "depth": 10.0 }
+  ],
+  "windows": [
+    { "x": -9.0, "z": 10.0, "yaw": 0, "width": 2.4, "height": 1.25, "sill": 0.9 },
+    { "x": -13.0, "z": 6.0, "yaw": 90, "width": 2.2, "height": 1.25, "sill": 0.9 },
+    { "x": -2.6, "z": 6.0, "yaw": 0, "width": 1.8, "height": 1.35, "sill": 0.85 },
+    { "x": 2.6, "z": 6.0, "yaw": 0, "width": 1.8, "height": 1.35, "sill": 0.85 },
+    { "x": 13.0, "z": 6.5, "yaw": 90, "width": 2.2, "height": 1.15, "sill": 1.05 },
+    { "x": -13.0, "z": -4.0, "yaw": 90, "width": 3.0, "height": 1.3, "sill": 0.85 },
+    { "x": -8.5, "z": -10.0, "yaw": 0, "width": 2.8, "height": 1.3, "sill": 0.85 },
+    { "x": 0.0, "z": -12.0, "yaw": 0, "width": 2.6, "height": 1.25, "sill": 0.9 },
+    { "x": 4.0, "z": -9.5, "yaw": 90, "width": 2.0, "height": 1.25, "sill": 0.9 },
+    { "x": 8.5, "z": -8.0, "yaw": 0, "width": 2.8, "height": 1.3, "sill": 0.85 },
+    { "x": 13.0, "z": -3.0, "yaw": 90, "width": 2.6, "height": 1.25, "sill": 0.9 }
+  ],
+  "walls": [
+    { "x": -11.67, "z": 10.0, "width": 2.94, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": -6.33, "z": 10.0, "width": 2.94, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": -9.0, "z": 10.0, "y": 0, "width": 2.4, "height": 0.9, "depth": 0.28, "material": "brick" },
+    { "x": -9.0, "z": 10.0, "y": 2.15, "width": 2.4, "height": 0.95, "depth": 0.28, "material": "brick" },
+
+    { "x": -13.0, "z": 8.62, "width": 0.28, "height": 3.1, "depth": 3.04, "material": "brick" },
+    { "x": -13.0, "z": 3.45, "width": 0.28, "height": 3.1, "depth": 2.9, "material": "brick" },
+    { "x": -13.0, "z": 6.0, "y": 0, "width": 0.28, "height": 0.9, "depth": 2.2, "material": "brick" },
+    { "x": -13.0, "z": 6.0, "y": 2.15, "width": 0.28, "height": 0.95, "depth": 2.2, "material": "brick" },
+
+    { "x": -5.0, "z": 8.0, "width": 0.28, "height": 3.1, "depth": 4.28, "material": "brick" },
+    { "x": -5.0, "z": 2.7, "width": 0.28, "height": 3.1, "depth": 1.4, "material": "plaster" },
+    { "x": -5.0, "z": 5.3, "width": 0.28, "height": 3.1, "depth": 1.4, "material": "plaster" },
+    { "x": -5.0, "z": 4.0, "y": 2.4, "width": 0.28, "height": 0.7, "depth": 1.2, "material": "plaster" },
+
+    { "x": -4.32, "z": 6.0, "width": 1.64, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": -1.2, "z": 6.0, "width": 1.0, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 1.2, "z": 6.0, "width": 1.0, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 4.32, "z": 6.0, "width": 1.64, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 0.0, "z": 6.0, "y": 2.4, "width": 1.4, "height": 0.7, "depth": 0.28, "material": "brick" },
+    { "x": -2.6, "z": 6.0, "y": 0, "width": 1.8, "height": 0.85, "depth": 0.28, "material": "brick" },
+    { "x": -2.6, "z": 6.0, "y": 2.2, "width": 1.8, "height": 0.9, "depth": 0.28, "material": "brick" },
+    { "x": 2.6, "z": 6.0, "y": 0, "width": 1.8, "height": 0.85, "depth": 0.28, "material": "brick" },
+    { "x": 2.6, "z": 6.0, "y": 2.2, "width": 1.8, "height": 0.9, "depth": 0.28, "material": "brick" },
+
+    { "x": 5.0, "z": 10.12, "width": 0.28, "height": 3.1, "depth": 2.04, "material": "brick" },
+    { "x": 5.0, "z": 6.95, "width": 0.28, "height": 3.1, "depth": 1.9, "material": "brick" },
+    { "x": 5.0, "z": 8.5, "y": 2.4, "width": 0.28, "height": 0.7, "depth": 1.2, "material": "brick" },
+    { "x": 5.0, "z": 5.3, "width": 0.28, "height": 3.1, "depth": 1.4, "material": "plaster" },
+    { "x": 5.0, "z": 2.7, "width": 0.28, "height": 3.1, "depth": 1.4, "material": "plaster" },
+    { "x": 5.0, "z": 4.0, "y": 2.4, "width": 0.28, "height": 0.7, "depth": 1.2, "material": "plaster" },
+
+    { "x": 9.0, "z": 11.0, "width": 8.28, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 13.0, "z": 9.37, "width": 0.28, "height": 3.1, "depth": 3.54, "material": "brick" },
+    { "x": 13.0, "z": 3.7, "width": 0.28, "height": 3.1, "depth": 3.4, "material": "brick" },
+    { "x": 13.0, "z": 6.5, "y": 0, "width": 0.28, "height": 1.05, "depth": 2.2, "material": "brick" },
+    { "x": 13.0, "z": 6.5, "y": 2.2, "width": 0.28, "height": 0.9, "depth": 2.2, "material": "brick" },
+
+    { "x": -11.37, "z": 2.0, "width": 3.54, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": -6.2, "z": 2.0, "width": 4.4, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": -9.0, "z": 2.0, "y": 2.4, "width": 1.2, "height": 0.7, "depth": 0.28, "material": "plaster" },
+    { "x": -2.35, "z": 2.0, "width": 3.3, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": 2.35, "z": 2.0, "width": 3.3, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": 0.0, "z": 2.0, "y": 2.4, "width": 1.4, "height": 0.7, "depth": 0.28, "material": "plaster" },
+    { "x": 6.2, "z": 2.0, "width": 4.4, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": 11.37, "z": 2.0, "width": 3.54, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": 9.0, "z": 2.0, "y": 2.4, "width": 1.2, "height": 0.7, "depth": 0.28, "material": "plaster" },
+
+    { "x": -13.0, "z": -7.82, "width": 0.28, "height": 3.1, "depth": 4.64, "material": "brick" },
+    { "x": -13.0, "z": -0.25, "width": 0.28, "height": 3.1, "depth": 4.5, "material": "brick" },
+    { "x": -13.0, "z": -4.0, "y": 0, "width": 0.28, "height": 0.85, "depth": 3.0, "material": "brick" },
+    { "x": -13.0, "z": -4.0, "y": 2.15, "width": 0.28, "height": 0.95, "depth": 3.0, "material": "brick" },
+
+    { "x": -11.52, "z": -10.0, "width": 3.24, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": -5.48, "z": -10.0, "width": 3.24, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": -8.5, "z": -10.0, "y": 0, "width": 2.8, "height": 0.85, "depth": 0.28, "material": "brick" },
+    { "x": -8.5, "z": -10.0, "y": 2.15, "width": 2.8, "height": 0.95, "depth": 0.28, "material": "brick" },
+
+    { "x": -4.0, "z": -7.25, "width": 0.28, "height": 3.1, "depth": 5.5, "material": "plaster" },
+    { "x": -4.0, "z": -3.3, "width": 0.28, "height": 3.1, "depth": 2.4, "material": "plaster" },
+    { "x": -4.0, "z": 0.55, "width": 0.28, "height": 3.1, "depth": 2.9, "material": "plaster" },
+    { "x": -4.0, "z": -1.5, "y": 2.4, "width": 0.28, "height": 0.7, "depth": 1.2, "material": "plaster" },
+    { "x": -4.0, "z": -11.0, "width": 0.28, "height": 3.1, "depth": 2.28, "material": "brick" },
+
+    { "x": -2.72, "z": -12.0, "width": 2.84, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 2.72, "z": -12.0, "width": 2.84, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 0.0, "z": -12.0, "y": 0, "width": 2.6, "height": 0.9, "depth": 0.28, "material": "brick" },
+    { "x": 0.0, "z": -12.0, "y": 2.15, "width": 2.6, "height": 0.95, "depth": 0.28, "material": "brick" },
+
+    { "x": 4.0, "z": -11.32, "width": 0.28, "height": 3.1, "depth": 1.64, "material": "brick" },
+    { "x": 4.0, "z": -6.75, "width": 0.28, "height": 3.1, "depth": 3.5, "material": "plaster" },
+    { "x": 4.0, "z": -9.5, "y": 0, "width": 0.28, "height": 0.9, "depth": 2.0, "material": "brick" },
+    { "x": 4.0, "z": -9.5, "y": 2.15, "width": 0.28, "height": 0.95, "depth": 2.0, "material": "brick" },
+    { "x": 4.0, "z": -3.55, "width": 0.28, "height": 3.1, "depth": 2.9, "material": "plaster" },
+    { "x": 4.0, "z": 0.55, "width": 0.28, "height": 3.1, "depth": 2.9, "material": "plaster" },
+    { "x": 4.0, "z": -1.5, "y": 2.4, "width": 0.28, "height": 0.7, "depth": 1.2, "material": "plaster" },
+
+    { "x": -2.3, "z": -5.0, "width": 3.4, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": 2.3, "z": -5.0, "width": 3.4, "height": 3.1, "depth": 0.28, "material": "plaster" },
+    { "x": 0.0, "z": -5.0, "y": 2.4, "width": 1.2, "height": 0.7, "depth": 0.28, "material": "plaster" },
+
+    { "x": 5.48, "z": -8.0, "width": 3.24, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 11.52, "z": -8.0, "width": 3.24, "height": 3.1, "depth": 0.28, "material": "brick" },
+    { "x": 8.5, "z": -8.0, "y": 0, "width": 2.8, "height": 0.85, "depth": 0.28, "material": "brick" },
+    { "x": 8.5, "z": -8.0, "y": 2.15, "width": 2.8, "height": 0.95, "depth": 0.28, "material": "brick" },
+
+    { "x": 13.0, "z": -6.22, "width": 0.28, "height": 3.1, "depth": 3.84, "material": "brick" },
+    { "x": 13.0, "z": 0.15, "width": 0.28, "height": 3.1, "depth": 3.7, "material": "brick" },
+    { "x": 13.0, "z": -3.0, "y": 0, "width": 0.28, "height": 0.9, "depth": 2.6, "material": "brick" },
+    { "x": 13.0, "z": -3.0, "y": 2.15, "width": 0.28, "height": 0.95, "depth": 2.6, "material": "brick" }
+  ],
+  "doors": [
+    { "id": "door_front", "x": 0.0, "z": 6.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.4, "double": true },
+    { "id": "door_foyer_study", "x": -5.0, "z": 4.0, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_foyer_garage", "x": 5.0, "z": 4.0, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_garage_ext", "x": 5.0, "z": 8.5, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_hall", "x": 0.0, "z": 2.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.4, "double": true },
+    { "id": "door_living_study", "x": -9.0, "z": 2.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_garage_kitchen", "x": 9.0, "z": 2.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_living", "x": -4.0, "z": -1.5, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_kitchen", "x": 4.0, "z": -1.5, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_bedroom", "x": 0.0, "z": -5.0, "yaw": 0, "locked": true, "maxAngle": 105, "width": 1.2 }
+  ],
+  "covers": [
+    { "x": -3.2, "z": 11.8, "width": 2.4, "height": 1.0, "depth": 0.6, "material": "brick" },
+    { "x": 3.2, "z": 11.8, "width": 2.4, "height": 1.0, "depth": 0.6, "material": "brick" },
+    { "x": 8.2, "z": 13.8, "width": 2.2, "height": 1.45, "depth": 4.4, "material": "metal" },
+    { "x": -9.5, "z": 6.2, "width": 2.4, "height": 0.85, "depth": 1.1, "material": "wood" },
+    { "x": 9.5, "z": 7.0, "width": 2.2, "height": 1.35, "depth": 3.8, "material": "metal" },
+    { "x": -9.2, "z": -4.2, "width": 2.8, "height": 0.9, "depth": 1.0, "material": "fabric" },
+    { "x": -6.5, "z": -7.2, "width": 1.6, "height": 1.8, "depth": 0.8, "material": "wood" },
+    { "x": -8.2, "z": -1.8, "width": 1.8, "height": 0.55, "depth": 0.9, "material": "wood" },
+    { "x": 8.8, "z": -3.2, "width": 2.6, "height": 0.95, "depth": 1.2, "material": "metal" },
+    { "x": 11.4, "z": -6.2, "width": 1.2, "height": 1.9, "depth": 1.1, "material": "metal" },
+    { "x": 0.0, "z": -9.2, "width": 2.4, "height": 0.75, "depth": 2.0, "material": "fabric" },
+    { "x": -2.4, "z": -7.6, "width": 0.9, "height": 1.55, "depth": 1.4, "material": "wood" }
+  ],
+  "allies": [
+    { "id": "ally_miller", "name": "Miller", "x": -1.4, "z": 15.2, "y": 0, "yaw": 0 },
+    { "id": "ally_cole", "name": "Cole", "x": 1.4, "z": 15.2, "y": 0, "yaw": 0 }
+  ],
+  "items": [
+    { "id": "prop_0", "kind": "radio", "x": -9.5, "z": 6.2, "y": 0.85 },
+    { "id": "prop_1", "kind": "evidence", "x": -8.2, "z": -1.8, "y": 0.55 },
+    { "id": "prop_2", "kind": "medkit", "x": 8.8, "z": -3.2, "y": 0.95 },
+    { "id": "prop_3", "kind": "flashbang", "x": 0.0, "z": 4.0, "y": 0.02 }
+  ],
+  "entities": [
+    { "id": "suspect_1", "type": "suspect", "profile": "nervous_robber", "x": -10.4, "z": -5.8, "yaw": 180 },
+    { "id": "suspect_2", "type": "suspect", "profile": "nervous_robber", "x": -6.2, "z": -1.5, "yaw": 90 },
+    { "id": "suspect_3", "type": "suspect", "profile": "nervous_robber", "x": 9.8, "z": -4.6, "yaw": 180 },
+    { "id": "suspect_4", "type": "suspect", "profile": "hardcore_leader", "x": 1.6, "z": -9.2, "yaw": 180 },
+    { "id": "suspect_5", "type": "suspect", "profile": "nervous_robber", "x": -10.0, "z": 4.6, "yaw": 180 },
+    { "id": "civilian_1", "type": "civilian", "profile": "frightened_civilian", "x": 6.4, "z": -6.2, "yaw": 180 },
+    { "id": "civilian_2", "type": "civilian", "profile": "frightened_civilian", "x": -1.6, "z": -9.8, "yaw": 0 },
+    { "id": "civilian_3", "type": "civilian", "profile": "frightened_civilian", "x": -11.0, "z": 8.0, "yaw": 90 }
+  ]
+}

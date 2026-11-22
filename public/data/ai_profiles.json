@@ -1,0 +1,305 @@
+{
+  "profiles": [
+    {
+      "id": "nervous_robber",
+      "name": "臆病な強盗",
+      "type": "suspect",
+      "initialMorale": 55,
+      "moraleRecovery": 1.0,
+      "aggression": 0.35,
+      "reactionTime": 0.7,
+      "hearingMultiplier": 1.0,
+      "thresholds": {
+        "surrenderBelow": 25,
+        "hesitateBelow": 50
+      },
+      "modifiers": {
+        "warningCall": {
+          "min": 20,
+          "max": 25
+        },
+        "flashbang": {
+          "min": 50,
+          "max": 60
+        },
+        "nonlethalHit": {
+          "min": 40,
+          "max": 50
+        },
+        "breach": 20,
+        "isolation": 20
+      },
+      "combat": {
+        "decisionSec": 1.0,
+        "alertCalmSec": 10,
+        "hesitateFireSec": 8,
+        "hesitateRetreatSpeed": 0.8,
+        "hesitateRetreatMax": 2.5,
+        "hesitateShakeDeg": 4,
+        "moveSpeed": 2.7,
+        "fireInterval": 0.45,
+        "shotsPerPeek": 3,
+        "magazineSize": 8,
+        "reloadSec": 2.2,
+        "coverSecMin": 1.2,
+        "coverSecMax": 2.5,
+        "peekSecMax": 2.0,
+        "engageRange": 25,
+        "coverSearchRange": 8,
+        "coverMargin": 0.5,
+        "crouchCoverMaxHeight": 1.5,
+        "flinchSec": 0.35,
+        "gunshotNoiseRadius": 40,
+        "shotDamage": 14,
+        "baseSpreadDeg": 5.5,
+        "fakeSurrenderChance": 0,
+        "fakeSurrenderSec": 10
+      },
+      "shield": {
+        "moraleBelow": 45,
+        "civilianRange": 3.5,
+        "playerRange": 12,
+        "escapeSearch": 4,
+        "escapeMinGain": 3.0,
+        "checkIntervalSec": 0.25,
+        "retrySec": 6,
+        "grabMaxSec": 3,
+        "grabRange": 0.8,
+        "holdDistance": 0.55,
+        "headOffset": 0.2,
+        "pivotDegPerSec": 70,
+        "backAwayRange": 5,
+        "backAwaySpeed": 0.9,
+        "hostageRadius": 0.3
+      },
+      "mobility": {
+        "canOpenDoors": true,
+        "canUseStairs": false,
+        "patrolChance": 0.25,
+        "patrolIntervalMin": 12,
+        "patrolIntervalMax": 22,
+        "patrolSpeedScale": 0.48,
+        "investigateChance": 0.35,
+        "investigateMaxDist": 9,
+        "investigateSpeedScale": 0.65,
+        "reinforceOnGunshot": false,
+        "repositionAfterLostSec": 5.0,
+        "flankChance": 0.2,
+        "guardHostageRoom": true
+      }
+    },
+    {
+      "id": "hardcore_leader",
+      "name": "強硬なリーダー",
+      "type": "suspect",
+      "initialMorale": 85,
+      "moraleRecovery": 2.0,
+      "aggression": 0.8,
+      "reactionTime": 0.4,
+      "hearingMultiplier": 1.2,
+      "thresholds": {
+        "surrenderBelow": 20,
+        "hesitateBelow": 40
+      },
+      "modifiers": {
+        "warningCall": {
+          "min": 15,
+          "max": 18
+        },
+        "flashbang": {
+          "min": 48,
+          "max": 50
+        },
+        "nonlethalHit": {
+          "min": 35,
+          "max": 40
+        },
+        "breach": 20,
+        "isolation": 20
+      },
+      "combat": {
+        "decisionSec": 0.6,
+        "alertCalmSec": 14,
+        "hesitateFireSec": 4,
+        "hesitateRetreatSpeed": 0.8,
+        "hesitateRetreatMax": 2.5,
+        "hesitateShakeDeg": 4,
+        "moveSpeed": 3.0,
+        "fireInterval": 0.3,
+        "shotsPerPeek": 5,
+        "magazineSize": 12,
+        "reloadSec": 1.8,
+        "coverSecMin": 0.8,
+        "coverSecMax": 1.6,
+        "peekSecMax": 2.5,
+        "engageRange": 25,
+        "coverSearchRange": 8,
+        "coverMargin": 0.5,
+        "crouchCoverMaxHeight": 1.5,
+        "flinchSec": 0.2,
+        "gunshotNoiseRadius": 40,
+        "shotDamage": 18,
+        "baseSpreadDeg": 3.6,
+        "fakeSurrenderChance": 0.35,
+        "fakeSurrenderSec": 9
+      },
+      "shield": {
+        "moraleBelow": 72,
+        "civilianRange": 3.5,
+        "playerRange": 12,
+        "escapeSearch": 4,
+        "escapeMinGain": 3.0,
+        "checkIntervalSec": 0.25,
+        "retrySec": 6,
+        "grabMaxSec": 3,
+        "grabRange": 0.8,
+        "holdDistance": 0.55,
+        "headOffset": 0.2,
+        "pivotDegPerSec": 45,
+        "backAwayRange": 5,
+        "backAwaySpeed": 0.7,
+        "hostageRadius": 0.3
+      },
+      "mobility": {
+        "canOpenDoors": true,
+        "canUseStairs": true,
+        "patrolChance": 0.85,
+        "patrolIntervalMin": 4,
+        "patrolIntervalMax": 9,
+        "patrolSpeedScale": 0.65,
+        "investigateChance": 0.9,
+        "investigateMaxDist": 28,
+        "investigateSpeedScale": 0.86,
+        "reinforceOnGunshot": true,
+        "repositionAfterLostSec": 2.4,
+        "flankChance": 0.75,
+        "guardHostageRoom": true
+      }
+    },
+    {
+      "id": "frightened_civilian",
+      "name": "怯える民間人",
+      "type": "civilian",
+      "initialMorale": 40,
+      "moraleRecovery": 0.5,
+      "aggression": 0,
+      "reactionTime": 0.5,
+      "hearingMultiplier": 1.0,
+      "thresholds": {
+        "surrenderBelow": 25,
+        "hesitateBelow": 50
+      },
+      "modifiers": {
+        "warningCall": {
+          "min": 15,
+          "max": 25
+        },
+        "flashbang": {
+          "min": 45,
+          "max": 60
+        },
+        "nonlethalHit": {
+          "min": 35,
+          "max": 50
+        },
+        "breach": 20,
+        "isolation": 0
+      },
+      "civilian": {
+        "gunshotHearScale": 1.0,
+        "occludedScale": 0.5,
+        "panicFleeSpeed": 1.9,
+        "panicFleeSec": 1.2,
+        "securedTint": 6742931
+      }
+    },
+    {
+      "id": "armed_militant",
+      "name": "武装占拠犯",
+      "type": "suspect",
+      "initialMorale": 72,
+      "moraleRecovery": 1.5,
+      "aggression": 0.6,
+      "reactionTime": 0.5,
+      "hearingMultiplier": 1.1,
+      "thresholds": {
+        "surrenderBelow": 22,
+        "hesitateBelow": 45
+      },
+      "modifiers": {
+        "warningCall": {
+          "min": 16,
+          "max": 22
+        },
+        "flashbang": {
+          "min": 48,
+          "max": 56
+        },
+        "nonlethalHit": {
+          "min": 38,
+          "max": 46
+        },
+        "breach": 20,
+        "isolation": 20
+      },
+      "combat": {
+        "decisionSec": 0.75,
+        "alertCalmSec": 12,
+        "hesitateFireSec": 5,
+        "hesitateRetreatSpeed": 0.8,
+        "hesitateRetreatMax": 2.5,
+        "hesitateShakeDeg": 4,
+        "moveSpeed": 2.9,
+        "fireInterval": 0.36,
+        "shotsPerPeek": 4,
+        "magazineSize": 10,
+        "reloadSec": 2.0,
+        "coverSecMin": 1.0,
+        "coverSecMax": 2.0,
+        "peekSecMax": 2.2,
+        "engageRange": 25,
+        "coverSearchRange": 8,
+        "coverMargin": 0.5,
+        "crouchCoverMaxHeight": 1.5,
+        "flinchSec": 0.25,
+        "gunshotNoiseRadius": 40,
+        "shotDamage": 16,
+        "baseSpreadDeg": 4.2,
+        "fakeSurrenderChance": 0.15,
+        "fakeSurrenderSec": 10
+      },
+      "shield": {
+        "moraleBelow": 55,
+        "civilianRange": 3.5,
+        "playerRange": 12,
+        "escapeSearch": 4,
+        "escapeMinGain": 3.0,
+        "checkIntervalSec": 0.25,
+        "retrySec": 6,
+        "grabMaxSec": 3,
+        "grabRange": 0.8,
+        "holdDistance": 0.55,
+        "headOffset": 0.2,
+        "pivotDegPerSec": 55,
+        "backAwayRange": 5,
+        "backAwaySpeed": 0.8,
+        "hostageRadius": 0.3
+      },
+      "mobility": {
+        "canOpenDoors": true,
+        "canUseStairs": true,
+        "patrolChance": 0.65,
+        "patrolIntervalMin": 6,
+        "patrolIntervalMax": 13,
+        "patrolSpeedScale": 0.58,
+        "investigateChance": 0.75,
+        "investigateMaxDist": 18,
+        "investigateSpeedScale": 0.78,
+        "reinforceOnGunshot": true,
+        "repositionAfterLostSec": 3.2,
+        "flankChance": 0.5,
+        "guardHostageRoom": true
+      }
+    }
+  ]
+}

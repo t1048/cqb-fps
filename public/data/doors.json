@@ -1,0 +1,18 @@
+{
+  "peekAngle": 25,
+  "thickness": 0.05,
+  "height": 2.18,
+  "frameThickness": 0.055,
+  "frameDepth": 0.30,
+  "casingWidth": 0.075,
+  "casingDepth": 0.018,
+  "handleHeight": 0.98,
+  "segmentLength": 0.1,
+  "swingSpeed": 90,
+  "knobSpeedMultiplier": 2.5,
+  "knobZone": 0.35,
+  "interactRange": 1.8,
+  "wheelStepThreshold": 100,
+  "noise": { "slowRadius": 4, "fastRadius": 9 },
+  "breach": { "speedMultiplier": 6, "noiseRadius": 18, "effectRadius": 5 }
+}

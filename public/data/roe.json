@@ -1,0 +1,33 @@
+{
+  "points": {
+    "arrest": 50,
+    "civilianSecured": 30,
+    "evidence": 10,
+    "neutralize": 10,
+    "fireWithoutWarning": -25,
+    "fireOnSurrendered": -50,
+    "civilianHit": -100,
+    "nonlethalCivilianHit": -25,
+    "friendlyFire": -50
+  },
+  "labels": {
+    "arrest": "容疑者を現行犯逮捕",
+    "civilianSecured": "民間人を保護",
+    "evidence": "証拠品を回収",
+    "neutralize": "容疑者を無力化(正当防衛)",
+    "fireWithoutWarning": "警告なしの発砲(RoE違反)",
+    "fireOnSurrendered": "投降者/無抵抗者への発砲(RoE違反)",
+    "civilianHit": "民間人への誤射(RoE違反)",
+    "nonlethalCivilianHit": "民間人への非致死性誤射(RoE違反)",
+    "friendlyFire": "隊員への誤射(RoE違反)"
+  },
+  "violationOncePerTarget": true,
+  "hostileStates": ["ENGAGE", "HOSTAGE_SHIELD"],
+  "ranks": [
+    { "minScore": 210, "minRatio": 0.85, "label": "S" },
+    { "minScore": 160, "minRatio": 0.65, "label": "A" },
+    { "minScore": 100, "minRatio": 0.40, "label": "B" },
+    { "minScore": 40, "minRatio": 0.15, "label": "C" },
+    { "minScore": -100000, "minRatio": -1000, "label": "D" }
+  ]
+}

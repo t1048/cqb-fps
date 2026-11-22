@@ -1,0 +1,169 @@
+{
+  "id": "stage01_office",
+  "name": "Stage 01: 雑居ビル 事務所フロア",
+  "briefing": {
+    "summary": "L字型に張り出した会議棟・東側サービス通路・中庭テラスを備える事務所フロアに武装容疑者が立てこもり中。屋外アプローチから展開し、正面ロビーまたは東側サービス口から突入して民間人を保護しつつ制圧せよ。",
+    "estimatedSuspects": { "min": 3, "max": 4 },
+    "estimatedHostages": { "min": 2, "max": 3 }
+  },
+  "ceilingHeight": 3.2,
+  "storyHeight": 2.4,
+  "floor": { "width": 38, "depth": 34 },
+  "playerSpawn": { "x": 0.0, "y": 0, "z": 14.2, "yaw": 0 },
+  "rooms": [
+    { "id": "approach_yard", "name": "屋外アプローチ", "x": 5.5, "z": 13.0, "width": 21.0, "depth": 6.0, "outdoor": true },
+    { "id": "east_patio", "name": "玄関脇テラス", "x": 8.0, "z": 7.0, "width": 6.0, "depth": 6.0, "outdoor": true },
+    { "id": "east_step", "name": "サービス通路前", "x": 13.5, "z": 9.0, "width": 5.0, "depth": 2.0, "outdoor": true },
+    { "id": "lobby", "name": "受付ロビー", "x": 0.0, "z": 7.0, "width": 10.0, "depth": 6.0 },
+    { "id": "corridor", "name": "中央廊下", "x": 3.0, "z": 2.5, "width": 16.0, "depth": 3.0 },
+    { "id": "conf_west", "name": "西大会議室", "x": -9.5, "z": 4.0, "width": 9.0, "depth": 14.0 },
+    { "id": "office_nw", "name": "北西執務室", "x": -1.0, "z": -4.0, "width": 8.0, "depth": 10.0 },
+    { "id": "meeting", "name": "応接・会議室", "x": 7.0, "z": -4.0, "width": 8.0, "depth": 10.0 },
+    { "id": "service_east", "name": "東サービス室", "x": 13.5, "z": 4.5, "width": 5.0, "depth": 7.0 },
+    { "id": "server", "name": "サーバー室", "x": 13.5, "z": -2.5, "width": 5.0, "depth": 7.0 }
+  ],
+  "windows": [
+    { "x": -9.5, "z": 11.0, "yaw": 0, "width": 2.8, "height": 1.25, "sill": 0.95 },
+    { "x": -9.5, "z": -3.0, "yaw": 0, "width": 2.4, "height": 1.25, "sill": 0.95 },
+    { "x": -14.0, "z": 4.0, "yaw": 90, "width": 3.2, "height": 1.25, "sill": 0.95 },
+    { "x": -2.8, "z": 10.0, "yaw": 0, "width": 1.8, "height": 1.4, "sill": 0.8 },
+    { "x": 2.8, "z": 10.0, "yaw": 0, "width": 1.8, "height": 1.4, "sill": 0.8 },
+    { "x": 5.0, "z": 7.0, "yaw": 90, "width": 2.4, "height": 1.35, "sill": 0.85 },
+    { "x": 8.0, "z": 4.0, "yaw": 0, "width": 2.6, "height": 1.35, "sill": 0.85 },
+    { "x": -1.0, "z": -9.0, "yaw": 0, "width": 2.4, "height": 1.25, "sill": 0.95 },
+    { "x": 7.0, "z": -9.0, "yaw": 0, "width": 2.4, "height": 1.25, "sill": 0.95 },
+    { "x": 16.0, "z": 4.5, "yaw": 90, "width": 2.0, "height": 1.25, "sill": 0.95 }
+  ],
+  "walls": [
+    { "x": -12.52, "z": 11.0, "width": 3.24, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": -6.48, "z": 11.0, "width": 3.24, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": -9.5, "z": 11.0, "y": 0, "width": 2.8, "height": 0.95, "depth": 0.28, "material": "concrete" },
+    { "x": -9.5, "z": 11.0, "y": 2.2, "width": 2.8, "height": 1.0, "depth": 0.28, "material": "concrete" },
+
+    { "x": -12.42, "z": -3.0, "width": 3.44, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": -6.58, "z": -3.0, "width": 3.44, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": -9.5, "z": -3.0, "y": 0, "width": 2.4, "height": 0.95, "depth": 0.28, "material": "concrete" },
+    { "x": -9.5, "z": -3.0, "y": 2.2, "width": 2.4, "height": 1.0, "depth": 0.28, "material": "concrete" },
+
+    { "x": -14.0, "z": -0.37, "width": 0.28, "height": 3.2, "depth": 5.54, "material": "concrete" },
+    { "x": -14.0, "z": 8.37, "width": 0.28, "height": 3.2, "depth": 5.54, "material": "concrete" },
+    { "x": -14.0, "z": 4.0, "y": 0, "width": 0.28, "height": 0.95, "depth": 3.2, "material": "concrete" },
+    { "x": -14.0, "z": 4.0, "y": 2.2, "width": 0.28, "height": 1.0, "depth": 3.2, "material": "concrete" },
+
+    { "x": -5.0, "z": -6.0, "width": 0.28, "height": 3.2, "depth": 6.28, "material": "concrete" },
+    { "x": -5.0, "z": -1.0, "width": 0.28, "height": 3.2, "depth": 4.28, "material": "plaster" },
+    { "x": -5.0, "z": 1.45, "width": 0.28, "height": 3.2, "depth": 0.9, "material": "plaster" },
+    { "x": -5.0, "z": 3.55, "width": 0.28, "height": 3.2, "depth": 0.9, "material": "plaster" },
+    { "x": -5.0, "z": 2.5, "y": 2.4, "width": 0.28, "height": 0.8, "depth": 1.2, "material": "plaster" },
+    { "x": -5.0, "z": 5.2, "width": 0.28, "height": 3.2, "depth": 2.4, "material": "plaster" },
+    { "x": -5.0, "z": 9.37, "width": 0.28, "height": 3.2, "depth": 3.54, "material": "concrete" },
+    { "x": -5.0, "z": 7.0, "y": 2.4, "width": 0.28, "height": 0.8, "depth": 1.2, "material": "plaster" },
+
+    { "x": -4.42, "z": 10.0, "width": 1.44, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": -1.3, "z": 10.0, "width": 1.2, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 1.3, "z": 10.0, "width": 1.2, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 4.42, "z": 10.0, "width": 1.44, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 0.0, "z": 10.0, "y": 2.4, "width": 1.4, "height": 0.8, "depth": 0.28, "material": "concrete" },
+    { "x": -2.8, "z": 10.0, "y": 0, "width": 1.8, "height": 0.8, "depth": 0.28, "material": "concrete" },
+    { "x": -2.8, "z": 10.0, "y": 2.2, "width": 1.8, "height": 1.0, "depth": 0.28, "material": "concrete" },
+    { "x": 2.8, "z": 10.0, "y": 0, "width": 1.8, "height": 0.8, "depth": 0.28, "material": "concrete" },
+    { "x": 2.8, "z": 10.0, "y": 2.2, "width": 1.8, "height": 1.0, "depth": 0.28, "material": "concrete" },
+
+    { "x": 5.0, "z": 4.83, "width": 0.28, "height": 3.2, "depth": 1.94, "material": "concrete" },
+    { "x": 5.0, "z": 9.17, "width": 0.28, "height": 3.2, "depth": 1.94, "material": "concrete" },
+    { "x": 5.0, "z": 7.0, "y": 0, "width": 0.28, "height": 0.85, "depth": 2.4, "material": "concrete" },
+    { "x": 5.0, "z": 7.0, "y": 2.2, "width": 0.28, "height": 1.0, "depth": 2.4, "material": "concrete" },
+
+    { "x": -2.85, "z": 4.0, "width": 4.3, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 2.85, "z": 4.0, "width": 4.3, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 0.0, "z": 4.0, "y": 2.4, "width": 1.4, "height": 0.8, "depth": 0.28, "material": "plaster" },
+    { "x": 5.78, "z": 4.0, "width": 1.84, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 10.22, "z": 4.0, "width": 1.84, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 8.0, "z": 4.0, "y": 0, "width": 2.6, "height": 0.85, "depth": 0.28, "material": "concrete" },
+    { "x": 8.0, "z": 4.0, "y": 2.2, "width": 2.6, "height": 1.0, "depth": 0.28, "material": "concrete" },
+
+    { "x": -3.3, "z": 1.0, "width": 3.4, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 1.3, "z": 1.0, "width": 3.4, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": -1.0, "z": 1.0, "y": 2.4, "width": 1.2, "height": 0.8, "depth": 0.28, "material": "plaster" },
+    { "x": 4.7, "z": 1.0, "width": 3.4, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 9.3, "z": 1.0, "width": 3.4, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 7.0, "z": 1.0, "y": 2.4, "width": 1.2, "height": 0.8, "depth": 0.28, "material": "plaster" },
+    { "x": 11.95, "z": 1.0, "width": 1.9, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 15.12, "z": 1.0, "width": 2.04, "height": 3.2, "depth": 0.28, "material": "plaster" },
+    { "x": 13.5, "z": 1.0, "y": 2.4, "width": 1.2, "height": 0.8, "depth": 0.28, "material": "plaster" },
+
+    { "x": 3.0, "z": -6.8, "width": 0.28, "height": 3.2, "depth": 4.4, "material": "plaster" },
+    { "x": 3.0, "z": -1.2, "width": 0.28, "height": 3.2, "depth": 4.4, "material": "plaster" },
+    { "x": 3.0, "z": -4.0, "y": 2.4, "width": 0.28, "height": 0.8, "depth": 1.2, "material": "plaster" },
+
+    { "x": -3.67, "z": -9.0, "width": 2.94, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 3.0, "z": -9.0, "width": 5.6, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 9.67, "z": -9.0, "width": 2.94, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": -1.0, "z": -9.0, "y": 0, "width": 2.4, "height": 0.95, "depth": 0.28, "material": "concrete" },
+    { "x": -1.0, "z": -9.0, "y": 2.2, "width": 2.4, "height": 1.0, "depth": 0.28, "material": "concrete" },
+    { "x": 7.0, "z": -9.0, "y": 0, "width": 2.4, "height": 0.95, "depth": 0.28, "material": "concrete" },
+    { "x": 7.0, "z": -9.0, "y": 2.2, "width": 2.4, "height": 1.0, "depth": 0.28, "material": "concrete" },
+
+    { "x": 11.0, "z": -7.5, "width": 0.28, "height": 3.2, "depth": 3.28, "material": "concrete" },
+    { "x": 11.0, "z": -2.5, "width": 0.28, "height": 3.2, "depth": 7.0, "material": "plaster" },
+    { "x": 11.0, "z": 1.45, "width": 0.28, "height": 3.2, "depth": 0.9, "material": "plaster" },
+    { "x": 11.0, "z": 3.62, "width": 0.28, "height": 3.2, "depth": 1.04, "material": "plaster" },
+    { "x": 11.0, "z": 2.5, "y": 2.4, "width": 0.28, "height": 0.8, "depth": 1.2, "material": "plaster" },
+    { "x": 11.0, "z": 6.0, "width": 0.28, "height": 3.2, "depth": 4.28, "material": "concrete" },
+
+    { "x": 13.5, "z": -6.0, "width": 5.28, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 16.0, "z": -1.32, "width": 0.28, "height": 3.2, "depth": 9.64, "material": "concrete" },
+    { "x": 16.0, "z": 6.82, "width": 0.28, "height": 3.2, "depth": 2.64, "material": "concrete" },
+    { "x": 16.0, "z": 4.5, "y": 0, "width": 0.28, "height": 0.95, "depth": 2.0, "material": "concrete" },
+    { "x": 16.0, "z": 4.5, "y": 2.2, "width": 0.28, "height": 1.0, "depth": 2.0, "material": "concrete" },
+
+    { "x": 11.88, "z": 8.0, "width": 2.04, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 15.12, "z": 8.0, "width": 2.04, "height": 3.2, "depth": 0.28, "material": "concrete" },
+    { "x": 13.5, "z": 8.0, "y": 2.4, "width": 1.2, "height": 0.8, "depth": 0.28, "material": "concrete" }
+  ],
+  "doors": [
+    { "id": "door_front", "x": 0.0, "z": 10.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.4, "double": true },
+    { "id": "door_lobby_corridor", "x": 0.0, "z": 4.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.4, "double": true },
+    { "id": "door_lobby_conf", "x": -5.0, "z": 7.0, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_corr_conf", "x": -5.0, "z": 2.5, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_office_west", "x": -1.0, "z": 1.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_meeting", "x": 7.0, "z": 1.0, "yaw": 0, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_office_meeting", "x": 3.0, "z": -4.0, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_corridor_service", "x": 11.0, "z": 2.5, "yaw": 90, "locked": false, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_service_ext", "x": 13.5, "z": 8.0, "yaw": 0, "locked": true, "maxAngle": 105, "width": 1.2 },
+    { "id": "door_server", "x": 13.5, "z": 1.0, "yaw": 0, "locked": true, "maxAngle": 105, "width": 1.2 }
+  ],
+  "covers": [
+    { "x": -2.4, "z": 12.1, "width": 2.2, "height": 0.85, "depth": 0.8, "material": "concrete" },
+    { "x": 3.2, "z": 12.1, "width": 2.2, "height": 0.85, "depth": 0.8, "material": "concrete" },
+    { "x": 8.0, "z": 7.2, "width": 1.8, "height": 0.75, "depth": 1.8, "material": "wood" },
+    { "x": 2.4, "z": 7.4, "width": 2.4, "height": 1.05, "depth": 0.9, "material": "wood" },
+    { "x": -9.5, "z": 4.2, "width": 2.4, "height": 0.8, "depth": 5.2, "material": "wood" },
+    { "x": -11.5, "z": -1.0, "width": 1.8, "height": 1.4, "depth": 0.8, "material": "metal" },
+    { "x": -1.5, "z": -4.5, "width": 2.2, "height": 0.85, "depth": 1.2, "material": "wood" },
+    { "x": -2.8, "z": -7.2, "width": 1.4, "height": 1.5, "depth": 0.8, "material": "metal" },
+    { "x": 7.0, "z": -4.2, "width": 2.6, "height": 0.85, "depth": 3.0, "material": "wood" },
+    { "x": 9.2, "z": -1.2, "width": 1.4, "height": 1.25, "depth": 0.9, "material": "fabric" },
+    { "x": 13.8, "z": 4.6, "width": 1.6, "height": 1.1, "depth": 1.2, "material": "metal" },
+    { "x": 14.2, "z": -3.6, "width": 1.1, "height": 1.9, "depth": 2.2, "material": "metal" }
+  ],
+  "allies": [
+    { "id": "ally_miller", "name": "Miller", "x": -1.4, "z": 14.8, "y": 0, "yaw": 0 },
+    { "id": "ally_cole", "name": "Cole", "x": 1.4, "z": 14.8, "y": 0, "yaw": 0 }
+  ],
+  "items": [
+    { "id": "prop_0", "kind": "radio", "x": 2.4, "z": 7.4, "y": 1.05 },
+    { "id": "prop_1", "kind": "evidence", "x": -9.5, "z": 4.2, "y": 0.8 },
+    { "id": "prop_2", "kind": "medkit", "x": 7.0, "z": -4.2, "y": 0.85 },
+    { "id": "prop_3", "kind": "flashbang", "x": 13.8, "z": 4.6, "y": 1.1 }
+  ],
+  "entities": [
+    { "id": "suspect_1", "type": "suspect", "profile": "nervous_robber", "x": -10.8, "z": 6.2, "yaw": 135 },
+    { "id": "suspect_2", "type": "suspect", "profile": "nervous_robber", "x": -2.0, "z": -6.0, "yaw": 180 },
+    { "id": "suspect_3", "type": "suspect", "profile": "hardcore_leader", "x": 7.4, "z": -6.4, "yaw": 180 },
+    { "id": "suspect_4", "type": "suspect", "profile": "nervous_robber", "x": 12.6, "z": -3.8, "yaw": 0 },
+    { "id": "civilian_1", "type": "civilian", "profile": "frightened_civilian", "x": -11.5, "z": 0.8, "yaw": 45 },
+    { "id": "civilian_2", "type": "civilian", "profile": "frightened_civilian", "x": 0.8, "z": -7.2, "yaw": 180 },
+    { "id": "civilian_3", "type": "civilian", "profile": "frightened_civilian", "x": 9.2, "z": -7.2, "yaw": 210 }
+  ]
+}

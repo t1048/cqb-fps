@@ -1,0 +1,761 @@
+import type { Cell } from '../ai/Squad';
+import type { BoxDef, MapData } from '../core/types';
+import type { PlayerController } from '../player/PlayerController';
+import type { DoorStage, DoorSystem } from '../world/Door';
+
+const DEG2RAD = Math.PI / 180;
+const MAX_DT = 0.05;
+const DEFAULT_DOOR_WIDTH = 1.2;
+const MINIMAP_SIZE = 180;
+/** 部屋 floorY を同一階とみなす許容差(m)（ブリーフィングの旧タブ生成と同値） */
+const FLOOR_GROUP_TOLERANCE = 1.5;
+/** 階切替のヒステリシス幅(m)。隣接階の中点を この半分だけ越えるまで現在階を保持する */
+const FLOOR_SWITCH_HYSTERESIS = 0.3;
+
+export interface ActiveFloor {
+  /** スナップ後の床高さ（floorLevels のいずれか） */
+  floorY: number;
+  /** 表示名（B1 / 1F / 2F …） */
+  label: string;
+}
+
+/** マップの部屋 floorY から離散階層を昇順で抽出（許容差内は同一階）。 */
+export function collectFloorLevels(map: MapData): number[] {
+  const levels: number[] = [];
+  for (const r of map.rooms) {
+    const fy = Math.round((r.floorY ?? 0) * 10) / 10;
+    if (!levels.some((v) => Math.abs(v - fy) < FLOOR_GROUP_TOLERANCE)) levels.push(fy);
+  }
+  levels.sort((a, b) => a - b);
+  return levels;
+}
+
+function nearestFloorIndex(y: number, floorLevels: readonly number[]): number {
+  let best = 0;
+  for (let i = 1; i < floorLevels.length; i++) {
+    if (Math.abs(floorLevels[i] - y) < Math.abs(floorLevels[best] - y)) best = i;
+  }
+  return best;
+}
+
+/** 階の表示名: y=0 に最も近い階を 1F とし、下へ B1, B2…、上へ 2F, 3F…。 */
+export function floorLabelAt(index: number, floorLevels: readonly number[]): string {
+  const ground = nearestFloorIndex(0, floorLevels);
+  return index < ground ? `B${ground - index}` : `${index - ground + 1}F`;
+}
+
+/**
+ * 高さ y を離散階層へスナップする（設計書 §3.1 resolveActiveFloor）。
+ * prevFloorY を渡すと、最近傍階が変わっても |y - 新階| + ヒステリシス < |y - 旧階| になるまで旧階を保持し、
+ * 階段の中点付近で表示が往復しない。描画の floorY と表示名に同じ戻り値を使うこと。
+ * floorLevels は昇順・空でないこと（空のときは y をそのまま返し label は空文字）。
+ */
+export function resolveActiveFloor(y: number, floorLevels: readonly number[], prevFloorY?: number): ActiveFloor {
+  if (floorLevels.length === 0) return { floorY: y, label: '' };
+  let idx = nearestFloorIndex(y, floorLevels);
+  if (prevFloorY !== undefined) {
+    const prevIdx = nearestFloorIndex(prevFloorY, floorLevels);
+    if (
+      prevIdx !== idx &&
+      Math.abs(floorLevels[prevIdx] - prevFloorY) < 1e-6 &&
+      Math.abs(y - floorLevels[idx]) + FLOOR_SWITCH_HYSTERESIS >= Math.abs(y - floorLevels[prevIdx])
+    ) {
+      idx = prevIdx;
+    }
+  }
+  return { floorY: floorLevels[idx], label: floorLabelAt(idx, floorLevels) };
+}
+
+export interface FloorPlanDoorState {
+  id: string;
+  angle: number;
+  maxAngle: number;
+  stage: DoorStage;
+  locked: boolean;
+}
+
+export interface FloorPlanPlayerState {
+  x: number;
+  z: number;
+  /** PlayerController.yawRad（0 = -Z 方向、forward = (-sin(yaw), -cos(yaw))） */
+  yawRad: number;
+}
+
+export interface FloorPlanAllyState {
+  name: string;
+  x: number;
+  z: number;
+  y: number;
+  yawRad: number;
+  down: boolean;
+}
+
+export interface FloorPlanWaypoint {
+  label: string;
+  x: number;
+  z: number;
+  y: number;
+  color: string;
+}
+
+export interface DrawFloorPlanOptions {
+  coverage?: readonly Cell[];
+  /** 論理描画幅(px)。省略時は canvas.width */
+  width?: number;
+  /** 論理描画高(px)。省略時は canvas.height */
+  height?: number;
+  /** 外周余白(px) */
+  padding?: number;
+  /** 部屋名ラベルを表示するか（既定 true） */
+  showRoomLabels?: boolean;
+  /** 侵入地点(playerSpawn)マーカーを表示するか（ブリーフィング向け、既定 false） */
+  showSpawn?: boolean;
+  /** リアルタイムのプレイヤー位置・向き（ミニマップ向け） */
+  player?: FloorPlanPlayerState;
+  /** リアルタイムの隊員位置・向き */
+  allies?: readonly FloorPlanAllyState[];
+  /** 指示された移動・警戒ポイント */
+  waypoints?: readonly FloorPlanWaypoint[];
+  /** ドア ID → リアルタイム開閉状態（省略時は静的定義から closed/locked を描画） */
+  doors?: ReadonlyMap<string, FloorPlanDoorState>;
+  /** コンパクト表示（ミニマップ用） */
+  compact?: boolean;
+  /** 指定時はこの床高さの部屋・壁・ドアだけ描く */
+  floorY?: number;
+  /** 背景色（省略時は透明クリア） */
+  background?: string;
+}
+
+const ROOM_TINTS = [
+  'rgba(58, 82, 108, 0.24)',
+  'rgba(46, 68, 92, 0.24)',
+  'rgba(66, 90, 114, 0.24)',
+  'rgba(52, 76, 98, 0.24)',
+] as const;
+
+interface Bounds2D {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+function boxNearFloor(box: BoxDef, floorY: number | undefined): boolean {
+  if (floorY === undefined) return true;
+  const base = box.y ?? 0;
+  const mid = base + box.height * 0.5;
+  return Math.abs(mid - (floorY + 1.25)) < 1.65;
+}
+
+function expandBoxBounds(bounds: Bounds2D, box: BoxDef): void {
+  const rad = (box.yaw ?? 0) * DEG2RAD;
+  const c = Math.abs(Math.cos(rad));
+  const s = Math.abs(Math.sin(rad));
+  const hx = (box.width * c + box.depth * s) / 2;
+  const hz = (box.width * s + box.depth * c) / 2;
+  if (box.x - hx < bounds.minX) bounds.minX = box.x - hx;
+  if (box.x + hx > bounds.maxX) bounds.maxX = box.x + hx;
+  if (box.z - hz < bounds.minZ) bounds.minZ = box.z - hz;
+  if (box.z + hz > bounds.maxZ) bounds.maxZ = box.z + hz;
+}
+
+function computeMapBounds(map: MapData): Bounds2D {
+  const bounds: Bounds2D = {
+    minX: -map.floor.width / 2,
+    maxX: map.floor.width / 2,
+    minZ: -map.floor.depth / 2,
+    maxZ: map.floor.depth / 2,
+  };
+  for (const w of map.walls) expandBoxBounds(bounds, w);
+  for (const c of map.covers) expandBoxBounds(bounds, c);
+  for (const r of map.rooms) {
+    if (r.x - r.width / 2 < bounds.minX) bounds.minX = r.x - r.width / 2;
+    if (r.x + r.width / 2 > bounds.maxX) bounds.maxX = r.x + r.width / 2;
+    if (r.z - r.depth / 2 < bounds.minZ) bounds.minZ = r.z - r.depth / 2;
+    if (r.z + r.depth / 2 > bounds.maxZ) bounds.maxZ = r.z + r.depth / 2;
+  }
+  return bounds;
+}
+
+function drawRotatedBox(
+  ctx: CanvasRenderingContext2D,
+  box: BoxDef,
+  toX: (wx: number) => number,
+  toY: (wz: number) => number,
+  scale: number,
+  fill: string,
+  stroke?: string,
+): void {
+  const cx = toX(box.x);
+  const cy = toY(box.z);
+  const w = Math.max(1.5, box.width * scale);
+  const h = Math.max(1.5, box.depth * scale);
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (box.yaw) ctx.rotate(-box.yaw * DEG2RAD);
+  ctx.fillStyle = fill;
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-w / 2, -h / 2, w, h);
+  }
+  ctx.restore();
+}
+
+/**
+ * 2D 間取り図レンダラー（ブリーフィング画面・ゲーム内ミニマップで共有）。
+ * 座標規約: +X が右、-Z が上（北上固定）、アスペクト比維持で中央配置。
+ * 戦術的制約: 未発見の容疑者・民間人は描画しない。
+ */
+export function drawFloorPlan(
+  ctx: CanvasRenderingContext2D,
+  map: MapData,
+  options: DrawFloorPlanOptions = {},
+): void {
+  const cw = options.width ?? ctx.canvas.width;
+  const ch = options.height ?? ctx.canvas.height;
+  const compact = options.compact ?? false;
+  const pad = options.padding ?? (compact ? 12 : 24);
+  const showRoomLabels = options.showRoomLabels ?? true;
+
+  if (options.background) {
+    ctx.fillStyle = options.background;
+    ctx.fillRect(0, 0, cw, ch);
+  } else {
+    ctx.clearRect(0, 0, cw, ch);
+  }
+
+  const bounds = computeMapBounds(map);
+  const worldW = Math.max(0.1, bounds.maxX - bounds.minX);
+  const worldD = Math.max(0.1, bounds.maxZ - bounds.minZ);
+  const availW = Math.max(1, cw - pad * 2);
+  const availH = Math.max(1, ch - pad * 2);
+  const scale = Math.min(availW / worldW, availH / worldD);
+  const offsetX = (cw - worldW * scale) / 2;
+  const offsetY = (ch - worldD * scale) / 2;
+
+  const toX = (wx: number): number => offsetX + (wx - bounds.minX) * scale;
+  const toY = (wz: number): number => offsetY + (wz - bounds.minZ) * scale;
+
+  // 床ベース
+  const fx = toX(-map.floor.width / 2);
+  const fy = toY(-map.floor.depth / 2);
+  const fw = map.floor.width * scale;
+  const fh = map.floor.depth * scale;
+  ctx.fillStyle = '#141c26';
+  ctx.fillRect(fx, fy, fw, fh);
+
+  // 薄い戦術グリッド（2m 間隔）
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(fx, fy, fw, fh);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(120, 155, 195, 0.08)';
+  ctx.lineWidth = 1;
+  const gridStep = 2;
+  const startX = Math.ceil(-map.floor.width / 2 / gridStep) * gridStep;
+  const startZ = Math.ceil(-map.floor.depth / 2 / gridStep) * gridStep;
+  ctx.beginPath();
+  for (let gx = startX; gx < map.floor.width / 2; gx += gridStep) {
+    const px = toX(gx);
+    ctx.moveTo(px, fy);
+    ctx.lineTo(px, fy + fh);
+  }
+  for (let gz = startZ; gz < map.floor.depth / 2; gz += gridStep) {
+    const py = toY(gz);
+    ctx.moveTo(fx, py);
+    ctx.lineTo(fx + fw, py);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // 部屋（屋内外を明確に区別）
+  map.rooms.forEach((room, idx) => {
+    if (options.floorY !== undefined && Math.abs((room.floorY ?? 0) - options.floorY) > 1.3) return;
+    const rx = toX(room.x - room.width / 2);
+    const ry = toY(room.z - room.depth / 2);
+    const rw = room.width * scale;
+    const rh = room.depth * scale;
+    ctx.fillStyle = room.outdoor ? 'rgba(42, 66, 56, 0.20)' : (ROOM_TINTS[idx % ROOM_TINTS.length] ?? ROOM_TINTS[0]);
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.save();
+    if (room.outdoor) ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = room.outdoor ? 'rgba(110, 165, 130, 0.22)' : 'rgba(130, 165, 200, 0.16)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.restore();
+  });
+
+  // 遮蔽物
+  for (const cell of options.coverage ?? []) {
+    if (!cell.seen || Math.abs(cell.y-(options.floorY ?? 0))>0.6) continue;
+    ctx.fillStyle = cell.visible ? 'rgba(89,215,163,0.55)' : 'rgba(89,215,163,0.22)';
+    ctx.fillRect(toX(cell.x)-scale*0.25,toY(cell.z)-scale*0.25,scale*0.5,scale*0.5);
+  }
+  for (const cover of map.covers) {
+    if (!boxNearFloor(cover, options.floorY)) continue;
+    drawRotatedBox(ctx, cover, toX, toY, scale, 'rgba(150, 118, 86, 0.72)', 'rgba(205, 174, 138, 0.55)');
+  }
+
+  // 階段
+  for (const stair of map.stairs) {
+    const lowY = stair.y ?? 0;
+    const highY = lowY + stair.steps * stair.rise;
+    if (options.floorY !== undefined && (options.floorY < lowY - 1.4 || options.floorY > highY + 1.4)) continue;
+    const total = stair.steps * stair.run;
+    const yawRad = stair.yaw * DEG2RAD;
+    ctx.save();
+    ctx.translate(toX(stair.x), toY(stair.z));
+    ctx.rotate(-yawRad);
+    const sw = stair.width * scale;
+    const sd = total * scale;
+    ctx.fillStyle = 'rgba(130, 100, 68, 0.35)';
+    ctx.fillRect(-sw / 2, -sd / 2, sw, sd);
+    ctx.strokeStyle = 'rgba(218, 184, 140, 0.72)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-sw / 2, -sd / 2, sw, sd);
+    ctx.beginPath();
+    const treadCount = Math.min(stair.steps, 12);
+    for (let i = 1; i < treadCount; i++) {
+      const y = -sd / 2 + (sd * i) / treadCount;
+      ctx.moveTo(-sw / 2, y);
+      ctx.lineTo(sw / 2, y);
+    }
+    // 上り方向 (-Zローカル = canvas上方向) 矢印
+    ctx.moveTo(0, sd * 0.25);
+    ctx.lineTo(0, -sd * 0.25);
+    ctx.moveTo(-sw * 0.22, -sd * 0.12);
+    ctx.lineTo(0, -sd * 0.25);
+    ctx.lineTo(sw * 0.22, -sd * 0.12);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 壁
+  for (const wall of map.walls) {
+    if (!boxNearFloor(wall, options.floorY)) continue;
+    drawRotatedBox(ctx, wall, toX, toY, scale, '#9db2c8');
+  }
+
+  // ドア（開閉段階・施錠状態を色と角度で表現）
+  for (const d of map.doors) {
+    if (options.floorY !== undefined && Math.abs((d.y ?? 0) - options.floorY) > 1.4) continue;
+    const width = d.width ?? DEFAULT_DOOR_WIDTH;
+    const yawRad = d.yaw * DEG2RAD;
+    const ux = Math.cos(yawRad);
+    const uz = -Math.sin(yawRad);
+    const hx = d.x - (ux * width) / 2;
+    const hz = d.z - (uz * width) / 2;
+    const ex = d.x + (ux * width) / 2;
+    const ez = d.z + (uz * width) / 2;
+
+    const live = options.doors?.get(d.id);
+    const locked = live ? live.locked : d.locked;
+    const stage: DoorStage = live ? live.stage : 'closed';
+    const angleDeg = live ? live.angle : 0;
+
+    const phx = toX(hx);
+    const phy = toY(hz);
+    const pex = toX(ex);
+    const pey = toY(ez);
+
+    // 開口部の薄いガイド線
+    ctx.save();
+    ctx.strokeStyle = 'rgba(180, 205, 230, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(phx, phy);
+    ctx.lineTo(pex, pey);
+    ctx.stroke();
+    ctx.restore();
+
+    const color = locked
+      ? '#e05252'
+      : stage === 'open'
+        ? '#5cd67d'
+        : stage === 'peek'
+          ? '#56c8d8'
+          : '#d89b3c';
+
+    // ドア板（ヒンジ起点で angleDeg 分回転。両開きは両端ヒンジから長さ width/2 の2枚）
+    const baseCanvasAngle = Math.atan2(pey - phy, pex - phx);
+    const openAngleRad = angleDeg * DEG2RAD;
+
+    if (d.double) {
+      const halfLeafLen = Math.max(3, width * 0.5 * scale);
+      const leftAngle = baseCanvasAngle - openAngleRad;
+      const rightBaseAngle = baseCanvasAngle + Math.PI;
+      const rightAngle = rightBaseAngle + openAngleRad;
+
+      if (angleDeg > 1) {
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(phx, phy, halfLeafLen, leftAngle, baseCanvasAngle, false);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(pex, pey, halfLeafLen, rightBaseAngle, rightAngle, false);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = compact ? 2.4 : 3.2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(phx, phy);
+      ctx.lineTo(phx + Math.cos(leftAngle) * halfLeafLen, phy + Math.sin(leftAngle) * halfLeafLen);
+      ctx.moveTo(pex, pey);
+      ctx.lineTo(pex + Math.cos(rightAngle) * halfLeafLen, pey + Math.sin(rightAngle) * halfLeafLen);
+      ctx.stroke();
+
+      // 両端ヒンジ点
+      ctx.fillStyle = '#dce8f5';
+      const hingeR = compact ? 1.4 : 2.1;
+      ctx.beginPath();
+      ctx.arc(phx, phy, hingeR, 0, Math.PI * 2);
+      ctx.arc(pex, pey, hingeR, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const leafLen = Math.max(4, width * scale);
+      const leafAngle = baseCanvasAngle - openAngleRad;
+
+      if (angleDeg > 1) {
+        // 開閉軌跡の薄い円弧
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(phx, phy, leafLen, leafAngle, baseCanvasAngle, false);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = compact ? 2.4 : 3.2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(phx, phy);
+      ctx.lineTo(phx + Math.cos(leafAngle) * leafLen, phy + Math.sin(leafAngle) * leafLen);
+      ctx.stroke();
+
+      // ヒンジ点
+      ctx.fillStyle = '#dce8f5';
+      ctx.beginPath();
+      ctx.arc(phx, phy, compact ? 1.4 : 2.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 施錠マーカー
+    if (locked) {
+      const mx = (phx + pex) / 2;
+      const my = (phy + pey) / 2;
+      const r = compact ? 2.4 : 3.6;
+      ctx.fillStyle = '#e05252';
+      ctx.beginPath();
+      ctx.arc(mx, my, r, 0, Math.PI * 2);
+      ctx.fill();
+      if (!compact) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // 部屋名ラベル（壁や遮蔽の上から読みやすく描画。階層一致のみ）
+  if (showRoomLabels) {
+    ctx.save();
+    ctx.font = compact ? '600 9px sans-serif' : '600 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const room of map.rooms) {
+      if (options.floorY !== undefined && Math.abs((room.floorY ?? 0) - options.floorY) > 1.3) continue;
+      const cx = toX(room.x);
+      const cy = toY(room.z);
+      ctx.fillStyle = 'rgba(8, 12, 18, 0.65)';
+      ctx.fillText(room.name, cx + 1, cy + 1);
+      ctx.fillStyle = compact ? 'rgba(210, 228, 245, 0.78)' : 'rgba(224, 238, 252, 0.92)';
+      ctx.fillText(room.name, cx, cy);
+    }
+    ctx.restore();
+  }
+
+  // 指定位置・警戒ウェイポイント
+  if (options.waypoints) {
+    for (const wp of options.waypoints) {
+      if (options.floorY !== undefined && Math.abs(wp.y - options.floorY) > 1.4) continue;
+      const wx = toX(wp.x);
+      const wy = toY(wp.z);
+      ctx.save();
+      ctx.strokeStyle = wp.color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(wx, wy, compact ? 4.5 : 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = wp.color;
+      ctx.font = compact ? 'bold 8px sans-serif' : 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(wp.label, wx, wy - 5);
+      ctx.restore();
+    }
+  }
+
+  // 隊員マーカー
+  if (options.allies) {
+    for (const ally of options.allies) {
+      if (options.floorY !== undefined && Math.abs(ally.y - options.floorY) > 1.4) continue;
+      const ax = toX(ally.x);
+      const ay = toY(ally.z);
+      const fxDir = -Math.sin(ally.yawRad);
+      const fzDir = -Math.cos(ally.yawRad);
+      const heading = Math.atan2(fzDir, fxDir);
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(heading);
+      ctx.fillStyle = ally.down ? '#6e7680' : '#f2c14e';
+      ctx.strokeStyle = '#09121a';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(5.5, 0);
+      ctx.lineTo(-3.5, -3.5);
+      ctx.lineTo(-1.8, 0);
+      ctx.lineTo(-3.5, 3.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.font = 'bold 8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = ally.down ? '#8a94a0' : '#f8dc88';
+      ctx.fillText(ally.name.slice(0, 1), ax, ay + 5);
+      ctx.restore();
+    }
+  }
+
+  // 侵入地点マーカー（ブリーフィング用）
+  if (options.showSpawn) {
+    const sx = toX(map.playerSpawn.x);
+    const sy = toY(map.playerSpawn.z);
+    const yawRad = -map.playerSpawn.yaw * DEG2RAD;
+    const fxDir = -Math.sin(yawRad);
+    const fzDir = -Math.cos(yawRad);
+    const heading = Math.atan2(fzDir, fxDir);
+
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(heading);
+    ctx.fillStyle = '#56c8d8';
+    ctx.strokeStyle = '#0c1520';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-6, -5.5);
+    ctx.lineTo(-3.5, 0);
+    ctx.lineTo(-6, 5.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    if (!compact) {
+      ctx.save();
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#7ce2f0';
+      ctx.fillText('突入地点', sx, sy + 9);
+      ctx.restore();
+    }
+  }
+
+  // プレイヤー位置＋視界コーン（ミニマップ用）
+  if (options.player) {
+    const px = toX(options.player.x);
+    const py = toY(options.player.z);
+    const fxDir = -Math.sin(options.player.yawRad);
+    const fzDir = -Math.cos(options.player.yawRad);
+    const heading = Math.atan2(fzDir, fxDir);
+    const coneLen = Math.max(14, 2.4 * scale);
+    const coneHalf = 32 * DEG2RAD;
+
+    ctx.save();
+    // 視界コーン
+    const grad = ctx.createRadialGradient(px, py, 2, px, py, coneLen);
+    grad.addColorStop(0, 'rgba(86, 200, 216, 0.42)');
+    grad.addColorStop(1, 'rgba(86, 200, 216, 0.02)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.arc(px, py, coneLen, heading - coneHalf, heading + coneHalf);
+    ctx.closePath();
+    ctx.fill();
+
+    // プレイヤー向き矢印
+    ctx.translate(px, py);
+    ctx.rotate(heading);
+    ctx.fillStyle = '#7ce2f0';
+    ctx.strokeStyle = '#09121a';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(6.5, 0);
+    ctx.lineTo(-4.5, -4);
+    ctx.lineTo(-2.5, 0);
+    ctx.lineTo(-4.5, 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 北（-Z）方位インジケータ
+  ctx.save();
+  ctx.font = compact ? 'bold 9px monospace' : 'bold 11px monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(180, 205, 230, 0.7)';
+  ctx.fillText('N ▲', cw - 6, 4);
+  ctx.restore();
+}
+
+/**
+ * 画面左上のリアルタイム戦術ミニマップ。
+ * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
+ * プレイ中は M キーで表示/非表示をトグル可能。
+ */
+export class Minimap {
+  private readonly root = document.createElement('div');
+  private readonly canvas = document.createElement('canvas');
+  private readonly ctx: CanvasRenderingContext2D | null;
+  private readonly doorStates = new Map<string, FloorPlanDoorState>();
+  private readonly dpr = Math.min(window.devicePixelRatio || 1, 2);
+  private active = false;
+  private userHidden = false;
+  private disposed = false;
+  private floorTitle: HTMLElement | null = null;
+  private readonly floorLevels: number[];
+  private activeFloorY: number | undefined;
+
+  constructor(
+    parent: HTMLElement,
+    private readonly map: MapData,
+    private readonly player: PlayerController,
+    private readonly doors: DoorSystem,
+    private readonly coverage: readonly Cell[],
+    private readonly getAllies?: () => readonly FloorPlanAllyState[],
+    private readonly getWaypoints?: () => readonly FloorPlanWaypoint[],
+  ) {
+    this.floorLevels = collectFloorLevels(map);
+    this.root.style.cssText =
+      'position:fixed;top:12px;left:12px;z-index:5;pointer-events:none;background:rgba(10,14,20,0.78);border:1px solid rgba(120,155,195,0.45);border-radius:6px;padding:6px;box-shadow:0 2px 10px rgba(0,0,0,0.45);display:none';
+
+    const header = document.createElement('div');
+    header.style.cssText =
+      'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font:600 10px monospace;letter-spacing:0.06em;color:rgba(188,214,240,0.85)';
+    const title = document.createElement('span');
+    title.textContent = '間取り';
+    this.floorTitle = title;
+    const key = document.createElement('span');
+    key.textContent = '[M]';
+    key.style.color = 'rgba(140,175,210,0.75)';
+    header.append(title, key);
+
+    this.canvas.width = Math.round(MINIMAP_SIZE * this.dpr);
+    this.canvas.height = Math.round(MINIMAP_SIZE * this.dpr);
+    this.canvas.style.cssText = `display:block;width:${MINIMAP_SIZE}px;height:${MINIMAP_SIZE}px;border-radius:3px`;
+    this.ctx = this.canvas.getContext('2d');
+
+    this.root.append(header, this.canvas);
+    parent.appendChild(this.root);
+
+    window.addEventListener('keydown', this.onKeyDown);
+  }
+
+  /** App のフェーズ制御用（briefing / ended では false、playing で true）。 */
+  setVisible(visible: boolean): void {
+    if (this.disposed) return;
+    this.active = visible;
+    this.syncDisplay();
+    if (this.active && !this.userHidden) this.render();
+  }
+
+  private syncDisplay(): void {
+    this.root.style.display = this.active && !this.userHidden ? 'block' : 'none';
+  }
+
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (this.disposed || !this.active || e.repeat) return;
+    if (e.code === 'KeyM') {
+      this.userHidden = !this.userHidden;
+      this.syncDisplay();
+      if (!this.userHidden) this.render();
+    }
+  };
+
+  update(rawDt: number): void {
+    if (this.disposed || !this.active || this.userHidden) return;
+    void Math.min(rawDt, MAX_DT);
+    this.render();
+  }
+
+  private render(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.doorStates.clear();
+    for (const d of this.doors.doors) {
+      this.doorStates.set(d.id, {
+        id: d.id,
+        angle: d.angle,
+        maxAngle: d.maxAngle,
+        stage: d.stage,
+        locked: d.locked,
+      });
+    }
+    const floor = resolveActiveFloor(this.player.position.y, this.floorLevels, this.activeFloorY);
+    this.activeFloorY = floor.floorY;
+    ctx.save();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    drawFloorPlan(ctx, this.map, {
+      width: MINIMAP_SIZE,
+      height: MINIMAP_SIZE,
+      padding: 10,
+      showRoomLabels: true,
+      showSpawn: false,
+      compact: true,
+      coverage: this.coverage,
+      doors: this.doorStates,
+      floorY: floor.floorY,
+      allies: this.getAllies?.(),
+      waypoints: this.getWaypoints?.(),
+      player: {
+        x: this.player.position.x,
+        z: this.player.position.z,
+        yawRad: this.player.yawRad,
+      },
+    });
+    ctx.restore();
+    if (this.floorTitle) {
+      this.floorTitle.textContent = this.floorLevels.length > 1 ? `間取り ${floor.label}` : '間取り';
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    window.removeEventListener('keydown', this.onKeyDown);
+    this.doorStates.clear();
+    this.root.remove();
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "range": 10,
+  "abortRangeMultiplier": 1.4,
+  "coneDeg": 60,
+  "allowedStates": ["BARRICADED", "ALERT", "CONFRONTATION", "HESITATE", "ENGAGE", "HOSTAGE_SHIELD"],
+  "blockers": ["door", "cover"],
+  "directSightStates": ["HOSTAGE_SHIELD"],
+  "timeoutSec": 25,
+  "choiceCooldownSec": 1.5,
+  "maxFails": 2,
+  "trustMax": 3,
+  "shieldReleaseBelow": 40,
+  "lockoutSec": 8,
+  "resultHoldSec": 2.5,
+  "timeout": {
+    "moraleRise": { "min": 8, "max": 12 },
+    "fireChance": 0.4,
+    "shieldFireChance": 0.7
+  },
+  "cancelKey": "KeyB",
+  "demands": {
+    "nervous_robber": "「車を用意しろ！ 逃がしてくれれば誰も傷つけない！」",
+    "hardcore_leader": "「全員の安全な退去と現金だ。それ以外は聞かん。」"
+  },
+  "defaultDemand": "「要求は…逃がしてくれ、それだけだ！」",
+  "text": {
+    "hintIdle": "交渉無線: ドア/遮蔽物越しの容疑者、または人質を取る容疑者に向く",
+    "hintReady": "F: 交渉開始",
+    "hintShield": "F: 人質交渉開始",
+    "cancel": "交渉を打ち切った",
+    "surrender": "容疑者が投降した",
+    "release": "人質が解放され、容疑者が投降した",
+    "fire": "交渉決裂！ 容疑者が発砲した",
+    "worsen": "交渉決裂 — 容疑者が態度を硬化させた",
+    "interrupted": "交渉が中断された",
+    "locked": "決裂直後で応答がない"
+  },
+  "choices": [
+    {
+      "id": "persuade",
+      "label": "説得する",
+      "key": "KeyZ",
+      "playerLine": "「話を聞かせてくれ。武器を置けば無事に済む」",
+      "chance": { "base": 0.8, "aggressionWeight": 0.4, "moraleWeight": 0.3, "trustBonus": 0.12, "min": 0.15, "max": 0.95 },
+      "successMorale": { "min": 12, "max": 18 },
+      "failMorale": { "min": 4, "max": 8 },
+      "fireChanceOnFail": 0.1,
+      "trustGain": 0,
+      "revealDemand": false,
+      "successLine": "…本当に、無事で済むのか…？",
+      "failLine": "うるさい！ 信用できるか！"
+    },
+    {
+      "id": "confirm",
+      "label": "要求を確認する",
+      "key": "KeyX",
+      "playerLine": "「要求を聞かせてくれ。何が欲しい？」",
+      "chance": { "base": 1.0, "aggressionWeight": 0, "moraleWeight": 0, "trustBonus": 0, "min": 1, "max": 1 },
+      "successMorale": { "min": 1, "max": 3 },
+      "failMorale": { "min": 0, "max": 0 },
+      "fireChanceOnFail": 0,
+      "trustGain": 1,
+      "revealDemand": true,
+      "successLine": "…要求は、こうだ。",
+      "failLine": "…話すことはない。"
+    },
+    {
+      "id": "intimidate",
+      "label": "威圧する",
+      "key": "KeyV",
+      "playerLine": "「建物は包囲した。出口はない。投降しろ！」",
+      "chance": { "base": 0.85, "aggressionWeight": 0.45, "moraleWeight": 0.35, "trustBonus": 0.05, "min": 0.15, "max": 0.9 },
+      "successMorale": { "min": 20, "max": 30 },
+      "failMorale": { "min": 8, "max": 14 },
+      "fireChanceOnFail": 0.5,
+      "trustGain": 0,
+      "revealDemand": false,
+      "successLine": "くそっ…囲まれてるのか…！",
+      "failLine": "脅しには乗らねえ！"
+    }
+  ]
+}
