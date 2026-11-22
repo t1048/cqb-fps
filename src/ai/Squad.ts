@@ -655,8 +655,14 @@ export class SquadSystem {
       this.announcedStacks.delete(portal.id);
 
       // スタック位置へ近い順に役割を割り当て（#1がポイントマン、#2がウィングマン）
-      const sorted = [...targets].sort(
-        (a, b) => Math.hypot(a.body.px - portal.centerX, a.body.pz - portal.centerZ) - Math.hypot(b.body.px - portal.centerX, b.body.pz - portal.centerZ),
+      // 同じ入口で既にスタック中の場合は役割・立ち位置を維持（再指示で並び順が入れ替わらないように）
+      const keepRoles =
+        order !== 'stack' &&
+        targets.every((u) => u.order === 'stack' && u.entryPortal?.id === portal.id && u.groupSize === targets.length);
+      const sorted = [...targets].sort((a, b) =>
+        keepRoles
+          ? a.roleIndex - b.roleIndex
+          : Math.hypot(a.body.px - portal.centerX, a.body.pz - portal.centerZ) - Math.hypot(b.body.px - portal.centerX, b.body.pz - portal.centerZ),
       );
       const pods = room ? this.computeDominationPoints(portal, room, sorted.length) : [];
 
