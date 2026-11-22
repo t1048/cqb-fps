@@ -47,6 +47,7 @@ const STYLE = `
 .cqb-hud .radio{position:absolute;right:16px;bottom:84px;max-width:340px;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .cqb-hud .radio-line{padding:4px 9px;background:rgba(10,18,28,.8);border-right:3px solid #56c8d8;border-radius:3px;font-size:12px;color:#dff2ff}
 .cqb-hud .prompt{left:50%;top:60%;transform:translateX(-50%);font-size:14px;background:rgba(0,0,0,.68);max-width:90vw;text-align:center}
+.cqb-hud .quick-order{left:50%;bottom:16px;transform:translateX(-50%);font:bold 15px monospace;color:#ffe9a8;background:rgba(10,16,24,.78);display:none;white-space:nowrap}
 .cqb-hud .interact{left:50%;top:66%;transform:translateX(-50%);font-size:14px;background:rgba(0,0,0,.62);display:none}
 .cqb-hud .mission-hint{left:50%;top:16px;transform:translateX(-50%);font-size:14px;font-weight:bold;padding:8px 16px;display:none;max-width:calc(100vw - 580px);text-align:center}
 .cqb-hud .lean{position:absolute;top:50%;font-size:22px;opacity:.9}
@@ -100,6 +101,8 @@ export class Hud {
   private readonly radioEl = document.createElement('div');
   private readonly promptEl = document.createElement('div');
   private readonly interactEl = document.createElement('div');
+  private readonly quickOrderEl = document.createElement('div');
+  private lastQuickHint = '';
   private readonly missionHintEl = document.createElement('div');
   private readonly leanL = document.createElement('div');
   private readonly leanR = document.createElement('div');
@@ -196,6 +199,7 @@ export class Hud {
     this.promptEl.textContent =
       'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4装備';
     this.interactEl.className = 'panel interact';
+    this.quickOrderEl.className = 'panel quick-order';
     this.missionHintEl.className = 'panel mission-hint';
     this.leanL.className = 'lean';
     this.leanL.style.left = '24px';
@@ -216,6 +220,7 @@ export class Hud {
       this.radioEl,
       this.promptEl,
       this.interactEl,
+      this.quickOrderEl,
       this.missionHintEl,
       this.leanL,
       this.leanR,
@@ -409,6 +414,17 @@ export class Hud {
       } else {
         this.interactEl.style.display = 'none';
       }
+    }
+
+    // Zクイック指示ヒント（画面下部）
+    const quickHint =
+      this.squad && this.input.isPointerLocked && !this.input.isOrderMenuOpen && !this.input.suppressSquadShortcuts && !radio?.negotiating && this.player.alive
+        ? this.squad.quickOrderHint(dt)
+        : '';
+    if (quickHint !== this.lastQuickHint) {
+      this.lastQuickHint = quickHint;
+      this.quickOrderEl.textContent = quickHint;
+      this.quickOrderEl.style.display = quickHint ? 'block' : 'none';
     }
 
     // ミッション完了/失敗の統一バナー

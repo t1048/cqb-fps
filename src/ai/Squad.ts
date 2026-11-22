@@ -496,32 +496,47 @@ export class SquadSystem {
 
     if (this.input.wasPressed('quickOrder')) {
       const ctx = this.menu.resolveContext(this.selectedElement);
-      if (ctx.restrainTarget) {
-        this.executeOrder('restrain', ctx);
-      } else if (ctx.door) {
-        const targets = this.activeTargets(ctx.element);
-        const alreadyStacked =
-          targets.length > 0 &&
-          targets.every(
-            (a) =>
-              a.order === 'stack' &&
-              a.door === ctx.door &&
-              a.stackPos !== null &&
-              Math.hypot(a.body.px - a.stackPos.x, a.body.pz - a.stackPos.z) <= 0.65,
-          );
-        if (alreadyStacked) {
-          this.executeOrder(ctx.door.locked ? 'breachClear' : 'clear', ctx);
-        } else {
-          this.executeOrder('stack', ctx);
-        }
-      } else if (ctx.areaTarget) {
-        this.executeOrder('clear', ctx);
-      } else if (ctx.groundPoint) {
-        this.executeOrder('move', ctx);
-      } else {
-        this.executeOrder('hold', ctx);
-      }
+      this.executeOrder(this.pickQuickOrder(ctx), ctx);
     }
+  }
+
+  /** Z キーで発令される指示を状況から決定する（実行と HUD 表示で共通）。 */
+  private pickQuickOrder(ctx: OrderContext): SquadOrder {
+    if (ctx.restrainTarget) return 'restrain';
+    if (ctx.door) {
+      const targets = this.activeTargets(ctx.element);
+      const alreadyStacked =
+        targets.length > 0 &&
+        targets.every(
+          (a) =>
+            a.order === 'stack' &&
+            a.door === ctx.door &&
+            a.stackPos !== null &&
+            Math.hypot(a.body.px - a.stackPos.x, a.body.pz - a.stackPos.z) <= 0.65,
+        );
+      if (alreadyStacked) return ctx.door.locked ? 'breachClear' : 'clear';
+      return 'stack';
+    }
+    if (ctx.areaTarget) return 'clear';
+    if (ctx.groundPoint) return 'move';
+    return 'hold';
+  }
+
+  private quickHintCache = '';
+  private quickHintTimer = 0;
+
+  /** 画面下部に出す「Z : 〜〜」の文言。指示不可の状況では空文字。 */
+  quickOrderHint(dt: number): string {
+    this.quickHintTimer -= dt;
+    if (this.quickHintTimer > 0) return this.quickHintCache;
+    this.quickHintTimer = 0.1;
+    if (this.disposed || this.activeTargets(this.selectedElement).length === 0) {
+      this.quickHintCache = '';
+    } else {
+      const order = this.pickQuickOrder(this.menu.resolveContext(this.selectedElement));
+      this.quickHintCache = `Z : ${this.cfg.orderLabels[order]}`;
+    }
+    return this.quickHintCache;
   }
 
   private updateCoverage(dt: number): void {
