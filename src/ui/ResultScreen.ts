@@ -1,6 +1,7 @@
 import type { StageEntry } from '../core/types';
 import type { RoE } from '../rules/RoE';
 import type { ScoreEntry } from '../rules/ScoreBoard';
+import type { ResultReport } from '../modes/SuspectMode';
 
 const ROW_STYLE = 'display:flex;justify-content:space-between;gap:24px;padding:2px 0';
 
@@ -74,7 +75,8 @@ export class ResultScreen {
     private readonly options?: ResultScreenOptions,
   ) {}
 
-  show(failed = false): void {
+  /** report 指定時（容疑者モード）は RoE スコアの代わりにその内容を表示する。 */
+  show(failed = false, report?: ResultReport): void {
     if (this.el || this.disposed) return;
     const b = this.roe.board;
     const el = document.createElement('div');
@@ -84,29 +86,37 @@ export class ResultScreen {
     panel.style.cssText = 'min-width:420px;max-width:560px;max-height:90vh;overflow:auto;padding:24px 32px;background:#14181c;border:1px solid #556;border-radius:8px';
 
     const title = document.createElement('div');
-    title.textContent = failed ? 'MISSION FAILED' : 'MISSION COMPLETE';
-    title.style.cssText = `font:bold 28px sans-serif;margin-bottom:8px;color:${failed ? '#ff6b6b' : '#7ce2f0'}`;
+    title.textContent = report ? report.title : failed ? 'MISSION FAILED' : 'MISSION COMPLETE';
+    title.style.cssText = `font:bold 28px sans-serif;margin-bottom:8px;color:${report ? report.titleColor : failed ? '#ff6b6b' : '#7ce2f0'}`;
     panel.appendChild(title);
 
-    if (failed) {
+    const subText = report ? report.subtitle : failed ? '隊長が行動不能になりました。遮蔽物・リーン・隊員の先行突入を活用してください。' : undefined;
+    if (subText) {
+      const good = report?.subtitleGood === true;
       const sub = document.createElement('div');
-      sub.textContent = '隊長が行動不能になりました。遮蔽物・リーン・隊員の先行突入を活用してください。';
-      sub.style.cssText = 'font:13px/1.5 sans-serif;color:#ffb4b4;margin-bottom:12px;padding:8px 10px;background:rgba(140,30,30,0.3);border:1px solid #944;border-radius:4px';
+      sub.textContent = subText;
+      sub.style.cssText = good
+        ? 'font:13px/1.5 sans-serif;color:#c8f4d0;margin-bottom:12px;padding:8px 10px;background:rgba(30,110,60,0.3);border:1px solid #3a8a55;border-radius:4px'
+        : 'font:13px/1.5 sans-serif;color:#ffb4b4;margin-bottom:12px;padding:8px 10px;background:rgba(140,30,30,0.3);border:1px solid #944;border-radius:4px';
       panel.appendChild(sub);
     }
 
     const summary = document.createElement('div');
     summary.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px';
     const score = document.createElement('div');
-    score.textContent = b.maxPossibleScore > 0 ? `総合スコア ${b.total} / ${b.maxPossibleScore}` : `総合スコア ${b.total}`;
+    score.textContent = report
+      ? report.scoreText
+      : b.maxPossibleScore > 0
+        ? `総合スコア ${b.total} / ${b.maxPossibleScore}`
+        : `総合スコア ${b.total}`;
     score.style.cssText = 'font:bold 22px sans-serif';
     const rank = document.createElement('div');
-    rank.textContent = failed ? 'FAILED' : `RANK ${b.rank}`;
-    rank.style.cssText = `font:bold 30px sans-serif;color:${failed ? '#ff6b6b' : '#ffd24d'}`;
+    rank.textContent = report ? report.rankText : failed ? 'FAILED' : `RANK ${b.rank}`;
+    rank.style.cssText = `font:bold 30px sans-serif;color:${report ? report.rankColor : failed ? '#ff6b6b' : '#ffd24d'}`;
     summary.append(score, rank);
     panel.appendChild(summary);
 
-    const stats: [string, string][] = [
+    const stats: [string, string][] = report?.stats ?? [
       ['クリアタイム', fmtTime(this.roe.elapsed)],
       ['逮捕', String(b.count('arrest'))],
       ['証拠回収', String(b.count('evidence'))],
@@ -129,16 +139,17 @@ export class ResultScreen {
     h.textContent = '評価内訳';
     h.style.cssText = 'font:bold 16px sans-serif;margin:14px 0 4px;border-top:1px solid #445;padding-top:10px';
     panel.appendChild(h);
-    if (b.entries.length === 0) {
+    const entries: { time: number; label: string; points: number; targetId?: string }[] = report?.entries ?? b.entries;
+    if (entries.length === 0) {
       const none = document.createElement('div');
       none.textContent = '(なし)';
       panel.appendChild(none);
     }
-    for (const e of b.entries) {
+    for (const e of entries) {
       const row = document.createElement('div');
       row.style.cssText = ROW_STYLE + ';color:' + (e.points < 0 ? '#ff6b6b' : '#8fe38f');
       const a = document.createElement('span');
-      a.textContent = `[${fmtTime(e.time)}] ${e.label} (${e.targetId})`;
+      a.textContent = e.targetId ? `[${fmtTime(e.time)}] ${e.label} (${e.targetId})` : `[${fmtTime(e.time)}] ${e.label}`;
       const c = document.createElement('span');
       c.textContent = fmtPts(e.points);
       row.append(a, c);

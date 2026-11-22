@@ -432,6 +432,11 @@ export class SuspectNavigator {
     return this.openingDoorNow;
   }
 
+  /** 階段を昇降中か（reset で途中の階段状態を失わないよう呼び出し側が判定に使う） */
+  get onStair(): boolean {
+    return this.activeStair !== null;
+  }
+
   reset(): void {
     this.path.length = 0;
     this.pathGoal = null;

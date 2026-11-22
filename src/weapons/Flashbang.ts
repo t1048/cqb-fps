@@ -29,6 +29,8 @@ interface Grenade {
   fuse: number;
   resting: boolean;
   mesh: THREE.Mesh;
+  /** 投擲者 id（'player' または AI の id） */
+  thrower: string;
 }
 
 interface Burst {
@@ -198,7 +200,33 @@ export class Flashbang {
       fuse: c.fuseTime,
       resting: false,
       mesh,
+      thrower: 'player',
     });
+  }
+
+  /**
+   * AI（容疑者モードの SWAT 等）による投擲。プレイヤー投擲と同じバウンド物理・起爆・白飛び判定を使う。
+   * 所持数は消費しない（投擲者側で管理）。
+   */
+  throwFrom(origin: Vec3, velocity: Vec3, thrower: string, fuseSec = this.cfg.fuseTime): void {
+    if (this.disposed) return;
+    const pos = new THREE.Vector3(origin.x, origin.y, origin.z);
+    const mesh = new THREE.Mesh(this.geo, this.mat);
+    mesh.position.copy(pos);
+    this.root.add(mesh);
+    this.grenades.push({
+      pos,
+      vel: new THREE.Vector3(velocity.x, velocity.y, velocity.z),
+      fuse: fuseSec,
+      resting: false,
+      mesh,
+      thrower,
+    });
+  }
+
+  /** 投擲物の重力加速度（AI の弾道計算用） */
+  get gravity(): number {
+    return this.cfg.gravity;
   }
 
   // ---------- 物理 ----------
@@ -324,7 +352,7 @@ export class Flashbang {
     const c = this.cfg;
     const pos: Vec3 = { x: g.pos.x, y: g.pos.y, z: g.pos.z };
     const radius = this.def.range;
-    this.bus.emit('flashDetonated', { pos, radius, blindSec: c.blindMaxSec });
+    this.bus.emit('flashDetonated', { pos, radius, blindSec: c.blindMaxSec, thrower: g.thrower });
     this.bus.emit('noise', { pos, radius: this.def.noiseRadius, kind: 'flash' });
     this.applyToPlayer(pos, radius);
 
