@@ -28,7 +28,7 @@
   "doorOpenTimeoutSec": 2.2,
   "hostileStates": ["ENGAGE", "HOSTAGE_SHIELD"],
   "warnStates": ["BARRICADED", "ALERT", "CONFRONTATION", "HESITATE"],
-  "hint": "右クリック: 部隊指揮メニュー / Z: クイック指示 / X: 集合 / T: 隊員切替",
+  "hint": "右クリック: 部隊指揮メニュー / Z: クイック指示 / X: 集合 / T: チーム切替（全員/ALPHA/BRAVO）",
   "orderLabels": {
     "follow": "追従",
     "hold": "現在位置待機",

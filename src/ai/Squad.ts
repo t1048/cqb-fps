@@ -47,6 +47,18 @@ export {
 };
 
 const MAX_DT = 0.05;
+/** 追従隊列の列間隔（m） */
+const FOLLOW_ROW_GAP = 0.9;
+
+/** 隊員番号 → チーム（前半 ALPHA / 後半 BRAVO）と表示用コールサイン */
+export function assignElement(index: number, total: number): { elementKey: 'alpha' | 'bravo'; callsign: string } {
+  const alphaSize = Math.ceil(total / 2);
+  const isAlpha = index < alphaSize;
+  const n = isAlpha ? index + 1 : index - alphaSize + 1;
+  const team = isAlpha ? 'ALPHA' : 'BRAVO';
+  const teamSize = isAlpha ? alphaSize : total - alphaSize;
+  return { elementKey: isAlpha ? 'alpha' : 'bravo', callsign: teamSize > 1 ? `${team}-${n}` : team };
+}
 /** 視認セル（クリアリング範囲）を全件判定し直す周期（秒） */
 const COVERAGE_PERIOD = 0.1;
 /** 階段候補の到達判定（経路探索）をやり直す間隔（s） */
@@ -89,7 +101,8 @@ interface EntryPortal {
 
 interface AllyUnit extends HitTarget {
   name: string;
-  callsign: 'ALPHA' | 'BRAVO';
+  /** 無線・HUD 表示用（例: ALPHA-1） */
+  callsign: string;
   elementKey: 'alpha' | 'bravo';
   index: number;
   roleIndex: number;
@@ -250,8 +263,8 @@ export class SquadSystem {
       });
       body.setReadyPose('low');
       const label = new AIDebugLabel();
-      const callsign = index === 0 ? 'ALPHA' : 'BRAVO';
-      const elementKey = index === 0 ? 'alpha' : 'bravo';
+      // 隊員を前半 ALPHA / 後半 BRAVO の 2 チームに均等分割（4 名なら 2+2、3 名なら 2+1）
+      const { elementKey, callsign } = assignElement(index, defs.length);
       const ally: AllyUnit = {
         id: def.id,
         name: def.name,
@@ -402,7 +415,7 @@ export class SquadSystem {
         x: a.moveTarget.x,
         z: a.moveTarget.z,
         y: a.moveTarget.y,
-        color: a.index === 0 ? '#56c8d8' : '#6be08b',
+        color: a.elementKey === 'alpha' ? '#56c8d8' : '#6be08b',
       });
     }
     return out;
@@ -484,10 +497,14 @@ export class SquadSystem {
     if (!this.input.isPointerLocked || this.input.suppressSquadShortcuts || !this.player.alive) return;
 
     if (this.input.wasPressed('cycleElement')) {
-      const order: SquadElement[] = ['gold', 'alpha', 'bravo'];
+      // 隊員がいないチームは飛ばす（隊員 1 名なら GOLD ⇔ ALPHA のみ）
+      const order: SquadElement[] = ['gold', 'alpha', 'bravo'].filter(
+        (el) => el === 'gold' || this.allies.some((a) => a.elementKey === el),
+      ) as SquadElement[];
       const next = order[(order.indexOf(this.selectedElement) + 1) % order.length]!;
       this.selectedElement = next;
-      this.ack = `指揮対象: ${this.cfg.elementLabels[next]}`;
+      const members = this.allies.filter((a) => next === 'gold' || a.elementKey === next).map((a) => a.name);
+      this.ack = `指揮対象: ${this.cfg.elementLabels[next]}（${members.join('・')}）`;
       this.ackLeft = 1.2;
       this.menu.syncElementBadge(next);
     }
@@ -732,7 +749,7 @@ export class SquadSystem {
         ally.groupSize = targets.length;
         const pos = slots[idx] ?? { x: g.x, z: g.z };
         ally.moveTarget = { x: pos.x, y: g.y, z: pos.z, yawRad: g.yawRad };
-        ally.watchYaw = g.yawRad + (targets.length > 1 ? (idx === 0 ? -0.25 : 0.25) : 0);
+        ally.watchYaw = g.yawRad + (targets.length > 1 ? (idx % 2 === 0 ? -0.25 : 0.25) : 0);
         ally.phase = 'move';
         ally.progress = '指定位置へ移動中';
       });
@@ -855,7 +872,7 @@ export class SquadSystem {
           ally.progress = '隊列待機';
           if (!ally.engaging) {
             const lookDist = 4;
-            const sideAngle = this.player.yawRad + (ally.index === 0 ? 0.35 : -0.35);
+            const sideAngle = this.player.yawRad + (ally.index % 2 === 0 ? 0.35 : -0.35);
             body.aimAt(
               body.px - Math.sin(sideAngle) * lookDist,
               body.footY + 1.45,
@@ -1732,12 +1749,15 @@ export class SquadSystem {
     const fz = -Math.cos(yaw);
     const rx = Math.cos(yaw);
     const rz = -Math.sin(yaw);
-    const side = ally.index === 0 ? -1 : 1;
+    // 2 列縦隊: 偶数番は左・奇数番は右、2 名ごとに 1 列後ろへ（3 名以上でも追従位置が重ならない）
+    const side = ally.index % 2 === 0 ? -1 : 1;
+    const row = Math.floor(ally.index / 2);
+    const back = this.cfg.followDistance + row * FOLLOW_ROW_GAP;
 
     const candidates: XZ[] = [
       {
-        x: p.x - fx * this.cfg.followDistance + rx * this.cfg.followLateral * side,
-        z: p.z - fz * this.cfg.followDistance + rz * this.cfg.followLateral * side,
+        x: p.x - fx * back + rx * this.cfg.followLateral * side,
+        z: p.z - fz * back + rz * this.cfg.followLateral * side,
       },
       {
         x: p.x - fx * (this.cfg.followDistance + ally.index * 0.85),
@@ -1764,16 +1784,23 @@ export class SquadSystem {
     const rz = -Math.sin(yawRad);
     const fx = -Math.sin(yawRad);
     const fz = -Math.cos(yawRad);
-    const a: XZ = { x: x - rx * 0.48, z: z - rz * 0.48 };
-    const b: XZ = { x: x + rx * 0.48, z: z + rz * 0.48 };
-    if (this.isStandable(a.x, a.z, y) && this.isStandable(b.x, b.z, y)) {
-      return [a, b];
+    // 指定点を先頭に横 2 名 × 後方へ列を重ねる。立てない枠は後方・中央へずらし、最後は重ならない後方列に置く
+    const out: XZ[] = [];
+    const taken = (c: XZ): boolean => out.some((o) => Math.hypot(o.x - c.x, o.z - c.z) < 0.6);
+    for (let i = 0; i < count; i++) {
+      const row = Math.floor(i / 2);
+      const side = i % 2 === 0 ? -1 : 1;
+      const back = row * 0.85;
+      const cands: XZ[] = [
+        { x: x - fx * back + rx * 0.48 * side, z: z - fz * back + rz * 0.48 * side },
+        { x: x - fx * (back + 0.4) + rx * 0.3 * side, z: z - fz * (back + 0.4) + rz * 0.3 * side },
+        { x: x - fx * (back + 0.78), z: z - fz * (back + 0.78) },
+        { x: x - fx * back, z: z - fz * back },
+      ];
+      const pick = cands.find((c) => !taken(c) && this.isStandable(c.x, c.z, y));
+      out.push(pick ?? { x: x - fx * (0.78 * (i + 1)), z: z - fz * (0.78 * (i + 1)) });
     }
-    const back: XZ = { x: x - fx * 0.78, z: z - fz * 0.78 };
-    if (this.isStandable(back.x, back.z, y)) {
-      return [{ x, z }, back];
-    }
-    return [{ x, z }, { x, z }];
+    return out;
   }
 
   private computeStackSlots(portal: EntryPortal, count: number): XZ[] {
@@ -1794,17 +1821,27 @@ export class SquadSystem {
     const thresh: XZ = { x: portal.centerX + intoX * 0.65, z: portal.centerZ + intoZ * 0.65 };
     const passable = this.passableUnlockedDoors();
 
-    const pickCorner = (side: -1 | 1): { pos: XZ; look: Vec3 } | null => {
-      const pairs: [number, number][] = [
-        [this.cfg.dominationDepth, this.cfg.dominationLateral],
-        [1.7, 1.55],
-        [1.4, 1.15],
-        [1.1, 0.85],
-        [0.85, 0.45],
-      ];
+    const chosen: XZ[] = [];
+    const CORNER_PAIRS: [number, number][] = [
+      [this.cfg.dominationDepth, this.cfg.dominationLateral],
+      [1.7, 1.55],
+      [1.4, 1.15],
+      [1.1, 0.85],
+      [0.85, 0.45],
+    ];
+    // 3・4 番手: 1・2 番手のコーナーより扉寄り・内側の壁沿い（入口に固まらず、射線も被らない位置）
+    const INNER_PAIRS: [number, number][] = [
+      [this.cfg.dominationDepth * 0.55, this.cfg.dominationLateral * 0.45],
+      [1.6, 0.6],
+      [1.25, 0.95],
+      [2.1, 0.3],
+      [1.0, 0.5],
+    ];
+    const pickCorner = (side: -1 | 1, pairs: readonly [number, number][] = CORNER_PAIRS): { pos: XZ; look: Vec3 } | null => {
       for (const [d, l] of pairs) {
         const px = portal.centerX + intoX * d + latX * (side * l);
         const pz = portal.centerZ + intoZ * d + latZ * (side * l);
+        if (chosen.some((c) => Math.hypot(c.x - px, c.z - pz) < 0.75)) continue;
         if (
           Math.abs(px - room.x) > room.width / 2 - 0.36 ||
           Math.abs(pz - room.z) > room.depth / 2 - 0.36
@@ -1816,6 +1853,7 @@ export class SquadSystem {
           pathSegmentClear(this.colliders, thresh, { x: px, z: pz }, this.cfg.bodyRadius, portal.sillY, passable) ||
           squadRoute(thresh, { x: px, z: pz }, portal.sillY, this.colliders, this.bounds, this.cfg.bodyRadius, passable).length > 0
         ) {
+          chosen.push({ x: px, z: pz });
           return {
             pos: { x: px, z: pz },
             look: {
@@ -1847,7 +1885,23 @@ export class SquadSystem {
     const deepThresh: XZ = { x: thresh.x + intoX * 0.7, z: thresh.z + intoZ * 0.7 };
     const p2Fallback = pickFallbackPos([deepThresh, roomCenter, safeThresh], safeThresh);
     const p2 = right ?? left ?? { pos: p2Fallback, look: { x: room.x, y: portal.sillY + 1.38, z: room.z } };
-    return [p1, p2];
+    const out = [p1, p2];
+    // 3 名以上: 残りは左右交互に内側の壁沿いへ。取れなければ扉正面の奥へ間隔を空けて並べる
+    for (let i = 2; i < count; i++) {
+      const side: -1 | 1 = i % 2 === 0 ? -1 : 1;
+      const inner = pickCorner(side, INNER_PAIRS) ?? pickCorner(side === -1 ? 1 : -1, INNER_PAIRS);
+      if (inner) {
+        out.push(inner);
+        continue;
+      }
+      const depth = 1.4 + (i - 1) * 0.75;
+      const fb = pickFallbackPos(
+        [{ x: portal.centerX + intoX * depth, z: portal.centerZ + intoZ * depth }, roomCenter],
+        safeThresh,
+      );
+      out.push({ pos: fb, look: { x: room.x, y: portal.sillY + 1.38, z: room.z } });
+    }
+    return out;
   }
 
   private findRoomAcrossDoor(door: Door, approach: number): RoomDef | null {
