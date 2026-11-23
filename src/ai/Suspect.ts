@@ -97,7 +97,7 @@ export class Suspect implements HitTarget {
       footY: def.y ?? 0,
       textures,
     });
-    this.combat = profile.combat ?? null;
+    this.combat = profile.combat ? { ...profile.combat } : null; // 個体ごとの写し（籠城準備の武器改造で書き換える）
     this.mobility = profile.mobility ?? null;
     this.nav = ctx ? new SuspectNavigator(this.body, ctx) : null;
     if (this.mobility) {
@@ -242,6 +242,13 @@ export class Suspect implements HitTarget {
     if (!this.managed) return;
     this.morale.shift(delta);
     this.prevMorale = this.morale.value;
+  }
+
+  /** 容疑者モードの籠城準備: 武器を改造（与ダメージ倍率・拡散倍率）。EngageBehavior は同じ参数オブジェクトを参照する */
+  upgradeWeapon(damageMul: number, spreadMul: number): void {
+    if (!this.combat) return;
+    this.combat.shotDamage = Math.round(this.combat.shotDamage * damageMul);
+    this.combat.baseSpreadDeg *= spreadMul;
   }
 
   /** 突入前交渉で説得に応じた: その場で投降（拘束待ち） */

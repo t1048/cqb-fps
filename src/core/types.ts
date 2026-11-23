@@ -78,6 +78,8 @@ export interface WindowDef {
   sill: number;
   /** 取り付け高さの基準。省略時 0 */
   y?: number;
+  /** 室内の窓口（部屋どうしの仕切り壁の素通し開口。ガラスなし・カウンター付き） */
+  interior?: boolean;
 }
 
 export type ItemKind = 'rifle' | 'evidence' | 'radio' | 'flashbang' | 'medkit';
@@ -497,6 +499,16 @@ export interface ModularWindowConfigDef {
   minMargin: number;
   /** >= 0.40m */
   keepOutDepth: number;
+  /** 室内窓口（同階の屋内室どうしの仕切り壁に開ける腰壁付きの素通し開口）。隣接室ペアごとの確率。省略時 0 */
+  interiorChance?: number;
+  /** 室内窓口の幅 */
+  interiorWidth?: NumRange;
+  /** 室内窓口の腰壁（カウンター）高さ */
+  interiorSill?: number;
+  /** 室内窓口の開口高さ */
+  interiorHeight?: number;
+  /** 1 階層あたりの室内窓口の上限 */
+  interiorMaxPerLevel?: number;
 }
 
 export interface ModularEntitiesDef {

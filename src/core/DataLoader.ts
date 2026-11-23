@@ -1,4 +1,5 @@
 import type {
+  ModularWindowConfigDef,
   CivilianParams,
   AIProfile,
   AIProfilesData,
@@ -321,6 +322,10 @@ function parseWindow(r: Reader, v: unknown, i: number): WindowDef {
   };
   const y = r.optNum(e, 'y', p);
   if (y !== undefined) win.y = y;
+  if (e.interior !== undefined) {
+    if (typeof e.interior !== 'boolean') r.fail(`${p}.interior`, 'boolean が必要です');
+    if (e.interior) win.interior = true;
+  }
   return win;
 }
 
@@ -794,12 +799,23 @@ function validateModularTemplate(r: Reader, o: Record<string, unknown>): Modular
     sill: r.num(wn, 'sill', 'window', 0.2, 5),
     minMargin: r.num(wn, 'minMargin', 'window', 0.25, 5),
     keepOutDepth: r.num(wn, 'keepOutDepth', 'window', 0.4, 5),
-  };
+  } as ModularWindowConfigDef;
+  const interiorChance = r.optNum(wn, 'interiorChance', 'window', 0, 1);
+  if (interiorChance !== undefined && interiorChance > 0) {
+    win.interiorChance = interiorChance;
+    win.interiorWidth = wn.interiorWidth === undefined ? { min: 1.0, max: 1.6 } : numRange(r, wn, 'interiorWidth', 'window', 0.6, 3.6);
+    win.interiorSill = r.optNum(wn, 'interiorSill', 'window', 0.6, 1.4) ?? 1.0;
+    win.interiorHeight = r.optNum(wn, 'interiorHeight', 'window', 0.4, 2) ?? 0.95;
+    win.interiorMaxPerLevel = r.optNum(wn, 'interiorMaxPerLevel', 'window', 0, 20) ?? 3;
+  }
   storyProfiles.forEach((sp, i) => {
     if (sp.weight <= 0) return;
     const limit = sp.storyRise - slabThickness - 0.1;
     if (win.sill + win.height > limit + DIM_TOL) {
       r.fail('window', `sill + height = ${win.sill + win.height} が storyProfiles[${i}] の上限 ${limit} を超えます`);
+    }
+    if (win.interiorChance && win.interiorSill! + win.interiorHeight! > limit + DIM_TOL) {
+      r.fail('window', `interiorSill + interiorHeight = ${win.interiorSill! + win.interiorHeight!} が storyProfiles[${i}] の上限 ${limit} を超えます`);
     }
   });
 

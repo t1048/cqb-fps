@@ -31,6 +31,8 @@ export interface ShotResult {
  */
 export class WeaponSystem {
   private current: WeaponDef;
+  /** 武器定義の写し（改造で要素を差し替える） */
+  private readonly weapons: WeaponDef[];
   private readonly ammo = new Map<string, number>();
   /** 予備弾数（reserveMagazines 指定の武器のみ。未登録 = 無限） */
   private readonly reserve = new Map<string, number>();
@@ -38,6 +40,8 @@ export class WeaponSystem {
   private reloadLeft = 0;
   private recoilPitch = 0; // 蓄積した上向きキック（ラジアン）
   private recoilYaw = 0; // 蓄積した横キック（ラジアン、符号付き）
+  /** 外部要因の拡散加算（度。ペッパーボールで目が開けられない等） */
+  extraSpread = 0;
   private currentSpread = 0; // 直近の有効拡散（度、HUD/検証用）
   private readonly targets = new Set<HitTarget>();
   private readonly origin = new THREE.Vector3();
@@ -55,9 +59,10 @@ export class WeaponSystem {
     private readonly player: PlayerController,
     private readonly input: InputManager,
     private readonly colliders: readonly Collider[],
-    private readonly weapons: readonly WeaponDef[],
+    weapons: readonly WeaponDef[],
     private readonly bus: GameEventBus,
   ) {
+    this.weapons = [...weapons];
     const first = weapons.find((w) => w.category !== 'throwable');
     if (!first) throw new Error('[WeaponSystem] no fireable weapon defined in weapons.json');
     this.current = first;
@@ -70,6 +75,19 @@ export class WeaponSystem {
   /** 現在武器の予備弾数（無限なら null） */
   get reserveAmmo(): number | null {
     return this.reserve.get(this.current.id) ?? null;
+  }
+
+  /** 武器を改造する（容疑者モードの籠城準備）。定義は共有なので写しに差し替える。 */
+  upgradeWeapons(patch: (w: WeaponDef) => Partial<WeaponDef> | null): void {
+    const list = this.weapons;
+    for (let i = 0; i < list.length; i++) {
+      const w = list[i]!;
+      const p = patch(w);
+      if (!p) continue;
+      const next = { ...w, ...p };
+      list[i] = next;
+      if (this.current === w) this.current = next;
+    }
   }
 
   /** 予備弾を追加（有限弾数の主武器すべてに magazines 本分）。 */
@@ -109,7 +127,7 @@ export class WeaponSystem {
   /** 現在の状態での拡散（度）。基本精度は旧ADS同等、移動中は moveSpreadPenalty が加算される。 */
   computeSpread(): number {
     const w = this.current;
-    return w.adsSpread + (this.player.isMoving ? w.moveSpreadPenalty : 0);
+    return w.adsSpread + (this.player.isMoving ? w.moveSpreadPenalty : 0) + this.extraSpread;
   }
 
   update(rawDt: number): void {
@@ -172,6 +190,9 @@ export class WeaponSystem {
     const pos = { x: this.origin.x, y: this.origin.y, z: this.origin.z };
     this.bus.emit('shotFired', { shooter: PLAYER_ID, pos });
     this.bus.emit('noise', { pos, radius: w.noiseRadius, kind: 'gunshot' });
+    if (result.targetId === null && result.distance < w.range - 1e-3 && w.damage > 0) {
+      this.bus.emit('bulletImpact', { shooter: PLAYER_ID, pos: { x: result.point.x, y: result.point.y, z: result.point.z }, damage: w.damage });
+    }
     if (result.targetId !== null) {
       this.bus.emit('entityHit', {
         targetId: result.targetId,

@@ -152,6 +152,13 @@ export class Civilian implements HitTarget {
     this.setState(CivilianState.COMPLY);
   }
 
+  /** 人質が拘束を振りほどいた: SHIELDED → PANIC（拘束者から逃げてうずくまる）。 */
+  breakFree(fromX: number, fromZ: number): void {
+    this.shieldedBy = null;
+    if (!this.alive || this.state !== CivilianState.SHIELDED) return;
+    this.panic(fromX, fromZ);
+  }
+
   /** プレイヤー・隊員が確保・保護できるか（生存中・人質盾にされておらず・未確保）。 */
   get canSecure(): boolean {
     return this.alive && !this.shieldedBy && this.state !== CivilianState.SECURED;

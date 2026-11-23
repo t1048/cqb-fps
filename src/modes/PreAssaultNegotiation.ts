@@ -25,6 +25,8 @@ export interface SuspectNegotiationContext {
   /** 突入班を 1 名下げさせる。成功で true */
   withdrawSwat(): boolean;
   swatCount(): number;
+  /** 仲間の容疑者 NPC（士気が上がると投降しにくく、粘り強く戦う） */
+  allies(): Suspect[];
 }
 
 /**
@@ -38,6 +40,16 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
   let stallCount = 0;
   const released: string[] = [];
   const gains: string[] = [];
+  let rallyCount = 0;
+  const activeAllies = (): Suspect[] =>
+    ctx.allies().filter((s) => s.alive && s.state !== SuspectState.SURRENDER && s.state !== SuspectState.ARRESTED);
+  const teamMorale = (): number => {
+    const a = activeAllies();
+    return a.length === 0 ? 0 : a.reduce((sum, s) => sum + s.morale.value, 0) / a.length;
+  };
+  const shiftMorale = (d: number): void => {
+    for (const s of activeAllies()) s.adjustMorale(d);
+  };
 
   const spend = (dp: number): void => {
     turns--;
@@ -57,10 +69,13 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
     apply();
     gains.push(gain);
     spend(dp);
+    const hasAllies = activeAllies().length > 0;
+    if (hasAllies) shiftMorale(-10);
     return [
       { text: `あなた「人質を 1 人解放する。代わりに${gain}をよこせ」`, tone: 'me' },
       { text: theirLine, tone: 'them' },
       { text: `人質 1 名を解放 → ${gain}を入手（残りの人質 ${ctx.hostages().length} 名）`, tone: 'good' },
+      ...(hasAllies ? [{ text: '仲間「おい、切り札を手放してどうする……」 — 仲間の士気 -10', tone: 'bad' as const }] : []),
       ...breakdownLines(),
     ];
   };
@@ -68,7 +83,7 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
   const options: NegotiationOption[] = [
     {
       label: '時間稼ぎ（要求を引き延ばす）',
-      desc: '逃走用の車やヘリを要求して時間を稼ぐ。成功で準備時間 +25 秒。繰り返すほど見抜かれやすい',
+      desc: '逃走用の車やヘリを要求して時間を稼ぐ。成功で準備時間 +25 秒。仲間はその時間で窓を塞ぎ、武器を改造し、トラップを作る。繰り返すほど見抜かれやすい',
       disabledReason: () => null,
       run: () => {
         const chance = clamp(patience / 110 - stallCount * 0.15, 0.1, 0.9);
@@ -79,8 +94,12 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
         if (Math.random() < chance) {
           ctx.addPrep(25);
           spend(-12);
+          shiftMorale(4);
           lines.push({ text: '交渉人「……わかった、手配に時間がかかる。少し待ってくれ」', tone: 'them' });
-          lines.push({ text: `時間稼ぎ成功: 突入まで ${Math.round(ctx.prepSec())} 秒`, tone: 'good' });
+          lines.push({
+            text: `時間稼ぎ成功: 突入まで ${Math.round(ctx.prepSec())} 秒${activeAllies().length > 0 ? '（その間に仲間が窓の補強・武器の改造・トラップ作りを進める）' : ''}`,
+            tone: 'good',
+          });
         } else {
           spend(-30);
           lines.push({ text: '交渉人「時間稼ぎなのはわかっている。いい加減にしろ」', tone: 'them' });
@@ -91,21 +110,46 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
     },
     {
       label: '人質 1 名 ⇄ 防弾チョッキ',
-      desc: '被弾の 60% を肩代わりする防弾チョッキ（耐久 70）を受け取る',
+      desc: '被弾の 60% を肩代わりする防弾チョッキ（耐久 70）。切り札を手放すので仲間の士気 -10',
       disabledReason: () => needHostage() ?? (ctx.hasArmor() ? 'すでに防弾チョッキを受け取った' : null),
       run: () => trade('防弾チョッキ', () => ctx.giveArmor(70), +8, '交渉人「……いいだろう。玄関前に置く。人質を先に出せ」'),
     },
     {
       label: '人質 1 名 ⇄ 弾薬',
-      desc: '予備マガジン 2 本（30 発）を受け取る',
+      desc: '予備マガジン 2 本を受け取る。仲間の士気 -10',
       disabledReason: needHostage,
       run: () => trade('予備マガジン 2 本', () => ctx.giveMagazines(2), +5, '交渉人「弾を渡すのは本意じゃないが……人質の安全が優先だ」'),
     },
     {
       label: '人質 1 名 ⇄ 時間',
-      desc: '人質を解放する代わりに突入を待たせる。準備時間 +40 秒',
+      desc: '人質を解放する代わりに突入を待たせる。準備時間 +40 秒。仲間の士気 -10',
       disabledReason: needHostage,
       run: () => trade('準備時間 +40 秒', () => ctx.addPrep(40), +15, '交渉人「誠意は受け取った。こちらも待とう」'),
+    },
+    {
+      label: '強気の要求で仲間を鼓舞する',
+      desc: '「仲間の家族と話をさせろ」「俺たちは本気だ」— 通話を仲間に聞かせて士気を上げる（投降しにくく粘り強くなる）。交渉人の忍耐は下がり、繰り返すほど効果は薄れる',
+      disabledReason: () => (activeAllies().length === 0 ? '鼓舞する仲間がいない' : rallyCount >= 3 ? '仲間はもう十分に奮い立っている' : null),
+      run: () => {
+        const gain = [22, 14, 8][rallyCount] ?? 8;
+        rallyCount++;
+        const lines: NegotiationLine[] = [
+          { text: `あなた「${pick(['俺たちは本気だ。全員で最後までやる', '仲間の家族と話をさせろ。それまで一歩も引かない', '聞こえたか、お前ら！ 警察は手出しできねえ！'])}」`, tone: 'me' },
+        ];
+        if (Math.random() < clamp(0.55 + patience / 250, 0.4, 0.9)) {
+          shiftMorale(gain);
+          spend(-10);
+          gains.push('仲間の士気↑');
+          lines.push({ text: '交渉人「……落ち着いてくれ。誰の家族だ？ 連絡を取ってみる」', tone: 'them' });
+          lines.push({ text: `仲間「よし……やってやる！」 — 仲間の士気 +${gain}（平均 ${Math.round(teamMorale())}）`, tone: 'good' });
+        } else {
+          shiftMorale(Math.round(gain / 3));
+          spend(-20);
+          lines.push({ text: '交渉人「虚勢を張っても状況は変わらない」', tone: 'them' });
+          lines.push({ text: `仲間の士気 +${Math.round(gain / 3)} / 交渉人の忍耐が大きく低下`, tone: 'bad' });
+        }
+        return [...lines, ...breakdownLines()];
+      },
     },
     {
       label: '脅迫（包囲を緩めろ）',
@@ -131,7 +175,7 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
   return {
     title: '立てこもり — SWAT 交渉人との通話',
     subtitle:
-      '突入前に SWAT の交渉人と取引できる。時間を稼げば突入前の準備時間が延び、人質を差し出せば装備を得られる。ただし人質が減るほど「SWAT は人質を撃てない」盾が減り、交渉人の忍耐が尽きると即突入される。',
+      '突入前に SWAT の交渉人と取引できる。時間を稼げば仲間が窓を塞ぎ・武器を改造し・トラップを作る。強気の要求は仲間の士気を上げる。人質を差し出せば装備は得られるが、仲間は動揺し、盾も減る（盾にしても SWAT はペッパーボールで崩してくる）。交渉人の忍耐が尽きると即突入される。',
     intro: [
       { text: '交渉人「こちらは警察だ。建物は完全に包囲されている。まずは話をしよう」', tone: 'them' },
       { text: `状況: 人質 ${ctx.hostages().length} 名 / 突入班 SWAT ${ctx.swatCount()} 名 / 突入まで ${Math.round(ctx.prepSec())} 秒`, tone: 'info' },
@@ -140,6 +184,9 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       { label: '交渉人の忍耐', value: patience, max: 100, color: patience > 50 ? '#5cd67d' : patience > 25 ? '#f2c14e' : '#ff5555' },
       { label: '突入までの準備時間', value: ctx.prepSec(), max: 180, color: '#ffd24d', text: `${Math.round(ctx.prepSec())} 秒` },
       { label: '人質', value: ctx.hostages().length, max: Math.max(1, ctx.hostages().length + released.length), color: '#f2a65a', text: `${ctx.hostages().length} 名` },
+      ...(ctx.allies().length > 0
+        ? [{ label: '仲間の士気', value: teamMorale(), max: 100, color: teamMorale() >= 60 ? '#5cd67d' : teamMorale() >= 35 ? '#f2c14e' : '#ff5555', text: `${Math.round(teamMorale())}（${activeAllies().length} 名）` }]
+        : []),
     ],
     turnsLeft: () => (broken ? 0 : turns),
     isOver: () => broken,

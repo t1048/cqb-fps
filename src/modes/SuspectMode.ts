@@ -6,6 +6,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { Interaction } from '../player/Interaction';
 import type { Subtitle } from '../ui/Subtitle';
 import type { Door, DoorSystem } from '../world/Door';
+import type { Fortify } from './Fortify';
 import type { SwatSpawn, SwatTeam } from './SwatTeam';
 
 /** ゲームモード: swat = 通常（SWAT 隊長として突入）、suspect = 容疑者として籠城し SWAT と戦う */
@@ -76,7 +77,8 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
     `まもなく SWAT ${swatCount} 名が入口から突入してくる。` +
     `突入から ${Math.round(SUSPECT_MODE.holdSec / 60)} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
     '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
-    'ドアを施錠（F 長押し）し、人質を盾に連れ回せ（民間人の前で F 長押し）。民間人が射線上にいる間、SWAT は発砲できない。';
+    'ドアを施錠（F 長押し）、窓を板で塞ぎ（窓の前で F 長押し）、ドアにトラップを仕掛けろ（しゃがみ + F 長押し）。時間を稼げば仲間が補強・武器改造を進める。' +
+    '人質を盾にもできる（民間人の前で F 長押し）が、人質は暴れて振りほどこうとし、SWAT はペッパーボールで盾ごと崩してくる。';
   return {
     map: {
       ...map,
@@ -153,6 +155,8 @@ export class SuspectMission {
   private gaugeShown = -1;
   private surrenderHold = 0;
   private lockDone = false;
+  private trapping = false;
+  private fortify: Fortify | null = null;
   private elapsed = 0;
   private assaultAt: number = SUSPECT_MODE.prepSec;
   private ended = false;
@@ -191,17 +195,25 @@ export class SuspectMission {
         id: 'suspectDoor',
         priority: 250,
         resolve: () => (this.player.alive && !this.ended ? this.doors.aimed(2.6) : null),
-        label: (d) =>
-          d.locked
-            ? 'ドア: 施錠中（F 長押しで解錠）'
-            : d.angle > 1 || d.targetAngle > 1
-              ? 'ドア: F 開閉 / ホイール 段階'
-              : 'ドア: F 開閉 / F 長押しで施錠',
+        label: (d) => {
+          const trap = this.fortify?.isTrapped(d.id) ? ' [トラップ設置済]' : '';
+          if (d.locked) return `ドア: 施錠中（F 長押しで解錠 / しゃがみ+F 長押しでトラップ）${trap}`;
+          if (d.angle > 1 || d.targetAngle > 1) return `ドア: F 開閉 / ホイール 段階${trap}`;
+          return `ドア: F 開閉 / F 長押しで施錠 / しゃがみ+F 長押しでトラップ${trap}`;
+        },
         onPress: () => {
           this.lockDone = false;
+          this.trapping = false;
         },
         onHold: (d, _dt, sec) => {
-          if (this.lockDone || sec < TAP_SEC) return;
+          if (sec < TAP_SEC) return;
+          if (this.trapping || (!this.lockDone && this.fortify?.wantsTrap())) {
+            // しゃがみ + 長押し: ブービートラップ（施錠とは別操作）
+            this.trapping = true;
+            this.fortify?.holdTrap(d, sec - TAP_SEC);
+            return;
+          }
+          if (this.lockDone) return;
           const closed = d.angle <= 1 && d.targetAngle <= 1;
           if (!closed && !d.locked) return; // 開いているドアは施錠できない（タップ扱い）
           this.showGauge(d.locked ? '解錠中...' : '施錠中...', (sec - TAP_SEC) / (LOCK_HOLD_SEC - TAP_SEC));
@@ -212,10 +224,11 @@ export class SuspectMission {
           }
         },
         onRelease: (d, sec) => {
-          if (!this.lockDone && sec < TAP_SEC && !d.locked) {
+          if (!this.lockDone && !this.trapping && sec < TAP_SEC && !d.locked) {
             d.toggle(true, this.player.position.x, this.player.position.z);
           }
           this.lockDone = false;
+          this.trapping = false;
         },
         onWheel: (d, steps) => {
           const n = Math.min(Math.abs(steps), 2);
@@ -236,6 +249,20 @@ export class SuspectMission {
         }
       }),
     );
+  }
+
+  attachFortify(f: Fortify): void {
+    this.fortify = f;
+  }
+
+  /** 突入前の準備中か */
+  get preparing(): boolean {
+    return !this.team.hasStarted && !this.ended;
+  }
+
+  /** 結果画面の加減点を追加 */
+  addEntry(label: string, points: number): void {
+    this.entries.push({ time: this.elapsed, label, points });
   }
 
   /** 突入までの残り準備時間（秒） */
@@ -391,6 +418,7 @@ export class SuspectMission {
       stats: [
         ['生存時間（突入後）', fmt(survived)],
         ['SWAT 無力化', `${kills} / ${this.team.total}`],
+        ['トラップ（撃破 / 解除された）', `${this.team.trapKills} / ${this.team.trapsDisarmed}`],
         ['発砲数', String(this.shotsFired)],
         ['被弾数', String(this.hitsTaken)],
         ['残り HP', String(Math.round(this.player.hp))],
