@@ -107,7 +107,7 @@ export interface SwatSpawn {
 export interface SwatTeamDeps {
   spawns: readonly SwatSpawn[];
   count: number;
-  player: PlayerCombatReceiver & { isCrouching: boolean };
+  player: PlayerCombatReceiver & { isCrouching: boolean; readonly yawRad: number };
   colliders: readonly Collider[];
   bus: GameEventBus;
   weapons: WeaponSystem;
@@ -1068,21 +1068,28 @@ export class SwatTeam {
     return best;
   }
 
-  /** プレイヤーが人質を盾にしており、(x,z) がその人質の正面方向（±HOSTAGE_COVER_DEG）にある */
+  /**
+   * プレイヤーが人質を盾にしており、(x,z) がプレイヤー正面 ±HOSTAGE_COVER_DEG にある。
+   * 人質の体は視界を開けるため前方の横にずらしてあるので、盾の扇は体の位置ではなく向いている正面で測る。
+   */
   coveredByHostage(x: number, z: number): boolean {
-    const p = this.d.player.position;
+    let holding = false;
     for (const c of this.d.civilians()) {
-      if (!c.alive || c.shieldedBy !== 'player') continue;
-      const hx = c.body.px - p.x;
-      const hz = c.body.pz - p.z;
-      const tx = x - p.x;
-      const tz = z - p.z;
-      const hl = Math.hypot(hx, hz);
-      const tl = Math.hypot(tx, tz);
-      if (hl < 1e-3 || tl < 1e-3) return true;
-      if ((hx * tx + hz * tz) / (hl * tl) >= Math.cos(HOSTAGE_COVER_DEG * DEG2RAD)) return true;
+      if (c.alive && c.shieldedBy === 'player') {
+        holding = true;
+        break;
+      }
     }
-    return false;
+    if (!holding) return false;
+    const p = this.d.player.position;
+    const yaw = this.d.player.yawRad;
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const tx = x - p.x;
+    const tz = z - p.z;
+    const tl = Math.hypot(tx, tz);
+    if (tl < 1e-3) return true;
+    return (fx * tx + fz * tz) / tl >= Math.cos(HOSTAGE_COVER_DEG * DEG2RAD);
   }
 
   /** from→to の射線上に生存民間人の体がある */
