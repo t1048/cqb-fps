@@ -635,6 +635,9 @@ export function drawFloorPlan(
  * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
  * プレイ中は M キーで表示/非表示をトグル可能。
  */
+/** ミニマップの再描画間隔（秒）。約 15 Hz */
+const REDRAW_INTERVAL = 1 / 15;
+
 export class Minimap {
   private readonly root = document.createElement('div');
   private readonly canvas = document.createElement('canvas');
@@ -647,6 +650,7 @@ export class Minimap {
   private floorTitle: HTMLElement | null = null;
   private readonly floorLevels: number[];
   private activeFloorY: number | undefined;
+  private redrawIn = 0;
 
   constructor(
     parent: HTMLElement,
@@ -706,7 +710,10 @@ export class Minimap {
 
   update(rawDt: number): void {
     if (this.disposed || !this.active || this.userHidden) return;
-    void Math.min(rawDt, MAX_DT);
+    // 間取り全体の再描画は重い（大型マップで数百の壁・部屋）ため、毎フレームではなく一定間隔で描く
+    this.redrawIn -= Math.min(rawDt, MAX_DT);
+    if (this.redrawIn > 0) return;
+    this.redrawIn = REDRAW_INTERVAL;
     this.render();
   }
 

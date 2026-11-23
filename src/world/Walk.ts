@@ -1,5 +1,6 @@
 import type { MapData } from '../core/types';
 import type { Collider } from './WorldBuilder';
+import { collidersNear } from './ColliderIndex';
 
 /** これ以下の段差は水平衝突を無視して乗り上げる（m）。階段の rise はこの値以下。 */
 export const STEP_HEIGHT = 0.45;
@@ -65,7 +66,7 @@ export function probeGround(
   const limit = feetY + STEP_HEIGHT + 0.02;
   const recoverLimit = feetY + SINK_RECOVERY;
   const r2 = radius * radius;
-  for (const c of colliders) {
+  for (const c of collidersNear(colliders, x - radius, z - radius, x + radius, z + radius)) {
     if (c.kind !== 'floor' && c.kind !== 'stair') continue;
     const a = c.aabb;
     if (a.max.y > recoverLimit) continue;

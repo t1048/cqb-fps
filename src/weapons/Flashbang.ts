@@ -7,6 +7,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { FlashOverlay } from '../ui/FlashOverlay';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { WeaponSystem } from './WeaponSystem';
+import { someColliderAlongSegment } from '../world/ColliderIndex';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
@@ -43,10 +44,7 @@ export function hasLineOfSight(colliders: readonly Collider[], a: Vec3, b: Vec3)
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const dz = b.z - a.z;
-  for (const c of colliders) {
-    if (segmentHitsAABB(a, dx, dy, dz, c.aabb)) return false;
-  }
-  return true;
+  return !someColliderAlongSegment(colliders, a.x, a.z, b.x, b.z, (c) => segmentHitsAABB(a, dx, dy, dz, c.aabb));
 }
 
 function segmentHitsAABB(o: Vec3, dx: number, dy: number, dz: number, box: AABB): boolean {

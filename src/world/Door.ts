@@ -145,10 +145,20 @@ export class Door {
     this.totalSegCount = this.double ? this.leafSegCount * 2 : this.leafSegCount;
     this.rightPivot = this.double ? new THREE.Group() : null;
 
+    // 板は蝶番から leafWidth 以内しか動かないので、蝶番中心の正方形を空間索引用の可動範囲とする
+    const reach = this.leafWidth + 0.25;
+    const hinges = this.double ? [this.hinge, this.rightHinge] : [this.hinge];
+    const sweep = {
+      minX: Math.min(...hinges.map((h) => h.x)) - reach,
+      minZ: Math.min(...hinges.map((h) => h.y)) - reach,
+      maxX: Math.max(...hinges.map((h) => h.x)) + reach,
+      maxZ: Math.max(...hinges.map((h) => h.y)) + reach,
+    };
     for (let i = 0; i < this.totalSegCount; i++) {
       this.colliders.push({
         kind: 'door',
         aabb: { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } },
+        sweep,
       });
       this.tmp.push({ min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } });
     }
