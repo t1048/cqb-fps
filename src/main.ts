@@ -23,6 +23,8 @@ import { Hud } from './ui/Hud';
 import { Minimap } from './ui/Minimap';
 import { BriefingScreen } from './ui/BriefingScreen';
 import { NegotiationPhase } from './ui/NegotiationPhase';
+import { SquadTour } from './ui/SquadTour';
+import { isFirstRun, markSeen } from './ui/firstRun';
 import { buildSuspectNegotiation, buildSwatNegotiation } from './modes/PreAssaultNegotiation';
 import { HostageGrab } from './modes/HostageGrab';
 import { Fortify } from './modes/Fortify';
@@ -82,6 +84,8 @@ class App {
   private readonly minimap: Minimap;
   private readonly briefingScreen: BriefingScreen;
   private readonly negotiationPhase: NegotiationPhase;
+  /** 初回のみ: Z キーで仲間に指示するツアー（SWAT モード） */
+  private squadTour: SquadTour | null = null;
   private readonly hostageGrab: HostageGrab | null = null;
   private readonly fortify: Fortify | null = null;
   private readonly pepper: PepperEffect | null = null;
@@ -407,6 +411,10 @@ class App {
       onSelectMode,
     });
     this.briefingScreen.show();
+    if (isFirstRun('negotiation')) this.negotiationPhase.showFirstTimeTip(() => markSeen('negotiation'));
+    if (!suspect && map.allies.length > 0 && isFirstRun('squad')) {
+      this.squadTour = new SquadTour(document.body, () => markSeen('squad'));
+    }
     if (!suspect) this.scoreHud = new ScoreHud(this.hud.topRightSlot, this.roe);
     this.resultScreen = new ResultScreen(document.body, this.roe, onRetry, {
       stages,
@@ -457,6 +465,7 @@ class App {
     this.minimap.setVisible(true);
     this.suspectMission?.setVisible(true);
     this.fortify?.setVisible(true);
+    this.squadTour?.setVisible(true);
     try {
       void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
         // ポインタロックが拒否された場合は通常の画面クリック待機にフォールバック
@@ -481,6 +490,9 @@ class App {
     this.minimap.setVisible(false);
     this.suspectMission?.setVisible(false);
     this.fortify?.setVisible(false);
+    // 途中まで見たツアーは既読扱い（毎回出ると煩わしいため）
+    this.squadTour?.finish();
+    this.squadTour = null;
     if (document.pointerLockElement) document.exitPointerLock();
     this.resultScreen.show(failed, report);
   }
@@ -535,6 +547,10 @@ class App {
     this.minimap.update(dt);
     this.mission?.update(dt);
     this.suspectMission?.update(dt);
+    if (this.squadTour) {
+      this.squadTour.update(dt, this.input.wasPressed('quickOrder') && !this.input.isOrderMenuOpen);
+      if (this.squadTour.done) this.squadTour = null;
+    }
     this.input.endFrame();
   }
 
@@ -612,6 +628,7 @@ class App {
     delete (window as unknown as { __cqbApp?: unknown }).__cqbApp;
     this.loop.destroy();
     this.briefingScreen.dispose();
+    this.squadTour?.dispose();
     this.minimap.dispose();
     this.resultScreen.dispose();
     this.scoreHud?.dispose();

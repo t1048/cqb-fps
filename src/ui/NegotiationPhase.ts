@@ -114,6 +114,14 @@ const CSS = `
 .ngp-actions{display:flex;gap:10px;flex-wrap:wrap}
 .ngp-auto{padding:14px 24px;font:bold 18px sans-serif;color:#e6eef8;background:#2a4562;border:2px solid #5d8dbd;border-radius:8px;cursor:pointer}
 .ngp-auto:hover{background:#34587d}
+.ngp-actions.ngp-coached{position:relative}
+.ngp-auto.ngp-coach{animation:ngp-pulse 1.4s ease-in-out infinite;border-color:#8fd3ff}
+.ngp-tip{position:absolute;right:0;bottom:calc(100% + 14px);width:min(420px,86vw);background:#1d3550;border:2px solid #8fd3ff;border-radius:10px;padding:14px 16px;font:15px/1.6 sans-serif;color:#eaf4ff;box-shadow:0 10px 30px rgba(0,0,0,.6);animation:ngp-rise .3s ease-out}
+.ngp-tip::after{content:'';position:absolute;bottom:-10px;left:60px;border:9px solid transparent;border-top-color:#8fd3ff;border-bottom:0}
+.ngp-tip-title{font:bold 16px sans-serif;color:#8fd3ff;margin-bottom:4px}
+.ngp-tip b{color:#ffe28a}
+.ngp-tip-close{margin-top:8px;padding:4px 12px;font:13px sans-serif;color:#cfe3f6;background:transparent;border:1px solid #5d8dbd;border-radius:6px;cursor:pointer}
+@keyframes ngp-pulse{0%,100%{box-shadow:0 0 0 0 rgba(143,211,255,.7)}50%{box-shadow:0 0 0 10px rgba(143,211,255,0)}}
 .ngp-pop{position:fixed;inset:0;z-index:16;display:flex;align-items:center;justify-content:center;background:rgba(4,7,12,.7);animation:ngp-fade .18s ease-out}
 .ngp-pop-card{width:min(560px,92vw);max-height:90vh;overflow:auto;background:#121b26;border:1px solid #4b6a8e;border-radius:12px;padding:22px 26px;box-shadow:0 18px 50px rgba(0,0,0,.75);animation:ngp-rise .25s ease-out}
 .ngp-pop-title{font:bold 24px sans-serif;color:#f4f8fc;margin-bottom:4px}
@@ -149,7 +157,10 @@ export class NegotiationPhase {
   private readonly optionsEl = el('div', 'ngp-options');
   private readonly finishBtn = el('button', 'ngp-finish');
   private readonly autoBtn = el('button', 'ngp-auto', '⚡ オート交渉 (A)');
+  private readonly actionsEl = el('div', 'ngp-actions');
   private popup: HTMLElement | null = null;
+  private tip: HTMLElement | null = null;
+  private onTipDone: (() => void) | null = null;
   private lastLines: NegotiationLine[] = [];
   private visible = false;
   private disposed = false;
@@ -178,9 +189,8 @@ export class NegotiationPhase {
     this.autoBtn.type = 'button';
     this.autoBtn.title = '交渉をおまかせで数手進め、結果だけ見てすぐ突入する';
     this.autoBtn.addEventListener('click', this.auto);
-    const actions = el('div', 'ngp-actions');
-    actions.append(this.autoBtn, this.finishBtn);
-    footer.appendChild(actions);
+    this.actionsEl.append(this.autoBtn, this.finishBtn);
+    footer.appendChild(this.actionsEl);
 
     card.append(
       el('div', 'ngp-badge', 'NEGOTIATION — 突入前交渉'),
@@ -201,7 +211,7 @@ export class NegotiationPhase {
     this.visible = true;
     this.root.style.display = 'flex';
     window.addEventListener('keydown', this.onKey);
-    this.finishBtn.focus();
+    (this.tip ? this.autoBtn : this.finishBtn).focus();
   }
 
   hide(): void {
@@ -209,6 +219,39 @@ export class NegotiationPhase {
     this.visible = false;
     this.root.style.display = 'none';
     window.removeEventListener('keydown', this.onKey);
+  }
+
+  /**
+   * 初回向けの吹き出し: 「交渉はオートで OK」とオート交渉ボタンを指し示す。
+   * オート交渉・突入・閉じるのいずれかで消え、onDone が 1 回だけ呼ばれる。
+   */
+  showFirstTimeTip(onDone: () => void): void {
+    if (this.disposed || this.tip) return;
+    this.onTipDone = onDone;
+    const tip = el('div', 'ngp-tip');
+    const body = el('div', '');
+    body.innerHTML =
+      '交渉は <b>⚡ オート交渉 (A)</b> におまかせで大丈夫。良さそうな手を自動で選び、結果を見てそのまま突入できます。<br>各選択肢の意味は、慣れてから自分で選べば OK です。';
+    const close = el('button', 'ngp-tip-close', '閉じる');
+    close.type = 'button';
+    close.addEventListener('click', () => this.dismissTip());
+    tip.append(el('div', 'ngp-tip-title', '💡 はじめての方へ'), body, close);
+    this.actionsEl.classList.add('ngp-coached');
+    this.actionsEl.appendChild(tip);
+    this.autoBtn.classList.add('ngp-coach');
+    this.tip = tip;
+    if (this.visible) this.autoBtn.focus();
+  }
+
+  private dismissTip(): void {
+    if (!this.tip) return;
+    this.tip.remove();
+    this.tip = null;
+    this.autoBtn.classList.remove('ngp-coach');
+    this.actionsEl.classList.remove('ngp-coached');
+    const done = this.onTipDone;
+    this.onTipDone = null;
+    done?.();
   }
 
   private pushLine(l: NegotiationLine): void {
@@ -313,6 +356,7 @@ export class NegotiationPhase {
    */
   private auto = (): void => {
     if (this.disposed || !this.visible || this.popup) return;
+    this.dismissTip();
     const good: string[] = [];
     const bad: string[] = [];
     const rounds = Math.min(AUTO_ROUNDS, this.scenario.turnsLeft());
@@ -399,6 +443,7 @@ export class NegotiationPhase {
     if (this.disposed || !this.visible) return;
     this.popup?.remove();
     this.popup = null;
+    this.dismissTip();
     this.hide();
     this.onFinish();
   };
