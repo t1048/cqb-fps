@@ -256,7 +256,7 @@ export class BriefingScreen {
           ['民間人に F 長押し', '人質を拘束して連れ回す（もう一度 F で解放）'],
           ['ホイール', 'ドア段階開閉'],
           ['Space / Space 長押し', '準備完了（即突入） / 投降'],
-          ['M', 'ミニマップ表示切替'],
+          ['M', 'ミニマップ ⇔ 全画面マップ切替'],
         ]
       : [
       ['WASD / Shift / C', '移動 / 静音 / しゃがみ（Ctrl は不使用）'],
@@ -267,7 +267,7 @@ export class BriefingScreen {
       ['Space', '警告コール（投降勧告）'],
       ['F / ホイール / G', '開閉・拘束 / 段階開閉 / ブリーチ'],
       ['1 / 2 / 4', '主武器 / 非致死 / フラッシュ'],
-      ['M', 'ミニマップ表示切替'],
+      ['M', 'ミニマップ ⇔ 全画面マップ切替'],
         ];
     for (const [k, desc] of controls) {
       const kEl = document.createElement('span');

@@ -108,6 +108,8 @@ export interface DrawFloorPlanOptions {
   padding?: number;
   /** 部屋名ラベルを表示するか（既定 true） */
   showRoomLabels?: boolean;
+  /** ウェイポイント名・隊員頭文字のラベルを表示するか（既定 true） */
+  showMarkerLabels?: boolean;
   /** 侵入地点(playerSpawn)マーカーを表示するか（ブリーフィング向け、既定 false） */
   showSpawn?: boolean;
   /** リアルタイムのプレイヤー位置・向き（ミニマップ向け） */
@@ -218,6 +220,7 @@ export function drawFloorPlan(
   const compact = options.compact ?? false;
   const pad = options.padding ?? (compact ? 12 : 24);
   const showRoomLabels = options.showRoomLabels ?? true;
+  const showMarkerLabels = options.showMarkerLabels ?? true;
 
   if (options.background) {
     ctx.fillStyle = options.background;
@@ -501,6 +504,10 @@ export function drawFloorPlan(
       ctx.beginPath();
       ctx.arc(wx, wy, compact ? 4.5 : 6, 0, Math.PI * 2);
       ctx.stroke();
+      if (!showMarkerLabels) {
+        ctx.restore();
+        continue;
+      }
       ctx.fillStyle = wp.color;
       ctx.font = compact ? 'bold 8px sans-serif' : 'bold 10px sans-serif';
       ctx.textAlign = 'center';
@@ -534,9 +541,10 @@ export function drawFloorPlan(
       ctx.fill();
       ctx.stroke();
       ctx.restore();
+      if (!showMarkerLabels) continue;
 
       ctx.save();
-      ctx.font = 'bold 8px sans-serif';
+      ctx.font = compact ? 'bold 8px sans-serif' : 'bold 11px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillStyle = ally.down ? '#8a94a0' : '#f8dc88';
@@ -633,7 +641,7 @@ export function drawFloorPlan(
 /**
  * 画面左上のリアルタイム戦術ミニマップ。
  * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
- * プレイ中は M キーで表示/非表示をトグル可能。
+ * プレイ中は M キーで「左上ミニマップ（名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
  */
 /** ミニマップの再描画間隔（秒）。約 15 Hz */
 const REDRAW_INTERVAL = 1 / 15;
@@ -645,7 +653,10 @@ export class Minimap {
   private readonly doorStates = new Map<string, FloorPlanDoorState>();
   private readonly dpr = Math.min(window.devicePixelRatio || 1, 2);
   private active = false;
-  private userHidden = false;
+  private expanded = false;
+  private viewW = MINIMAP_SIZE;
+  private viewH = MINIMAP_SIZE;
+  private readonly keyHint: HTMLElement;
   private disposed = false;
   private floorTitle: HTMLElement | null = null;
   private readonly floorLevels: number[];
@@ -662,8 +673,6 @@ export class Minimap {
     private readonly getWaypoints?: () => readonly FloorPlanWaypoint[],
   ) {
     this.floorLevels = collectFloorLevels(map);
-    this.root.style.cssText =
-      'position:fixed;top:12px;left:12px;z-index:5;pointer-events:none;background:rgba(10,14,20,0.78);border:1px solid rgba(120,155,195,0.45);border-radius:6px;padding:6px;box-shadow:0 2px 10px rgba(0,0,0,0.45);display:none';
 
     const header = document.createElement('div');
     header.style.cssText =
@@ -674,42 +683,76 @@ export class Minimap {
     const key = document.createElement('span');
     key.textContent = '[M]';
     key.style.color = 'rgba(140,175,210,0.75)';
+    this.keyHint = key;
     header.append(title, key);
 
-    this.canvas.width = Math.round(MINIMAP_SIZE * this.dpr);
-    this.canvas.height = Math.round(MINIMAP_SIZE * this.dpr);
-    this.canvas.style.cssText = `display:block;width:${MINIMAP_SIZE}px;height:${MINIMAP_SIZE}px;border-radius:3px`;
     this.ctx = this.canvas.getContext('2d');
 
     this.root.append(header, this.canvas);
+    this.applyLayout();
     parent.appendChild(this.root);
 
     window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('resize', this.onResize);
   }
+
+  /** ミニマップ / 全画面の見た目とキャンバス解像度を現在のモードに合わせる */
+  private applyLayout(): void {
+    const display = this.active ? 'block' : 'none';
+    if (this.expanded) {
+      const header = 22;
+      const margin = 24;
+      this.viewW = Math.max(200, Math.floor(window.innerWidth - margin * 2 - 16));
+      this.viewH = Math.max(200, Math.floor(window.innerHeight - margin * 2 - 16 - header));
+      this.root.style.cssText =
+        `position:fixed;inset:${margin}px;z-index:6;pointer-events:none;background:rgba(6,10,16,0.35);border:1px solid rgba(120,155,195,0.4);border-radius:8px;padding:8px;box-sizing:border-box;display:${display}`;
+      this.canvas.style.opacity = '0.72';
+      this.keyHint.textContent = '[M] ミニマップに戻す';
+    } else {
+      this.viewW = MINIMAP_SIZE;
+      this.viewH = MINIMAP_SIZE;
+      this.root.style.cssText =
+        `position:fixed;top:12px;left:12px;z-index:5;pointer-events:none;background:rgba(10,14,20,0.78);border:1px solid rgba(120,155,195,0.45);border-radius:6px;padding:6px;box-shadow:0 2px 10px rgba(0,0,0,0.45);display:${display}`;
+      this.canvas.style.opacity = '1';
+      this.keyHint.textContent = '[M] 拡大';
+    }
+    this.canvas.width = Math.round(this.viewW * this.dpr);
+    this.canvas.height = Math.round(this.viewH * this.dpr);
+    this.canvas.style.display = 'block';
+    this.canvas.style.width = `${this.viewW}px`;
+    this.canvas.style.height = `${this.viewH}px`;
+    this.canvas.style.borderRadius = '3px';
+  }
+
+  private onResize = (): void => {
+    if (this.disposed || !this.expanded) return;
+    this.applyLayout();
+    if (this.active) this.render();
+  };
 
   /** App のフェーズ制御用（briefing / ended では false、playing で true）。 */
   setVisible(visible: boolean): void {
     if (this.disposed) return;
     this.active = visible;
     this.syncDisplay();
-    if (this.active && !this.userHidden) this.render();
+    if (this.active) this.render();
   }
 
   private syncDisplay(): void {
-    this.root.style.display = this.active && !this.userHidden ? 'block' : 'none';
+    this.root.style.display = this.active ? 'block' : 'none';
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
     if (this.disposed || !this.active || e.repeat) return;
     if (e.code === 'KeyM') {
-      this.userHidden = !this.userHidden;
-      this.syncDisplay();
-      if (!this.userHidden) this.render();
+      this.expanded = !this.expanded;
+      this.applyLayout();
+      this.render();
     }
   };
 
   update(rawDt: number): void {
-    if (this.disposed || !this.active || this.userHidden) return;
+    if (this.disposed || !this.active) return;
     // 間取り全体の再描画は重い（大型マップで数百の壁・部屋）ため、毎フレームではなく一定間隔で描く
     this.redrawIn -= Math.min(rawDt, MAX_DT);
     if (this.redrawIn > 0) return;
@@ -735,12 +778,13 @@ export class Minimap {
     ctx.save();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     drawFloorPlan(ctx, this.map, {
-      width: MINIMAP_SIZE,
-      height: MINIMAP_SIZE,
-      padding: 10,
-      showRoomLabels: true,
+      width: this.viewW,
+      height: this.viewH,
+      padding: this.expanded ? 24 : 10,
+      showRoomLabels: this.expanded,
+      showMarkerLabels: this.expanded,
       showSpawn: false,
-      compact: true,
+      compact: !this.expanded,
       coverage: this.coverage,
       doors: this.doorStates,
       floorY: floor.floorY,
@@ -762,6 +806,7 @@ export class Minimap {
     if (this.disposed) return;
     this.disposed = true;
     window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('resize', this.onResize);
     this.doorStates.clear();
     this.root.remove();
   }
