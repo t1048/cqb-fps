@@ -526,6 +526,39 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
   };
 
   /**
+   * 非 1F 階のコア群（その階の部屋が木で辿り着くコア番号）。2 コア時に同階の島を検出するのに使う。
+   * parentOf は placeGlued より後に宣言されるが、呼び出しは配置ループ内（宣言後）なので参照できる。
+   */
+  const groupOf = (id: string): number | undefined => {
+    let cur: string | undefined = id;
+    for (let guard = 0; cur !== undefined && guard < 64; guard++) {
+      const m = modById.get(cur);
+      if (!m) return undefined;
+      if (m.coreIndex !== undefined) return m.coreIndex;
+      cur = parentOf.get(cur)?.id;
+    }
+    return undefined;
+  };
+  const groupOfParent = (P: Rect, lv: StoryLevel): number | undefined => {
+    for (const [id, r] of placed) {
+      if (r === P && (modById.get(id) as PlannedModule).level === lv) return groupOf(id);
+    }
+    return undefined;
+  };
+  const touchesOtherGroup = (c: Rect, lv: StoryLevel, group: number | undefined, need: number): boolean => {
+    if (group === undefined || plan.coreCount < 2) return false;
+    for (const [id, r] of placed) {
+      const m = modById.get(id) as PlannedModule;
+      if (m.level !== lv) continue;
+      const g2 = groupOf(id);
+      if (g2 === undefined || g2 === group) continue;
+      const e = sharedEdge(c, r);
+      if (e && e.hi - e.lo >= need - EPS) return true;
+    }
+    return false;
+  };
+
+  /**
    * 親の 4 辺に接着する候補を作って評価する。寸法の選択肢（抽選寸法・90° 回し・最小寸法・最小の 90° 回し）ごとに
    * 評価数を MAX_PLACEMENT_CANDIDATES_PER_MODULE / 選択肢数 で割り当て、整列位置（親の端・中央・既存室の辺）を先に評価する。
    */
@@ -574,7 +607,11 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
         if (m.level === 0) {
           const b = bbox([...levelRects(0), c]) as Rect;
           score = (rectArea(b) * (1 + 0.3 * rng.next())) / (1 + 0.1 * contact);
-        } else score = rng.next() / (1 + 0.1 * contact);
+        } else {
+          score = rng.next() / (1 + 0.1 * contact);
+          // 2 コア時: 別のコア由来の部屋群に扉が置けるほど接する位置を強く優先（同階が島に分かれないように）
+          if (touchesOtherGroup(c, m.level, groupOfParent(parent.rect, m.level), need)) score *= 0.05;
+        }
         if (score < bestScore) {
           bestScore = score;
           best = c;
@@ -942,6 +979,164 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
     loopsAdded.push({ level: lv, count: added });
   }
 
+  // ---- 5b) 非 1F 階の同階連結: 2 コア時は各コアを根にした部分木が同じ階で島に分かれ得る（2F に上がった先が
+  // 階段ごとに行き止まりになる）。実在の建物では同じ階の部屋は廊下で行き来できるので、島どうしの接触ペアに
+  // 開口を足して 1 つの連結成分にする（同階が連結すれば 2 本の階段を介した上下階の周回路にもなる）。
+  // 繋がらなければ作り直す
+  const componentCount = (rs: readonly PlacedRoom[]): number => new Set(levelComponents(rs, openings).values()).size;
+  /** 接触している島どうしに開口を足す。段階: 0 = 規則あり・private 除外 / 1 = private 含む / 2 = 規則未定義でも禁止でなければ通常扉 */
+  const connectByContacts = (lvRooms: readonly PlacedRoom[]): void => {
+    for (const stage of [0, 1, 2]) {
+      if (componentCount(lvRooms) <= 1) return;
+      const cands: { a: PlacedRoom; b: PlacedRoom; style: ModularEdgeStyle; weight: number }[] = [];
+      for (let i = 0; i < lvRooms.length; i++) {
+        for (let j = i + 1; j < lvRooms.length; j++) {
+          const a = lvRooms[i] as PlacedRoom;
+          const b = lvRooms[j] as PlacedRoom;
+          if (stage === 0 && (a.private || b.private)) continue;
+          const conn = bridgeStyle(a, b, stage === 2);
+          if (!conn) continue;
+          if (maxUsable(shapeOf(a), shapeOf(b)) < needLen(conn.style) - EPS) continue;
+          cands.push({ a, b, ...conn });
+        }
+      }
+      while (cands.length > 0) {
+        const cur = levelComponents(lvRooms, openings);
+        if (new Set(cur.values()).size <= 1) break;
+        const bridging = cands.filter((c) => cur.get(c.a.id) !== cur.get(c.b.id));
+        if (bridging.length === 0) break;
+        const c = rng.weighted(bridging, (x) => x.weight) as (typeof cands)[number];
+        cands.splice(cands.indexOf(c), 1);
+        if (c.style === 'exterior_door' && exteriorDoors >= tpl.circulation.maxExteriorDoors) continue;
+        // 同階の連結を担う通路なので施錠しない（行き止まりの島を作らない）
+        tryOpen(c.a, c.b, c.style, 'loop', true);
+      }
+    }
+  };
+  /** 2 室を結ぶ開口様式（規則優先。lenient のときは規則未定義でも禁止でなければ通常扉 / 屋外側は屋外扉） */
+  function bridgeStyle(a: PlacedRoom, b: PlacedRoom, lenient: boolean): { style: ModularEdgeStyle; weight: number } | null {
+    const ca = a.category as ModuleCategory;
+    const cb = b.category as ModuleCategory;
+    const r = rules.rule(ca, cb);
+    let style: ModularEdgeStyle;
+    let weight: number;
+    if (r) {
+      style = r.style;
+      weight = r.weight;
+    } else {
+      if (!lenient || rules.isForbidden(ca, cb)) return null;
+      style = a.outdoor || b.outdoor ? 'exterior_door' : 'door';
+      weight = 1;
+    }
+    if (style === 'exterior_door' && !a.outdoor && !b.outdoor) return null;
+    return { style, weight };
+  }
+
+  /**
+   * 接していない島の間に「渡り廊下」（テンプレートの corridor モジュール）を差し込む。2 室が x または z 方向に離れて
+   * 向かい合い、対向区間が扉幅以上あるとき、その隙間を埋める矩形が同階の他室と重ならず支持床（2F は S_1F、B1 は I_1F）に
+   * 収まれば採用し、両端に常時解錠の開口を置く。置けたら true
+   */
+  let bridgeSeq = 0;
+  const insertBridge = (lv: StoryLevel, lvRooms: PlacedRoom[]): boolean => {
+    const def = tpl.modules.find((d) => d.category === 'corridor' && !d.outdoor && d.allowedLevels.includes(lv));
+    if (!def) return false;
+    const support = lv === 1 ? S1F : I1F;
+    const comp = levelComponents(lvRooms, openings);
+    const minW = ceilTo(doorPassMin, s);
+    const maxW = Math.max(minW, floorTo(def.width.min, s));
+    const maxLen = def.depth.max;
+    const cands: { rect: Rect; a: PlacedRoom; b: PlacedRoom; len: number }[] = [];
+    for (const a of lvRooms) {
+      for (const b of lvRooms) {
+        if (a === b || comp.get(a.id) === comp.get(b.id) || a.outdoor || b.outdoor) continue;
+        const A = a.rect;
+        const B = b.rect;
+        // x 方向: a の東辺 → b の西辺（z の対向区間に幅 w の廊下）
+        const tryAxis = (gap0: number, gap1: number, lo: number, hi: number, make: (g0: number, g1: number, p0: number, p1: number) => Rect): void => {
+          const len = gap1 - gap0;
+          if (len < s - EPS || len > maxLen + EPS) return;
+          const span = hi - lo;
+          if (span < minW - EPS) return;
+          const w = Math.min(maxW, floorTo(span, s));
+          for (const p0 of new Set([roundTo(lo, s), roundTo(hi - w, s), roundTo((lo + hi - w) / 2, s)])) {
+            if (p0 < lo - EPS || p0 + w > hi + EPS) continue;
+            cands.push({ rect: make(gap0, gap1, p0, p0 + w), a, b, len });
+          }
+        };
+        if (B.x0 >= A.x1 - EPS) {
+          tryAxis(A.x1, B.x0, Math.max(A.z0, B.z0), Math.min(A.z1, B.z1), (g0, g1, p0, p1) => ({ x0: g0, z0: p0, x1: g1, z1: p1 }));
+        }
+        if (B.z0 >= A.z1 - EPS) {
+          tryAxis(A.z1, B.z0, Math.max(A.x0, B.x0), Math.min(A.x1, B.x1), (g0, g1, p0, p1) => ({ x0: p0, z0: g0, x1: p1, z1: g1 }));
+        }
+      }
+    }
+    // 短い渡り廊下から試す（同じ長さは乱順）
+    rng.shuffle(cands);
+    cands.sort((x, y) => x.len - y.len);
+    for (const c of cands) {
+      if (!rectCoveredBy(c.rect, support)) continue;
+      if (lvRooms.some((r) => r !== c.a && r !== c.b && (rectsOverlap(c.rect, r.rect) || hasNarrowGap(c.rect, r.rect, tpl.minCourtGap)))) continue;
+      if (rooms.some((r) => r.level === lv && rectsOverlap(c.rect, r.rect))) continue;
+      const id = `bridge_${levelLabel(lv)}_${bridgeSeq}`;
+      const m: PlannedModule = {
+        id,
+        def,
+        level: lv,
+        category: def.category,
+        doubleHeight: false,
+        required: false,
+        parentId: c.a.moduleId,
+        parentStyle: 'door',
+      };
+      const room = makeRoom(m, c.rect);
+      room.name = `渡り${def.name}`;
+      const sa = bridgeStyle(room, c.a, true);
+      const sb = bridgeStyle(room, c.b, true);
+      if (!sa || !sb) continue;
+      const before = openings.length;
+      rooms.push(room);
+      if (tryOpen(room, c.a, sa.style, 'loop', true) && tryOpen(room, c.b, sb.style, 'loop', true)) {
+        bridgeSeq++;
+        modById.set(id, m);
+        roomById.set(id, room);
+        lvRooms.push(room);
+        return true;
+      }
+      rooms.pop();
+      openings.length = before;
+    }
+    return false;
+  };
+
+  for (const lv of plan.levels) {
+    if (lv === 0) continue;
+    const lvRooms = rooms.filter((r) => r.level === lv);
+    connectByContacts(lvRooms);
+    for (let k = 0; k < 4 && componentCount(lvRooms) > 1; k++) {
+      if (!insertBridge(lv, lvRooms)) break;
+      connectByContacts(lvRooms);
+    }
+    if (componentCount(lvRooms) > 1) {
+      throw new RetryGeneration(`${levelLabel(lv)}: 同じ階の部屋が島に分かれて連結できません`);
+    }
+  }
+
+  // ---- 5c) 非 1F 階の閉路数（loopCountOther.min）。屋内室が 4 室以上の階だけ要求する（1F と同じ扱い）。
+  // 階段コアが 2 つあり同階が連結済み（5b）なら、2 本の階段を介した上下階の周回路がその階を通るので満たしたとみなす
+  if (tpl.circulation.loopCountOther.min > 0 && plan.coreCount < 2) {
+    for (const lv of plan.levels) {
+      if (lv === 0) continue;
+      const v = rooms.filter((r) => r.level === lv && !r.outdoor).length;
+      if (v < 4) continue;
+      const beta = levelBetti(rooms, openings, lv);
+      if (beta < tpl.circulation.loopCountOther.min) {
+        throw new RetryGeneration(`${levelLabel(lv)} の閉路数 ${beta} < loopCountOther.min ${tpl.circulation.loopCountOther.min}`);
+      }
+    }
+  }
+
   // ---- 6) 1F の閉路数 β1（施錠扉も蹴破りで通れるので物理到達辺に含める）
   const beta1F = levelBetti(rooms, openings, 0);
   const v1F = rooms.filter((r) => r.level === 0 && !r.outdoor).length;
@@ -1022,6 +1217,30 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
     droppedModules: [...dropped],
     transform: null,
   };
+}
+
+/** 同階の室（屋外テラス含む）の連結成分。室 ID → 成分代表 ID */
+function levelComponents(lvRooms: readonly PlacedRoom[], openings: readonly PlacedOpening[]): Map<string, string> {
+  const parent = new Map(lvRooms.map((r) => [r.id, r.id] as const));
+  const find = (x: string): string => {
+    let p = parent.get(x) as string;
+    while (p !== x) {
+      const g = parent.get(p) as string;
+      parent.set(x, g);
+      x = p;
+      p = parent.get(x) as string;
+    }
+    return x;
+  };
+  for (const o of openings) {
+    if (!parent.has(o.roomA) || !parent.has(o.roomB)) continue;
+    const ra = find(o.roomA);
+    const rb = find(o.roomB);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+  const out = new Map<string, string>();
+  for (const r of lvRooms) out.set(r.id, find(r.id));
+  return out;
 }
 
 /** 指定階の屋内室グラフのベッチ数 β1 = |E| - |V| + C */
