@@ -34,8 +34,8 @@ import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { SquadSystem } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
+import { applyMissionRoster } from './rules/MissionRoster';
 import {
-  SUSPECT_MODE,
   SuspectMission,
   parseGameMode,
   prepareSuspectMode,
@@ -108,11 +108,14 @@ class App {
   ) {
     this.mode = mode;
     const suspect = mode === 'suspect';
+    map = applyMissionRoster(map);
     let swatSpawns: { x: number; y: number; z: number }[] = [];
+    let swatCount = 0;
     if (suspect) {
       const setup = prepareSuspectMode(map);
       map = setup.map;
       swatSpawns = setup.swatSpawns;
+      swatCount = setup.swatCount;
     }
     this.mapId = map.id;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -133,7 +136,18 @@ class App {
     this.audioBridge = new AudioBridge(this.bus, this.audio, this.player, this.world.colliders, playerCfg.arrest.radioReportChance ?? 0.38);
     this.audioBridge.updateListener(this.camera);
     this.interaction = new Interaction(this.input, doorCfg.wheelStepThreshold);
-    this.doors = new DoorSystem(map, doorCfg, this.world.colliders, this.bus, this.player, playerCfg.radius, this.interaction, this.input, this.textures);
+    this.doors = new DoorSystem(
+      map,
+      doorCfg,
+      this.world.colliders,
+      this.bus,
+      this.player,
+      playerCfg.radius,
+      this.interaction,
+      this.input,
+      this.textures,
+      suspect ? 'suspect' : 'swat',
+    );
     this.scene.add(this.doors.root);
     this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
@@ -148,6 +162,7 @@ class App {
       { cfg: perceptionCfg, player: this.player },
       this.textures,
       { doors: this.doors, bounds: map.floor, stairs: this.world.stairs },
+      suspect,
     );
     this.roe.attach(this.entities);
     this.scene.add(this.entities.root);
@@ -220,7 +235,7 @@ class App {
       this.input.onOrderMenu = undefined;
       this.swatTeam = new SwatTeam({
         spawns: swatSpawns,
-        count: SUSPECT_MODE.swatCount,
+        count: swatCount,
         player: this.player,
         colliders: this.world.colliders,
         bus: this.bus,
@@ -233,7 +248,9 @@ class App {
         subtitle: this.subtitle,
         civilians: () => this.entities.civilians.values(),
         textures: this.textures,
+        suspects: () => this.entities.livingSuspectTargets(),
       });
+      this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
       this.scene.add(this.swatTeam.root);
       this.suspectMission = new SuspectMission(
         this.swatTeam,

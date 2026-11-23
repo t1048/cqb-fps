@@ -972,7 +972,7 @@ export class SquadSystem {
 
           if (isDoorLead && !door.isMoving && door.angle < this.cfg.doorOpenAngle) {
             if (ally.order === 'breachClear' || door.locked) {
-              door.breach(body.px, body.pz);
+              door.breach(body.px, body.pz, 'swat');
             } else {
               door.command(door.maxAngle, ally.order !== 'pieDoor', body.px, body.pz);
             }

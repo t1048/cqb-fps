@@ -52,6 +52,8 @@ export class Perception {
     private readonly colliders: readonly Collider[],
     private readonly player: PerceptionTarget,
     bus: GameEventBus,
+    /** 容疑者モードの味方 NPC。プレイヤーの姿と足音では警戒しない */
+    private readonly ignorePlayer = false,
   ) {
     this.unsubs.push(bus.on('noise', (e) => this.onNoise(e.pos, e.radius, e.kind, e.source)));
   }
@@ -70,6 +72,7 @@ export class Perception {
   private onNoise(pos: Vec3, radius: number, kind: NoiseKind, source?: NoiseSource): void {
     // 容疑者自身がドアを開閉した音による他容疑者の無限 ALERT 連鎖を防止
     if (kind === 'door' && (source === 'suspect' || this.anySuspectOpeningDoor())) return;
+    if (this.ignorePlayer && source === 'player') return;
     const h = this.cfg.hearing;
     const kindMul = h.kinds[kind] ?? 1;
     const checkWalls = !h.unoccludedKinds.includes(kind);
@@ -128,7 +131,7 @@ export class Perception {
       let spottedAt: Vec3 | null = null;
       let bestDist = Infinity;
 
-      if (this.player.alive !== false && checkPts([eye, body], playerRange)) {
+      if (!this.ignorePlayer && this.player.alive !== false && checkPts([eye, body], playerRange)) {
         bestDist = Math.hypot(eye.x - sx, eye.z - sz);
         spottedAt = { x: eye.x, y: this.player.position.y, z: eye.z };
       }

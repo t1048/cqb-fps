@@ -7,6 +7,7 @@ import {
   SuspectNavigator,
   findNearestVisibleThreat,
   resolveFloorY,
+  type AllyTarget,
   type CombatContext,
   type CombatThreat,
 } from '../ai/EngageBehavior';
@@ -21,30 +22,33 @@ import type { StairMark } from '../world/Walk';
 import type { Collider } from '../world/WorldBuilder';
 import type { Subtitle } from '../ui/Subtitle';
 
-/** 容疑者モードで敵となる SWAT 隊員の戦闘パラメータ（EngageBehavior 共用）。 */
+/**
+ * 容疑者モード専用の SWAT 戦闘パラメータ（EngageBehavior をこのモードだけで使う）。
+ * 通常モードの容疑者プロファイルは変えない。開けた場所では危険だが、遮蔽と短いピークの隙で撃ち返せる強さ。
+ */
 const SWAT_COMBAT: CombatParams = {
-  decisionSec: 0.6,
+  decisionSec: 0.95,
   alertCalmSec: 10,
   hesitateFireSec: 3,
   hesitateRetreatSpeed: 0.8,
   hesitateRetreatMax: 1.5,
   hesitateShakeDeg: 0,
-  moveSpeed: 2.5,
-  fireInterval: 0.13,
-  shotsPerPeek: 6,
+  moveSpeed: 2.15,
+  fireInterval: 0.28,
+  shotsPerPeek: 3,
   magazineSize: 30,
-  reloadSec: 2.0,
-  coverSecMin: 0.4,
-  coverSecMax: 0.9,
-  peekSecMax: 3.0,
-  engageRange: 30,
+  reloadSec: 2.2,
+  coverSecMin: 0.9,
+  coverSecMax: 1.8,
+  peekSecMax: 1.4,
+  engageRange: 18,
   coverSearchRange: 6,
   coverMargin: 0.45,
   crouchCoverMaxHeight: 1.5,
-  flinchSec: 0.15,
+  flinchSec: 0.35,
   gunshotNoiseRadius: 40,
-  shotDamage: 21,
-  baseSpreadDeg: 2.2,
+  shotDamage: 12,
+  baseSpreadDeg: 5.2,
 };
 
 const SWAT_MOBILITY: MobilityParams = {
@@ -64,19 +68,19 @@ const SWAT_MOBILITY: MobilityParams = {
 };
 
 const DEG2RAD = Math.PI / 180;
-/** ボディアーマー込みの耐久（改造拳銃で 8 発程度） */
-const HP = 150;
-const VISION_FOV_DEG = 115;
-const VISION_RANGE = 28;
-const VISION_RANGE_CROUCH = 18;
-const REACTION_SEC = 0.28;
-const HEARING_MUL = 1.4;
+/** ボディアーマー込み。改造拳銃（19 ダメージ）で約 6 発 */
+const HP = 100;
+const VISION_FOV_DEG = 86;
+const VISION_RANGE = 16;
+const VISION_RANGE_CROUCH = 11;
+const REACTION_SEC = 0.7;
+const HEARING_MUL = 1.0;
 const OCCLUDED_MUL = 0.5;
 const ENGAGE_LOST_SEC = 5;
 const SWEEP_SPEED = 0.8;
 const HUNT_SPEED = 1.05;
-const FLASH_TEAM_CD = 10;
-const FLASH_PER_TEAM = 6;
+const FLASH_TEAM_CD = 14;
+const FLASH_PER_TEAM = 3;
 const FLASH_MIN_DIST = 3.2;
 const FLASH_MAX_DIST = 9;
 const SELF_NOISE_RADIUS = 3.2;
@@ -115,6 +119,8 @@ export interface SwatTeamDeps {
   subtitle: Subtitle;
   civilians: () => Iterable<ShieldBody>;
   textures?: TextureLibrary;
+  /** 味方容疑者 NPC。未指定ならプレイヤーだけを狙う */
+  suspects?: () => readonly AllyTarget[];
 }
 
 const CALLSIGNS = ['Red-1', 'Red-2', 'Blue-1', 'Blue-2', 'Gold-1', 'Gold-2'];
@@ -145,6 +151,7 @@ class SwatHunter implements HitTarget {
   private blockedCount = 0;
   private blockedWindow = 0;
   private scanPhase = Math.random() * Math.PI * 2;
+  private entryPhase: EntryRoute['phase'] | null = null;
 
   constructor(
     readonly id: string,
@@ -298,6 +305,20 @@ class SwatHunter implements HitTarget {
       this.setState('sweep');
       return;
     }
+    const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, t);
+    if (route.phase !== 'direct') {
+      // 屋外から足音へ直進せず、入口ドアを経由してから追う
+      this.followEntry(route, dt, HUNT_SPEED);
+      if (this.stateTime > 45) {
+        this.huntTarget = null;
+        this.setState('sweep');
+      }
+      return;
+    }
+    if (this.entryPhase) {
+      this.entryPhase = null;
+      this.nav.reset();
+    }
     this.team.tryFlash(this, t);
     const res = this.nav.step(t, SWAT_COMBAT.moveSpeed * HUNT_SPEED, dt, {
       canOpenDoors: true,
@@ -313,6 +334,31 @@ class SwatHunter implements HitTarget {
       this.huntTarget = null;
       if (res === 'arrived') this.team.markRoomAt(this.body.px, this.body.pz, this.body.footY);
       this.setState('sweep');
+    }
+  }
+
+  /** 屋外にいる間は入口の接近点→ドアの内側へ進み、施錠されていればそのドアをブリーチする。 */
+  private followEntry(route: EntryRoute, dt: number, speedScale: number): void {
+    if (this.entryPhase !== route.phase) {
+      this.entryPhase = route.phase;
+      this.nav.reset();
+    }
+    const door = route.entryId ? this.team.doorById(route.entryId) : null;
+    if (door?.locked) {
+      const near =
+        Math.hypot(this.body.px - door.centerX, this.body.pz - door.centerZ) < 2.3 &&
+        Math.abs(this.body.footY - door.sillY) < 0.85;
+      if (near && this.tryBeginBreach(route.dest, door.id)) return;
+    }
+    const res = this.nav.step(route.dest, SWAT_COMBAT.moveSpeed * speedScale, dt, {
+      canOpenDoors: true,
+      canUseStairs: true,
+      faceTravel: true,
+      arriveDist: 0.55,
+    });
+    if (res === 'blocked') {
+      this.noteBlocked();
+      if (door) this.tryBeginBreach(route.dest, door.id);
     }
   }
 
@@ -366,6 +412,15 @@ class SwatHunter implements HitTarget {
       return;
     }
     const goal = this.team.roomPoint(r);
+    const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, goal);
+    if (route.phase !== 'direct') {
+      this.followEntry(route, dt, SWEEP_SPEED);
+      return;
+    }
+    if (this.entryPhase) {
+      this.entryPhase = null;
+      this.nav.reset();
+    }
     const res = this.nav.step(goal, SWAT_COMBAT.moveSpeed * SWEEP_SPEED, dt, {
       canOpenDoors: true,
       canUseStairs: true,
@@ -422,8 +477,12 @@ class SwatHunter implements HitTarget {
   }
 
   /** 経路が施錠ドアで塞がれている場合、目標方向の施錠ドアへ向かってブリーチする。 */
-  private tryBeginBreach(goal: Vec3): boolean {
-    const door = this.team.findLockedDoor(this, goal, this.skipDoors);
+  private tryBeginBreach(goal: Vec3, preferId?: string): boolean {
+    const preferred = preferId ? this.team.doorById(preferId) : null;
+    const door =
+      preferred && preferred.locked && !this.skipDoors.has(preferred.id)
+        ? preferred
+        : this.team.findLockedDoor(this, goal, this.skipDoors);
     if (!door) return false;
     const side = (this.body.px - door.centerX) * door.normalX + (this.body.pz - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
     this.breachDoor = door;
@@ -461,7 +520,11 @@ class SwatHunter implements HitTarget {
       this.breachWait += dt;
       this.body.faceToward(door.centerX, door.centerZ);
       if (this.breachWait < 0.6) return; // 構え
-      door.breach(this.body.px, this.body.pz);
+      const opened = door.breach(this.body.px, this.body.pz, 'swat');
+      if (!opened) {
+        this.breachWait = 0; // 同じドアでもう一蹴り
+        return;
+      }
       this.team.onBreach(this, door);
       this.breachDoor = null;
       this.setState(this.huntTarget ? 'hunt' : 'sweep');
@@ -477,15 +540,117 @@ class SwatHunter implements HitTarget {
   }
 }
 
+export interface EntrySample {
+  id: string;
+  centerX: number;
+  centerZ: number;
+  normalX: number;
+  normalZ: number;
+  sillY: number;
+}
+
+export interface EntryPortal {
+  id: string;
+  outside: Vec3;
+  inside: Vec3;
+  sillY: number;
+}
+
+export interface EntryRoute {
+  dest: Vec3;
+  entryId: string | null;
+  /** direct = 目標そのもの。approach = 屋外側の入口。cross = ドアを抜けた屋内側 */
+  phase: 'direct' | 'approach' | 'cross';
+}
+
+/** 屋内の部屋（outdoor 以外）にいるか。重なる場合は小さい部屋を優先する。 */
+export function isIndoorPoint(rooms: readonly RoomDef[], x: number, z: number, y: number): boolean {
+  let best: RoomDef | null = null;
+  let bestArea = Infinity;
+  for (const r of rooms) {
+    if (r.outdoor) continue;
+    if (Math.abs((r.floorY ?? 0) - y) > 0.75) continue;
+    if (Math.abs(x - r.x) > r.width / 2 || Math.abs(z - r.z) > r.depth / 2) continue;
+    const area = r.width * r.depth;
+    if (area < bestArea) {
+      bestArea = area;
+      best = r;
+    }
+  }
+  return best !== null;
+}
+
+const ENTRY_OFFSETS = [0.8, 1.25];
+
+/** 片側だけ屋内のドア（外壁の入口）。室内ドアは除外する。 */
+export function listExteriorEntries(rooms: readonly RoomDef[], doors: readonly EntrySample[]): EntryPortal[] {
+  const out: EntryPortal[] = [];
+  for (const door of doors) {
+    for (const dist of ENTRY_OFFSETS) {
+      const ax = door.centerX + door.normalX * dist;
+      const az = door.centerZ + door.normalZ * dist;
+      const bx = door.centerX - door.normalX * dist;
+      const bz = door.centerZ - door.normalZ * dist;
+      const aIn = isIndoorPoint(rooms, ax, az, door.sillY);
+      const bIn = isIndoorPoint(rooms, bx, bz, door.sillY);
+      if (aIn === bIn) continue;
+      const inside = aIn ? { x: ax, y: door.sillY, z: az } : { x: bx, y: door.sillY, z: bz };
+      const outside = aIn ? { x: bx, y: door.sillY, z: bz } : { x: ax, y: door.sillY, z: az };
+      out.push({ id: door.id, outside, inside, sillY: door.sillY });
+      break;
+    }
+  }
+  return out;
+}
+
+function pickEntryPortal(entries: readonly EntryPortal[], from: Vec3, goal: Vec3): EntryPortal | null {
+  const same = entries.filter((e) => Math.abs(e.sillY - from.y) < 1.1);
+  const pool = same.length > 0 ? same : entries;
+  let best: EntryPortal | null = null;
+  let bestScore = Infinity;
+  for (const e of pool) {
+    const score =
+      Math.hypot(e.outside.x - from.x, e.outside.z - from.z) +
+      Math.hypot(e.inside.x - goal.x, e.inside.z - goal.z) +
+      Math.abs(e.sillY - goal.y) * 4;
+    if (score < bestScore) {
+      bestScore = score;
+      best = e;
+    }
+  }
+  return best;
+}
+
+/**
+ * 屋外にいる隊員が屋内の音・部屋へ向かうとき、外壁ドアの進入点を返す。
+ * 直線距離で壁の向こうに「着いた」ことにしない。屋内に入ってから本来の目標へ進む。
+ */
+export function entryRouteDest(
+  rooms: readonly RoomDef[],
+  entries: readonly EntryPortal[],
+  from: Vec3,
+  goal: Vec3,
+): EntryRoute {
+  if (isIndoorPoint(rooms, from.x, from.z, from.y) || !isIndoorPoint(rooms, goal.x, goal.z, goal.y)) {
+    return { dest: goal, entryId: null, phase: 'direct' };
+  }
+  const portal = pickEntryPortal(entries, from, goal);
+  if (!portal) return { dest: goal, entryId: null, phase: 'direct' };
+  const dist = Math.hypot(portal.outside.x - from.x, portal.outside.z - from.z);
+  if (dist > 1.15) return { dest: portal.outside, entryId: portal.id, phase: 'approach' };
+  return { dest: portal.inside, entryId: portal.id, phase: 'cross' };
+}
+
 /**
  * 容疑者モードの敵 SWAT チーム。2 人 1 組で部屋を順に掃討し、音・目撃情報は無線で共有する。
- * 施錠ドアはブリーチし、突入時や潜伏位置へはフラッシュバンを投げ込む。射線上に民間人がいると撃たない。
+ * 屋外からは外壁のドアを通って入り、施錠ドアはブリーチする。射線上に民間人がいると撃たない。
  */
 export class SwatTeam {
   readonly root = new THREE.Group();
   readonly hunters: SwatHunter[] = [];
   lastSighting: Vec3 | null = null;
   private readonly cleared = new Set<string>();
+  private entryCache: EntryPortal[] | null = null;
   /** pickRoom 中に hunt へ切り替えたい隊員（sweep 更新中の再入を避けるため次フレームで遷移） */
   private readonly pendingHunt = new Set<SwatHunter>();
   private readonly unreachable = new Set<string>();
@@ -519,6 +684,7 @@ export class SwatTeam {
       bounds: d.bounds,
       stairs: d.stairs,
       rooms: d.rooms,
+      allies: d.suspects,
     };
     const spawns = this.resolveSpawns(d.spawns, d.count);
     for (let i = 0; i < spawns.length; i++) {
@@ -543,7 +709,7 @@ export class SwatTeam {
 
     this.unsubs.push(
       d.bus.on('entityHit', (e) => {
-        if (e.shooter !== 'player' || e.nonlethal) return;
+        if (e.nonlethal || e.shooter.startsWith('swat_')) return;
         const h = this.hunters.find((x) => x.id === e.targetId);
         if (!h || !h.alive) return;
         const p = d.player.position;
@@ -597,6 +763,52 @@ export class SwatTeam {
     this.root.remove(h.body.group);
     h.dispose();
     return true;
+  }
+
+  /** 生存中の隊員（味方容疑者の射撃対象） */
+  livingTargets(): AllyTarget[] {
+    return this.hunters
+      .filter((h) => h.alive)
+      .map((h) => ({
+        id: h.id,
+        px: h.body.px,
+        pz: h.body.pz,
+        footY: h.body.footY,
+        height: h.body.height,
+        getEye: () => {
+          const e = new THREE.Vector3();
+          h.body.eye(e);
+          return { x: e.x, y: e.y, z: e.z };
+        },
+        getChest: () => h.body.chestPos(),
+        getAABB: () => h.body.getAABB(),
+      }));
+  }
+
+  doorById(id: string): Door | null {
+    return this.d.doors.doors.find((door) => door.id === id) ?? null;
+  }
+
+  /** 屋外なら入口ドア経由、屋内なら目標そのもの */
+  routeFrom(x: number, z: number, y: number, goal: Vec3): EntryRoute {
+    return entryRouteDest(this.d.rooms, this.portals(), { x, y, z }, goal);
+  }
+
+  private portals(): EntryPortal[] {
+    if (!this.entryCache) {
+      this.entryCache = listExteriorEntries(
+        this.d.rooms,
+        this.d.doors.doors.map((door) => ({
+          id: door.id,
+          centerX: door.centerX,
+          centerZ: door.centerZ,
+          normalX: door.normalX,
+          normalZ: door.normalZ,
+          sillY: door.sillY,
+        })),
+      );
+    }
+    return this.entryCache;
   }
 
   /** 突入開始 */

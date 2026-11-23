@@ -15,25 +15,27 @@ export function parseGameMode(v: string | null | undefined): GameMode {
   return v === 'suspect' ? 'suspect' : 'swat';
 }
 
-/** 容疑者モードのルール定数 */
+/** 容疑者モードのルール定数。人数は MissionRoster（両モード共通）が決める。 */
 export const SUSPECT_MODE = {
   /** SWAT 突入までの準備時間（秒）。交渉で増減する */
   prepSec: 30,
   /** 突入後、籠城成功までの時間（秒） */
   holdSec: 240,
-  /** SWAT 隊員数 */
-  swatCount: 4,
 } as const;
 
 export interface SuspectModeSetup {
   map: MapData;
   swatSpawns: SwatSpawn[];
+  /** プレイヤーを含む SWAT 合計。applyMissionRoster 後の allies + 1 */
+  swatCount: number;
 }
 
 /**
  * 通常ステージを容疑者モード用に変換する。
- * - プレイヤーは容疑者の配置位置のいずれかから開始（他の容疑者は排除）
- * - 本来の突入地点・隊員配置が SWAT の進入地点になる
+ * 人数は applyMissionRoster 済みのマップをそのまま使う（ここで増やしたり減らしたりしない）。
+ * - プレイヤーは容疑者の配置位置のいずれか（突入地点から遠いほど選ばれやすい）。その 1 人は NPC から外す
+ * - 残りの容疑者は全員味方 NPC。合計は SWAT モードの容疑者数と一致する
+ * - SWAT は突入地点 + 隊員配置。人数は SWAT モードのプレイヤー込み合計と一致する
  * - 民間人はそのまま（人質）。分隊はいない
  */
 export function prepareSuspectMode(map: MapData): SuspectModeSetup {
@@ -45,6 +47,7 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   const entry = map.playerSpawn;
   // 突入地点から遠い容疑者位置ほど選ばれやすい
   let spawn: PlayerSpawn = { ...entry };
+  let playerSuspectId: string | null = null;
   if (suspects.length > 0) {
     const weighted = suspects.map((s) => ({ s, w: 1 + Math.hypot(s.x - entry.x, s.z - entry.z) }));
     const total = weighted.reduce((a, b) => a + b.w, 0);
@@ -57,13 +60,20 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
         break;
       }
     }
+    playerSuspectId = pick.id;
     // 突入地点の方を向く
     const yaw = (Math.atan2(entry.x - pick.x, -(entry.z - pick.z)) * 180) / Math.PI;
     spawn = { x: pick.x, y: pick.y ?? 0, z: pick.z, yaw };
   }
+  const kept = suspects.filter((s) => s.id !== playerSuspectId);
+  const keptIds = new Set(kept.map((s) => s.id));
   const civilians = map.entities.filter((e) => e.type === 'civilian').length;
+  const swatCount = swatSpawns.length;
+  const allyLine = kept.length > 0 ? `仲間の容疑者 ${kept.length} 名が同じ建物にいる。` : '';
   const summary =
-    'あなたは立てこもり犯だ。まもなく SWAT 4 名が突入してくる。' +
+    'あなたは立てこもり犯だ。' +
+    allyLine +
+    `まもなく SWAT ${swatCount} 名が入口から突入してくる。` +
     `突入から ${Math.round(SUSPECT_MODE.holdSec / 60)} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
     '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
     'ドアを施錠（F 長押し）し、人質を盾に連れ回せ（民間人の前で F 長押し）。民間人が射線上にいる間、SWAT は発砲できない。';
@@ -71,15 +81,16 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
     map: {
       ...map,
       playerSpawn: spawn,
-      entities: map.entities.filter((e) => e.type !== 'suspect'),
+      entities: map.entities.filter((e) => e.type !== 'suspect' || keptIds.has(e.id)),
       allies: [],
       briefing: {
         estimatedHostages: { min: civilians, max: civilians },
-        estimatedSuspects: { min: SUSPECT_MODE.swatCount, max: SUSPECT_MODE.swatCount },
+        estimatedSuspects: { min: swatCount, max: swatCount },
         summary,
       },
     },
     swatSpawns,
+    swatCount,
   };
 }
 

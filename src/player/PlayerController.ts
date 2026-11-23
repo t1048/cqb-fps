@@ -156,6 +156,7 @@ export class PlayerController {
           pos: { x: this.position.x, y: this.position.y, z: this.position.z },
           radius: cfg.footstep.radius[this.mode],
           kind: 'footstep',
+          source: 'player',
         });
       }
     } else {
