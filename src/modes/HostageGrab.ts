@@ -14,12 +14,12 @@ const GRAB_RANGE = 1.9;
 const GRAB_CONE_COS = Math.cos((70 / 2) * (Math.PI / 180));
 const GRAB_HOLD_SEC = 0.6;
 /** 人質を抱えている間の移動速度倍率（平常時の中心値。実際は抵抗で不規則に揺らぐ） */
-const CARRY_SPEED = 0.66;
+const CARRY_SPEED = 0.78;
 /** 抵抗（0〜100）が 100 に達すると人質が振りほどいて逃げる */
-const RESIST_PER_SEC = 3.2;
-const RESIST_MOVING_PER_SEC = 1.6;
-const RESIST_PER_SHOT = 4;
-const RESIST_PER_PEPPER = 22;
+const RESIST_PER_SEC = 2.2;
+const RESIST_MOVING_PER_SEC = 1.1;
+const RESIST_PER_SHOT = 3;
+const RESIST_PER_PEPPER = 12;
 /** 振りほどかれた人質を再び掴めるまでの秒数 */
 const REGRAB_COOLDOWN = 10;
 /**

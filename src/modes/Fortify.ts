@@ -23,9 +23,8 @@ const UNBOARD_SEC = 1.2;
 /** しゃがみ + F 長押しでドアにトラップを仕掛ける秒数 */
 const TRAP_SEC = 2.0;
 const WINDOW_REACH = 1.7;
-/** 仲間 1 人あたりの準備作業量（/秒）。窓 1 枚 = 7、武器改造 = 16、トラップ 1 個 = 9 */
+/** 仲間 1 人あたりの準備作業量（/秒）。武器改造 = 16、トラップ 1 個 = 9 */
 const ALLY_WORK_RATE = 1;
-const COST_WINDOW = 7;
 const COST_UPGRADE = 16;
 const COST_TRAP = 9;
 const BASE_TRAPS = 2;
@@ -63,7 +62,7 @@ export interface BlastReceiver {
   applyBlast(pos: Vec3, radius: number): void;
 }
 
-type PrepTask = { kind: 'window'; b: Barricade } | { kind: 'upgrade' } | { kind: 'trap' };
+type PrepTask = { kind: 'upgrade' } | { kind: 'trap' };
 
 export interface FortifyDeps {
   windows: readonly WindowDef[];
@@ -91,7 +90,7 @@ export interface FortifyDeps {
 
 /**
  * 容疑者モードの籠城準備。
- * - 窓（外窓・室内の窓口）を板で塞ぐ: 視線・射線を遮る（F 長押し。もう一度で外す）。準備中は仲間が突入口に近い窓から自動で補強する
+ * - 窓（外窓・室内の窓口）を板で塞ぐ: 視線・射線を遮る（F 長押し。もう一度で外す）。自動では張られない（自分で張る）
  * - ドアにブービートラップ（しゃがみ + F 長押し）: SWAT が開ける / ブリーチすると爆発。SWAT は気付けば解除に時間を取られる
  * - 時間を稼ぐと仲間が武器を改造（全員の武器が強化）し、トラップの部材も増える
  */
@@ -123,20 +122,10 @@ export class Fortify {
     this.woodMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x9a7a52, roughness: 0.85 });
     this.backMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x6e5236, roughness: 0.9 });
     for (const w of d.windows) this.barricades.push(this.makeBarricade(w));
-    // 仲間の準備: 突入口に近い窓 2 枚 → 武器改造 → トラップ部材 → 残りの窓（近い順）を交互に
-    const byEntry = [...this.barricades].sort(
-      (a, b) => Math.hypot(a.cx - d.entry.x, a.cz - d.entry.z) - Math.hypot(b.cx - d.entry.x, b.cz - d.entry.z),
-    );
-    const outer = byEntry.filter((b) => !b.def.interior);
-    const inner = byEntry.filter((b) => b.def.interior);
-    const windows = [...outer, ...inner];
-    for (const b of windows.splice(0, 2)) this.tasks.push({ kind: 'window', b });
+    // 仲間の準備: 武器改造 → トラップ部材（窓のバリケードは自分で張る。自動では張らない）
     this.tasks.push({ kind: 'upgrade' });
     this.tasks.push({ kind: 'trap' });
-    for (let i = 0; i < windows.length; i++) {
-      this.tasks.push({ kind: 'window', b: windows[i]! });
-      if (i === 2) this.tasks.push({ kind: 'trap' });
-    }
+    this.tasks.push({ kind: 'trap' });
 
     this.el.style.cssText =
       'position:fixed;left:50%;top:52px;transform:translateX(-50%);z-index:6;pointer-events:none;padding:4px 12px;' +
@@ -461,19 +450,14 @@ export class Fortify {
   private updatePrep(dt: number): void {
     const allies = this.activeAllies();
     if (allies.length === 0) return;
-    // 既に（プレイヤーが）塞いだ窓の作業は飛ばす
-    while (this.tasks[0]?.kind === 'window' && this.tasks[0].b.boarded) this.tasks.shift();
     const task = this.tasks[0];
     if (!task) return;
     this.work += allies.length * ALLY_WORK_RATE * dt;
-    const cost = task.kind === 'window' ? COST_WINDOW : task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
+    const cost = task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
     if (this.work < cost) return;
     this.work -= cost;
     this.tasks.shift();
-    if (task.kind === 'window') {
-      this.setBoarded(task.b, true);
-      this.d.subtitle.show(`仲間「${task.b.def.interior ? '窓口' : '窓'}を板で塞いだぞ！」（${this.boardedCount}/${this.barricades.length}）`, 1.6);
-    } else if (task.kind === 'upgrade') {
+    if (task.kind === 'upgrade') {
       this.applyUpgrade(allies);
     } else {
       this.trapKits++;
@@ -508,8 +492,8 @@ export class Fortify {
       const allies = this.activeAllies().length;
       const task = this.tasks[0];
       if (allies > 0 && task) {
-        const cost = task.kind === 'window' ? COST_WINDOW : task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
-        const what = task.kind === 'window' ? (task.b.def.interior ? '窓口を補強中' : '窓を補強中') : task.kind === 'upgrade' ? '武器を改造中' : 'トラップを製作中';
+        const cost = task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
+        const what = task.kind === 'upgrade' ? '武器を改造中' : 'トラップを製作中';
         text = `仲間 ${allies} 名が${what} ${Math.round((this.work / cost) * 100)}%　｜　` + text;
       }
       text += '　｜　窓の前で F 長押し: 板 / しゃがみ+F 長押し（ドア）: トラップ';

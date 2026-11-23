@@ -12,6 +12,7 @@ import {
   type CombatThreat,
 } from '../ai/EngageBehavior';
 import { HumanoidBody } from '../ai/HumanoidBody';
+import { shieldBlocks } from '../ai/ShieldGuard';
 import { blockedAtFiltered } from '../ai/SquadRoute';
 import type { PlayerCombatReceiver } from '../ai/EntityManager';
 import { hasLineOfSight, type Flashbang } from '../weapons/Flashbang';
@@ -66,6 +67,56 @@ const SWAT_MOBILITY: MobilityParams = {
   flankChance: 0.5,
   guardHostageRoom: false,
 };
+
+/**
+ * 盾持ち隊員（ポイントマン）: 防弾盾を構えてハンドガンで撃ちながら前進する。遮蔽には籠らず、見失えば即座に詰める。
+ * 盾は脛より上の正面を完全に防ぐので、足元を撃つか側面・背後へ回り込むしか倒せない。圧力で SwatTeam が一部を書き換える。
+ */
+const SHIELD_COMBAT: CombatParams = {
+  ...SWAT_COMBAT,
+  moveSpeed: 1.75,
+  fireInterval: 0.42,
+  shotsPerPeek: 4,
+  magazineSize: 15,
+  reloadSec: 1.8,
+  coverSecMin: 0.25,
+  coverSecMax: 0.5,
+  peekSecMax: 2.4,
+  coverSearchRange: 0,
+  shotDamage: 9,
+  baseSpreadDeg: 3.8,
+};
+const SHIELD_MOBILITY: MobilityParams = {
+  ...SWAT_MOBILITY,
+  repositionAfterLostSec: 0.5,
+  flankChance: 0,
+};
+const BASE_SHIELD_COMBAT: Readonly<CombatParams> = { ...SHIELD_COMBAT };
+
+/**
+ * 圧力（時間経過で SWAT が積極的になる）。SWAT_COMBAT / SWAT_MOBILITY は SwatTeam が毎秒書き換える（生成時に基準値へ戻す）。
+ * 隠れて撃つだけの籠城を許さず、時間が経つほど遮蔽に籠る時間が短く・射撃が正確に・回り込みが速くなる。
+ */
+const BASE_COMBAT: Readonly<CombatParams> = { ...SWAT_COMBAT };
+const BASE_MOBILITY: Readonly<MobilityParams> = { ...SWAT_MOBILITY };
+/** 突入開始から圧力が最大になるまでの秒数 */
+const PRESSURE_RAMP_SEC = 150;
+/** 隊員が倒されるたびに残りが本気になる加算量 */
+const PRESSURE_PER_DOWN = 0.1;
+/** 閃光弾の補充間隔(s)。圧力が高いほどクールダウンも短い */
+const FLASH_REFILL_SEC = 45;
+const FLASH_CARRY_MAX = 4;
+/** 姿を見失った直後、最後に見えた位置への制圧射撃（リーン撃ち・顔出し対策） */
+const SUPPRESS_MIN_LOST = 0.35;
+const SUPPRESS_MAX_LOST = 3.5;
+const SUPPRESS_INTERVAL = 0.5;
+/** ドローン熱源探知: 隠れ続ける相手の大まかな位置を共有する間隔(s)と誤差半径(m)。圧力 0.3 以上で作動 */
+const INTEL_INTERVAL_MIN = 16;
+const INTEL_INTERVAL_MAX = 38;
+const INTEL_ERROR_MAX = 7;
+const INTEL_ERROR_MIN = 2.5;
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 const DEG2RAD = Math.PI / 180;
 /** ボディアーマー込み。改造拳銃（19 ダメージ）で約 6 発 */
@@ -125,7 +176,7 @@ interface ShieldBody {
 }
 
 /** プレイヤーが抱えた人質の正面 ±この角度にいる隊員は発砲しない */
-const HOSTAGE_COVER_DEG = 40;
+const HOSTAGE_COVER_DEG = 55;
 
 export interface SwatSpawn {
   x: number;
@@ -220,6 +271,8 @@ class SwatHunter implements HitTarget {
   /** 民間人が射線上で実弾を撃てない脅威（ペッパーボールで撃つ） */
   pepperThreat: Vec3 | null = null;
   pepperCd = Math.random() * PEPPER_INTERVAL;
+  suppressCd = 0;
+  readonly combat: CombatParams;
   disarmDoor: Door | null = null;
   disarmSec = 0;
   readonly checkedTraps = new Set<string>();
@@ -238,13 +291,15 @@ class SwatHunter implements HitTarget {
     private readonly ctx: CombatContext,
     bus: GameEventBus,
     textures?: TextureLibrary,
+    readonly shielded = false,
   ) {
     this.callsign = callsign;
-    this.body = new HumanoidBody(spawn.x, spawn.z, 0, 0x2b3440, true, { role: 'ally', footY: spawn.y, textures });
+    this.combat = shielded ? SHIELD_COMBAT : SWAT_COMBAT;
+    this.body = new HumanoidBody(spawn.x, spawn.z, 0, 0x2b3440, true, { role: 'ally', footY: spawn.y, textures, shield: shielded });
     this.body.ground = ctx.colliders;
     this.body.setReadyPose('high');
     this.nav = new SuspectNavigator(this.body, ctx);
-    this.engage = new EngageBehavior(SWAT_COMBAT, id, this.body, bus, ctx, () => true, SWAT_MOBILITY, this.nav);
+    this.engage = new EngageBehavior(this.combat, id, this.body, bus, ctx, () => true, shielded ? SHIELD_MOBILITY : SWAT_MOBILITY, this.nav);
   }
 
   get alive(): boolean {
@@ -279,6 +334,10 @@ class SwatHunter implements HitTarget {
 
   getAABB() {
     return this.body.getAABB();
+  }
+
+  shieldBlocks(from: Vec3, hit: Vec3): boolean {
+    return shieldBlocks(this.body, from, hit);
   }
 
   setState(next: HunterState): void {
@@ -368,7 +427,7 @@ class SwatHunter implements HitTarget {
     const p = this.ctx.player;
     if (p.alive === false) return;
     const engaged = this.state === 'engage';
-    const range = engaged ? SWAT_COMBAT.engageRange : this.team.playerCrouching ? VISION_RANGE_CROUCH : VISION_RANGE;
+    const range = engaged ? this.combat.engageRange : this.team.playerCrouching ? VISION_RANGE_CROUCH : VISION_RANGE;
     const eyeY = this.body.footY + 1.55;
     const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, range);
     if (!threat) {
@@ -416,6 +475,15 @@ class SwatHunter implements HitTarget {
       this.body.faceToward(this.pepperThreat.x, this.pepperThreat.z);
       this.team.firePepper(this, this.pepperThreat);
     }
+    // 見失った直後: 最後に見えた位置へ閃光を投げ込み、制圧射撃で顔出しを潰す（遮蔽とリーンで安全に撃ち返させない）
+    this.suppressCd = Math.max(0, this.suppressCd - dt);
+    if (!this.sees && k && this.lostSec >= SUPPRESS_MIN_LOST && this.lostSec <= SUPPRESS_MAX_LOST) {
+      if (this.lostSec >= 0.8) this.team.tryFlash(this, k);
+      if (this.suppressCd <= 0) {
+        this.suppressCd = SUPPRESS_INTERVAL * (0.8 + Math.random() * 0.5);
+        this.team.suppress(this, k);
+      }
+    }
     if (!this.sees && this.lostSec >= ENGAGE_LOST_SEC) {
       this.huntTarget = k ? { ...k } : null;
       this.setState(this.huntTarget ? 'hunt' : 'sweep');
@@ -443,7 +511,7 @@ class SwatHunter implements HitTarget {
       this.nav.reset();
     }
     this.team.tryFlash(this, t);
-    const res = this.nav.step(t, SWAT_COMBAT.moveSpeed * HUNT_SPEED, dt, {
+    const res = this.nav.step(t, this.combat.moveSpeed * HUNT_SPEED, dt, {
       canOpenDoors: true,
       canUseStairs: true,
       faceTravel: true,
@@ -473,7 +541,7 @@ class SwatHunter implements HitTarget {
         Math.abs(this.body.footY - door.sillY) < 0.85;
       if (near && this.tryBeginBreach(route.dest, door.id)) return;
     }
-    const res = this.nav.step(route.dest, SWAT_COMBAT.moveSpeed * speedScale, dt, {
+    const res = this.nav.step(route.dest, this.combat.moveSpeed * speedScale, dt, {
       canOpenDoors: true,
       canUseStairs: true,
       faceTravel: true,
@@ -506,7 +574,7 @@ class SwatHunter implements HitTarget {
       if (dist > 1.9 + slot * 0.6 || !sameFloor || (goalClear && goalDist > 0.9)) {
         const fres = this.nav.step(
           goal,
-          SWAT_COMBAT.moveSpeed * Math.min(1, SWEEP_SPEED * (dist > 4 ? 1.35 : 1)),
+          this.combat.moveSpeed * Math.min(1, SWEEP_SPEED * (dist > 4 ? 1.35 : 1)),
           dt,
           { canOpenDoors: true, canUseStairs: true, faceTravel: true, arriveDist: goalClear ? 0.6 : 1.7 },
         );
@@ -549,7 +617,7 @@ class SwatHunter implements HitTarget {
       this.entryPhase = null;
       this.nav.reset();
     }
-    const res = this.nav.step(goal, SWAT_COMBAT.moveSpeed * SWEEP_SPEED, dt, {
+    const res = this.nav.step(goal, this.combat.moveSpeed * SWEEP_SPEED, dt, {
       canOpenDoors: true,
       canUseStairs: true,
       faceTravel: true,
@@ -632,7 +700,7 @@ class SwatHunter implements HitTarget {
       Math.hypot(this.body.px - door.centerX, this.body.pz - door.centerZ) < 1.35;
     const res = nearDoor
       ? 'arrived'
-      : this.nav.step(ap, SWAT_COMBAT.moveSpeed * HUNT_SPEED, dt, {
+      : this.nav.step(ap, this.combat.moveSpeed * HUNT_SPEED, dt, {
           canOpenDoors: true,
           canUseStairs: true,
           faceTravel: true,
@@ -807,6 +875,15 @@ export class SwatTeam {
   private flashCd = 6;
   private droneCd = 0;
   private flashesLeft = FLASH_PER_TEAM;
+  private flashRefill = 0;
+  private shieldHintShown = false;
+  /** 突入開始からの秒数と圧力(0〜1)。倒された隊員の数でも上がる */
+  private assaultSec = 0;
+  private downBonus = 0;
+  private pressure = 0;
+  private pressureTick = 0;
+  private pressureStep = 0;
+  private intelCd = 0;
   private contactCd = 0;
   private radioCd = 0;
   private sightingAge = 0;
@@ -827,6 +904,9 @@ export class SwatTeam {
 
   constructor(private readonly d: SwatTeamDeps) {
     this.root.name = 'swatTeam';
+    Object.assign(SWAT_COMBAT, BASE_COMBAT);
+    Object.assign(SWAT_MOBILITY, BASE_MOBILITY);
+    Object.assign(SHIELD_COMBAT, BASE_SHIELD_COMBAT);
     this.rooms = d.rooms.filter((r) => !r.outdoor);
     const ctx: CombatContext = {
       player: d.player,
@@ -852,6 +932,7 @@ export class SwatTeam {
         ctx,
         d.bus,
         d.textures,
+        i === 0 && spawns.length >= 2,
       );
       this.hunters.push(h);
       this.root.add(h.body.group);
@@ -876,6 +957,19 @@ export class SwatTeam {
         } else {
           this.shareSighting(from);
           this.alertTeam(from, true);
+        }
+      }),
+      d.bus.on('bulletImpact', (e) => {
+        // 盾持ちの正面に当たった弾（盾に止められた）: 初回だけ足元を狙うヒントを出す
+        if (e.shooter !== 'player' || this.shieldHintShown) return;
+        for (const h of this.hunters) {
+          if (!h.alive || !h.shielded) continue;
+          const b = h.body.getAABB();
+          const m = 0.12;
+          if (e.pos.x < b.min.x - m || e.pos.x > b.max.x + m || e.pos.z < b.min.z - m || e.pos.z > b.max.z + m || e.pos.y > b.max.y + m) continue;
+          this.shieldHintShown = true;
+          d.subtitle.show('防弾盾に弾かれた！ 足元を撃つか、側面・背後へ回り込め', 2.6);
+          return;
         }
       }),
       d.bus.on('noise', (e) => this.onNoise(e.pos, e.radius, e.kind, e.source)),
@@ -951,6 +1045,7 @@ export class SwatTeam {
         },
         getChest: () => h.body.chestPos(),
         getAABB: () => h.body.getAABB(),
+        shieldBlocks: (from, hit) => shieldBlocks(h.body, from, hit),
       }));
   }
 
@@ -996,6 +1091,7 @@ export class SwatTeam {
     this.contactCd = Math.max(0, this.contactCd - dt);
     this.radioCd = Math.max(0, this.radioCd - dt);
     this.sightingAge += dt;
+    if (this.started) this.updatePressure(dt);
     for (const h of this.hunters) h.update(dt);
     this.coverCd -= dt;
     if (this.started && this.coverCd <= 0) {
@@ -1132,6 +1228,8 @@ export class SwatTeam {
   private onManDown(h: SwatHunter): void {
     const buddy = h.cell.find((x) => x !== h && x.alive);
     const speaker = buddy ?? this.firstAlive();
+    this.downBonus += PRESSURE_PER_DOWN;
+    this.applyPressure();
     if (this.aliveCount === 0) return;
     this.radio(speaker, `${h.callsign} ダウン！ 隊員負傷、警戒しろ！`, `${h.callsign} is down! Officer down!`, true);
     // 組のリーダーが倒れたら次の序列の隊員が自動的にリーダーを引き継ぐ（leader ゲッター）。相方が全滅すれば単独行動
@@ -1153,7 +1251,7 @@ export class SwatTeam {
 
   /** 追跡中、潜伏推定位置が近く直接視認できていなければ閃光弾を投げ込む。 */
   tryFlash(by: SwatHunter, target: Vec3): void {
-    if (this.flashCd > 0 || this.flashesLeft <= 0 || this.sightingAge > 12) return;
+    if (this.flashCd > 0 || this.flashesLeft <= 0 || this.sightingAge > 12 || this.hostageShieldUp()) return; // 人質が巻き込まれるので投げない
     const d = Math.hypot(target.x - by.body.px, target.z - by.body.pz);
     if (d < FLASH_MIN_DIST || d > FLASH_MAX_DIST || Math.abs(target.y - by.body.footY) > 0.75) return;
     const from = by.body.chestPos();
@@ -1173,8 +1271,114 @@ export class SwatTeam {
     const g = this.d.flashbang.gravity;
     this.d.flashbang.throwFrom(origin, { x: dx / t, y: (dy + 0.5 * g * t * t) / t, z: dz / t }, by.id, fuse);
     this.flashesLeft--;
-    this.flashCd = FLASH_TEAM_CD;
+    this.flashCd = lerp(FLASH_TEAM_CD, FLASH_TEAM_CD * 0.5, this.pressure);
     this.radio(by, 'フラッシュ投下！', 'Flashbang out!', true);
+  }
+
+  // ---------- 圧力（追い立て） ----------
+
+  /** 圧力を進め、SWAT の積極性・閃光補充・ドローン探知を更新する */
+  private updatePressure(dt: number): void {
+    // 人質を盾にして立ち回っている間は SWAT も手が出しにくく、圧力の上昇が鈍る
+    this.assaultSec += dt * (this.hostageShieldUp() ? 0.5 : 1);
+    this.pressureTick -= dt;
+    if (this.pressureTick <= 0) {
+      this.pressureTick = 0.5;
+      this.applyPressure();
+    }
+    this.flashRefill += dt;
+    if (this.flashRefill >= FLASH_REFILL_SEC * lerp(1, 0.55, this.pressure)) {
+      this.flashRefill = 0;
+      if (this.flashesLeft < FLASH_CARRY_MAX) this.flashesLeft++;
+    }
+    this.updateIntel(dt);
+  }
+
+  private applyPressure(): void {
+    const t = Math.min(1, this.assaultSec / PRESSURE_RAMP_SEC + this.downBonus);
+    this.pressure = t;
+    const c = SWAT_COMBAT;
+    const b = BASE_COMBAT;
+    c.coverSecMin = lerp(b.coverSecMin, 0.35, t);
+    c.coverSecMax = lerp(b.coverSecMax, 0.8, t);
+    c.fireInterval = lerp(b.fireInterval, 0.2, t);
+    c.baseSpreadDeg = lerp(b.baseSpreadDeg, 3.6, t);
+    c.shotsPerPeek = Math.round(lerp(b.shotsPerPeek, 5, t));
+    c.peekSecMax = lerp(b.peekSecMax, 2.1, t);
+    c.moveSpeed = lerp(b.moveSpeed, 2.55, t);
+    c.decisionSec = lerp(b.decisionSec, 0.5, t);
+    const sc = SHIELD_COMBAT;
+    const sb = BASE_SHIELD_COMBAT;
+    sc.fireInterval = lerp(sb.fireInterval, 0.3, t);
+    sc.baseSpreadDeg = lerp(sb.baseSpreadDeg, 2.8, t);
+    sc.moveSpeed = lerp(sb.moveSpeed, 2.1, t);
+    sc.decisionSec = c.decisionSec;
+    const m = SWAT_MOBILITY;
+    const bm = BASE_MOBILITY;
+    m.repositionAfterLostSec = lerp(bm.repositionAfterLostSec, 0.6, t);
+    m.flankChance = lerp(bm.flankChance, 0.85, t);
+    const step = t >= 1 ? 4 : t >= 0.66 ? 3 : t >= 0.33 ? 2 : 1;
+    if (step > this.pressureStep) {
+      this.pressureStep = step;
+      const lines: Record<number, [string, string]> = {
+        2: ['時間をかけるな、距離を詰めろ！', 'Tighten up, push in!'],
+        3: ['容疑者は追い詰められている。一気に制圧する！', 'He is cornered, press the attack!'],
+        4: ['全員突っ込め！ 逃がすな！', 'All units, press! Do not let him breathe!'],
+      };
+      const line = lines[step];
+      if (line) this.radio(this.firstAlive(), line[0], line[1], true);
+    }
+  }
+
+  /** 人質を抱えていて盾が有効（暴れて崩れていない） */
+  private hostageShieldUp(): boolean {
+    return this.playerHoldsHostage() && (this.d.shieldActive?.() ?? true);
+  }
+
+  private playerHoldsHostage(): boolean {
+    for (const c of this.d.civilians()) if (c.alive && c.shieldedBy === 'player') return true;
+    return false;
+  }
+
+  /**
+   * ドローン熱源探知: 圧力が上がると、誰も交戦していない間でも定期的にプレイヤーの大まかな位置が全隊に共有される。
+   * 誤差は圧力が高いほど小さい。無線が傍受されるので、探知された側にも「来る」ことが分かる。
+   */
+  private updateIntel(dt: number): void {
+    this.intelCd -= dt;
+    if (this.pressure < 0.3 || this.intelCd > 0) return;
+    if (this.hunters.some((h) => h.alive && h.state === 'engage')) return;
+    this.intelCd = lerp(INTEL_INTERVAL_MAX, INTEL_INTERVAL_MIN, this.pressure);
+    const p = this.d.player.position;
+    const a = Math.random() * Math.PI * 2;
+    const err = lerp(INTEL_ERROR_MAX, INTEL_ERROR_MIN, this.pressure) * Math.sqrt(Math.random());
+    const guess = { x: p.x + Math.cos(a) * err, y: p.y, z: p.z + Math.sin(a) * err };
+    let sent = false;
+    for (const h of this.hunters) {
+      if (!h.alive || h.state === 'breach' || h.state === 'disarm' || h.state === 'staging') continue;
+      if (h.leader && h.leader.alive) continue; // 組員はリーダーに追従する
+      h.huntTarget = { ...guess };
+      h.setState('hunt');
+      sent = true;
+    }
+    if (sent) {
+      this.shareSighting(guess);
+      this.radio(
+        this.firstAlive(),
+        `ドローンが熱源を探知！ ${this.roomName(guess)}付近だ、包囲しろ！`,
+        'Drone has a heat signature! Surround the area!',
+        true,
+      );
+    }
+  }
+
+  /** 姿を見失った位置への制圧射撃。壁越しでも撃ち込むので窓のバリケードも削られる。人質が盾になっている向きには撃たない */
+  suppress(by: SwatHunter, at: Vec3): void {
+    if (by.engage.ammoLeft <= 0 || by.engage.label === 'reload' || by.engage.label === 'toCover') return;
+    const d = Math.hypot(at.x - by.body.px, at.z - by.body.pz);
+    if (d > by.combat.engageRange || Math.abs(at.y - by.body.footY) > 1.2) return;
+    if (this.coveredByHostage(by.body.px, by.body.pz)) return;
+    by.engage.fireAt(null, at);
   }
 
   // ---------- 部屋の掃討 ----------
@@ -1391,7 +1595,7 @@ export class SwatTeam {
     const hitChance = Math.max(0.2, 0.75 - dist * 0.025);
     if (Math.random() >= hitChance) return;
     const holding = [...this.d.civilians()].some((c) => c.alive && c.shieldedBy === 'player');
-    this.d.onPepper?.(holding && Math.random() < 0.4 ? 'hostage' : 'player');
+    this.d.onPepper?.(holding && Math.random() < 0.22 ? 'hostage' : 'player');
   }
 
   // ---------- ブービートラップ ----------

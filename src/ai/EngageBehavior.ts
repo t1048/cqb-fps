@@ -37,6 +37,8 @@ export interface AllyTarget {
   getEye(): Vec3;
   getChest(): Vec3;
   getAABB(): AABB;
+  /** 盾持ち: from から撃たれた弾が hit で盾に止められるか */
+  shieldBlocks?(from: Vec3, hit: Vec3): boolean;
 }
 
 export interface CombatThreat {
@@ -758,6 +760,11 @@ export class EngageBehavior {
     return this.flinch > 0 ? 'flinch' : this.phase;
   }
 
+  /** 残弾。制圧射撃などの外部発砲側が弾切れを判断するために使う */
+  get ammoLeft(): number {
+    return this.ammo;
+  }
+
   /** ENGAGE に入った。弾切れなら遮蔽でリロード、そうでなければ遮蔽へ退避→ピーク。 */
   enter(known: Vec3 | null): void {
     this.lostSightSec = 0;
@@ -1038,6 +1045,15 @@ export class EngageBehavior {
       for (const a of this.ctx.allies()) {
         const d = this.rayDist(a.getAABB());
         if (d !== null && d < bestT) {
+          if (a.shieldBlocks) {
+            this.ray.at(d, this.tmpHit);
+            if (a.shieldBlocks(pos, this.tmpHit)) {
+              bestT = d;
+              hitKind = 'wall';
+              hitAllyId = '';
+              continue;
+            }
+          }
           bestT = d;
           hitKind = 'ally';
           hitAllyId = a.id;
