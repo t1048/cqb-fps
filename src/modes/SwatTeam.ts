@@ -123,7 +123,32 @@ export interface SwatTeamDeps {
   suspects?: () => readonly AllyTarget[];
 }
 
-const CALLSIGNS = ['Red-1', 'Red-2', 'Blue-1', 'Blue-2', 'Gold-1', 'Gold-2'];
+/** 隊員同士がこれより近づいたら押し分ける（m）と、その最大速度（m/s） */
+const SEPARATION_DIST = 0.7;
+const SEPARATION_SPEED = 1.6;
+/** 組（セル）ごとのコールサイン接頭辞 */
+const CELL_NAMES = ['Red', 'Blue', 'Gold', 'Green'];
+
+/**
+ * 隊員数をツーマンセル／スリーマンセルに分ける。基本は 2 人組で、奇数なら 1 組だけ 3 人組。
+ * 例: 3 → [3] / 4 → [2,2] / 5 → [2,3] / 6 → [2,2,2] / 7 → [2,2,3]
+ */
+export function cellSizes(n: number): number[] {
+  if (n <= 0) return [];
+  if (n <= 3) return [n];
+  const sizes: number[] = [];
+  let left = n;
+  while (left > 0) {
+    if (left === 3) {
+      sizes.push(3);
+      left = 0;
+    } else {
+      sizes.push(2);
+      left -= 2;
+    }
+  }
+  return sizes;
+}
 const NAMES = ['アルファ', 'ブラボー', 'チャーリー', 'デルタ', 'エコー', 'フォックス'];
 
 /** SWAT 隊員 1 名。部屋の掃討・音/目撃情報の追跡・施錠ドアのブリーチ・交戦を行う。 */
@@ -133,7 +158,9 @@ class SwatHunter implements HitTarget {
   readonly engage: EngageBehavior;
   hp = HP;
   state: HunterState = 'staging';
-  leader: SwatHunter | null = null;
+  /** 所属する組（先頭ほど序列が上。生存者の先頭がその組のリーダー） */
+  cell: SwatHunter[] = [this];
+  callsign: string;
   targetRoom: RoomDef | null = null;
   huntTarget: Vec3 | null = null;
   known: Vec3 | null = null;
@@ -155,7 +182,7 @@ class SwatHunter implements HitTarget {
 
   constructor(
     readonly id: string,
-    readonly callsign: string,
+    callsign: string,
     readonly name: string,
     spawn: SwatSpawn,
     private readonly team: SwatTeam,
@@ -163,6 +190,7 @@ class SwatHunter implements HitTarget {
     bus: GameEventBus,
     textures?: TextureLibrary,
   ) {
+    this.callsign = callsign;
     this.body = new HumanoidBody(spawn.x, spawn.z, 0, 0x2b3440, true, { role: 'ally', footY: spawn.y, textures });
     this.body.ground = ctx.colliders;
     this.body.setReadyPose('high');
@@ -172,6 +200,32 @@ class SwatHunter implements HitTarget {
 
   get alive(): boolean {
     return this.state !== 'down';
+  }
+
+  /** 組のリーダー（自分より序列が上の生存者の先頭）。自分がリーダーなら null */
+  get leader(): SwatHunter | null {
+    for (const m of this.cell) {
+      if (m === this) return null;
+      if (m.alive) return m;
+    }
+    return null;
+  }
+
+  /** リーダーに追従する生存隊員の中での自分の順番（0 起点）と人数 */
+  private followerSlot(leader: SwatHunter): { slot: number; count: number } {
+    let slot = 0;
+    let count = 0;
+    let passedLeader = false;
+    for (const m of this.cell) {
+      if (m === leader) {
+        passedLeader = true;
+        continue;
+      }
+      if (!passedLeader || !m.alive) continue;
+      if (m === this) slot = count;
+      count++;
+    }
+    return { slot, count };
   }
 
   getAABB() {
@@ -363,21 +417,33 @@ class SwatHunter implements HitTarget {
   }
 
   private updateSweep(dt: number): void {
-    const leader = this.leader && this.leader.alive ? this.leader : null;
+    const leader = this.leader;
     if (leader && leader.state !== 'engage' && leader.state !== 'staging') {
-      // 2 人 1 組: 相方（リーダー）の後方を追従する
+      // ツーマン／スリーマンセル: リーダーの後方を追従する。3 人組の 2 名は左右後方に分かれ、背後を扇状に警戒する
+      const { slot, count } = this.followerSlot(leader);
+      const lyaw = leader.body.yawRad;
+      const lfx = -Math.sin(lyaw);
+      const lfz = -Math.cos(lyaw);
+      const side = count > 1 ? (slot === 0 ? -1 : 1) : 0;
+      const gx = leader.body.px - lfx * 1.1 + Math.cos(lyaw) * 0.6 * side;
+      const gz = leader.body.pz - lfz * 1.1 - Math.sin(lyaw) * 0.6 * side;
+      const goalClear = count > 1 && !blockedAtFiltered(this.ctx.colliders, gx, gz, 0.3, leader.body.footY);
+      const goal = goalClear
+        ? { x: gx, y: leader.body.footY, z: gz }
+        : { x: leader.body.px, y: leader.body.footY, z: leader.body.pz };
       const dist = Math.hypot(leader.body.px - this.body.px, leader.body.pz - this.body.pz);
       const sameFloor = Math.abs(leader.body.footY - this.body.footY) < 0.75;
-      if (dist > 1.9 || !sameFloor) {
+      const goalDist = Math.hypot(goal.x - this.body.px, goal.z - this.body.pz);
+      if (dist > 1.9 + slot * 0.6 || !sameFloor || (goalClear && goalDist > 0.9)) {
         const fres = this.nav.step(
-          { x: leader.body.px, y: leader.body.footY, z: leader.body.pz },
+          goal,
           SWAT_COMBAT.moveSpeed * Math.min(1, SWEEP_SPEED * (dist > 4 ? 1.35 : 1)),
           dt,
-          { canOpenDoors: true, canUseStairs: true, faceTravel: true, arriveDist: 1.7 },
+          { canOpenDoors: true, canUseStairs: true, faceTravel: true, arriveDist: goalClear ? 0.6 : 1.7 },
         );
         if (fres === 'blocked') this.noteBlocked();
       } else {
-        this.scanAround(dt, leader.body.yawRad + Math.PI * 0.9);
+        this.scanAround(dt, leader.body.yawRad + Math.PI * (count > 1 ? (side < 0 ? 0.65 : 1.35) : 0.9));
       }
       return;
     }
@@ -690,7 +756,7 @@ export class SwatTeam {
     for (let i = 0; i < spawns.length; i++) {
       const h = new SwatHunter(
         `swat_${i + 1}`,
-        CALLSIGNS[i % CALLSIGNS.length]!,
+        `Red-${i + 1}`,
         NAMES[i % NAMES.length]!,
         spawns[i]!,
         this,
@@ -698,11 +764,11 @@ export class SwatTeam {
         d.bus,
         d.textures,
       );
-      if (i % 2 === 1) h.leader = this.hunters[i - 1] ?? null;
       this.hunters.push(h);
       this.root.add(h.body.group);
       d.weapons.addTarget(h);
     }
+    this.assignCells();
     // 建物の方を向いて待機
     const focus = this.rooms[0];
     if (focus) for (const h of this.hunters) h.body.faceToward(focus.x, focus.z);
@@ -738,6 +804,20 @@ export class SwatTeam {
     );
   }
 
+  /** 隊員をツーマン／スリーマンセルに組み、組ごとにコールサインを振る */
+  private assignCells(): void {
+    let i = 0;
+    cellSizes(this.hunters.length).forEach((size, c) => {
+      const members = this.hunters.slice(i, i + size);
+      const name = CELL_NAMES[c % CELL_NAMES.length]!;
+      members.forEach((m, k) => {
+        m.cell = members;
+        m.callsign = `${name}-${k + 1}`;
+      });
+      i += size;
+    });
+  }
+
   get playerCrouching(): boolean {
     return this.d.player.isCrouching;
   }
@@ -758,7 +838,7 @@ export class SwatTeam {
   withdraw(): boolean {
     if (this.started || this.hunters.length <= 1) return false;
     const h = this.hunters.pop()!;
-    for (const x of this.hunters) if (x.leader === h) x.leader = null;
+    this.assignCells(); // 人数が変わったので組み直す（4 → 3 なら 2+2 → 3 人組 1 つ）
     this.d.weapons.removeTarget(h);
     this.root.remove(h.body.group);
     h.dispose();
@@ -828,8 +908,49 @@ export class SwatTeam {
     this.radioCd = Math.max(0, this.radioCd - dt);
     this.sightingAge += dt;
     for (const h of this.hunters) h.update(dt);
+    this.separate(dt);
     for (const h of this.pendingHunt) if (h.alive && h.state === 'sweep' && h.huntTarget) h.setState('hunt');
     this.pendingHunt.clear();
+  }
+
+  /**
+   * 隊員同士の重なりを解消する（交戦時に同じ遮蔽・ピーク位置を選んで 1 点に重なるのを防ぐ）。
+   * 押し出し先が壁・家具に掛かる場合は動かさない。
+   */
+  private separate(dt: number): void {
+    const hs = this.hunters;
+    const maxPush = SEPARATION_SPEED * dt;
+    for (let i = 0; i < hs.length; i++) {
+      const a = hs[i]!;
+      if (!a.alive || a.state === 'staging') continue;
+      for (let j = i + 1; j < hs.length; j++) {
+        const b = hs[j]!;
+        if (!b.alive || b.state === 'staging') continue;
+        if (Math.abs(a.body.footY - b.body.footY) > 0.6) continue;
+        let dx = b.body.px - a.body.px;
+        let dz = b.body.pz - a.body.pz;
+        let d = Math.hypot(dx, dz);
+        if (d >= SEPARATION_DIST) continue;
+        if (d < 1e-4) {
+          // 完全一致: 序列で決まる方向へ分ける
+          dx = Math.cos(i * 2.4);
+          dz = Math.sin(i * 2.4);
+          d = 1;
+        }
+        const push = Math.min(maxPush, (SEPARATION_DIST - Math.min(d, SEPARATION_DIST)) / 2);
+        const ux = dx / d;
+        const uz = dz / d;
+        this.nudge(a, -ux * push, -uz * push);
+        this.nudge(b, ux * push, uz * push);
+      }
+    }
+  }
+
+  private nudge(h: SwatHunter, dx: number, dz: number): void {
+    const x = h.body.px + dx;
+    const z = h.body.pz + dz;
+    if (blockedAtFiltered(this.d.colliders, x, z, 0.3, h.body.footY)) return;
+    h.body.setPosition(x, z, h.body.footY);
   }
 
   getMinimapStates(): { name: string; x: number; z: number; y: number; yawRad: number; down: boolean }[] {
@@ -914,12 +1035,11 @@ export class SwatTeam {
   }
 
   private onManDown(h: SwatHunter): void {
-    const buddy = this.hunters.find((x) => x.alive && (x.leader === h || h.leader === x));
+    const buddy = h.cell.find((x) => x !== h && x.alive);
     const speaker = buddy ?? this.firstAlive();
     if (this.aliveCount === 0) return;
     this.radio(speaker, `${h.callsign} ダウン！ 隊員負傷、警戒しろ！`, `${h.callsign} is down! Officer down!`, true);
-    // 相方を失った隊員は独立して行動
-    for (const x of this.hunters) if (x.leader === h) x.leader = null;
+    // 組のリーダーが倒れたら次の序列の隊員が自動的にリーダーを引き継ぐ（leader ゲッター）。相方が全滅すれば単独行動
     const p = this.d.player.position;
     this.alertTeam({ x: p.x, y: p.y, z: p.z }, true);
   }

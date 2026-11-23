@@ -195,7 +195,7 @@ export class CommandMenu {
 
     this.ctxEl.className = 'cqb-cmd-ctx';
     this.footEl.className = 'cqb-cmd-foot';
-    this.footEl.textContent = '[1-8 / 左クリック / 右離し] 実行   [T] 隊員切替   [中クリック] 中止';
+    this.footEl.textContent = '[1-8 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止';
     this.menuEl.append(head, this.ctxEl, this.listEl, this.footEl);
     document.body.appendChild(this.menuEl);
 
