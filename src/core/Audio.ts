@@ -336,6 +336,74 @@ export class AudioEngine {
   }
 
   /**
+   * 一人称リロードの機械音（自分の手元なので非空間化）。
+   * - `out`: 弾倉リリース（軽いクリック＋擦れ）
+   * - `in`: 弾倉を叩き込む（低めの打撃＋金属クリック）
+   * - `rack`: チャージングハンドル（2 段のスライド音）
+   * - `click`: 弾倉の無い装備の装填音
+   */
+  public playReload(kind: 'out' | 'in' | 'rack' | 'click'): void {
+    const ready = this.getReadyContext();
+    if (!ready) return;
+    const { ctx, masterLowpass, noiseBuffer } = ready;
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0.55;
+    out.connect(masterLowpass);
+    const sources: AudioScheduledSourceNode[] = [];
+    const nodes: AudioNode[] = [out];
+    const click = (t: number, freq: number, gain: number, dur: number): void => {
+      const n = this.createNoiseSource(ctx, noiseBuffer);
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = freq;
+      f.Q.value = 3.5;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(EPSILON, now + t);
+      g.gain.linearRampToValueAtTime(gain, now + t + 0.002);
+      g.gain.exponentialRampToValueAtTime(EPSILON, now + t + dur);
+      n.connect(f);
+      f.connect(g);
+      g.connect(out);
+      n.start(now + t, this.randomNoiseOffset(dur), dur + 0.01);
+      sources.push(n);
+      nodes.push(n, f, g);
+    };
+    const thump = (t: number, freq: number, gain: number, dur: number): void => {
+      const o = ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(freq, now + t);
+      o.frequency.exponentialRampToValueAtTime(freq * 0.5, now + t + dur);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(EPSILON, now + t);
+      g.gain.linearRampToValueAtTime(gain, now + t + 0.003);
+      g.gain.exponentialRampToValueAtTime(EPSILON, now + t + dur);
+      o.connect(g);
+      g.connect(out);
+      o.start(now + t);
+      o.stop(now + t + dur + 0.01);
+      sources.push(o);
+      nodes.push(o, g);
+    };
+    if (kind === 'out') {
+      click(0, 3200, 0.22, 0.03);
+      click(0.03, 1400, 0.08, 0.09);
+    } else if (kind === 'in') {
+      thump(0, 180, 0.2, 0.07);
+      click(0, 2400, 0.3, 0.035);
+      click(0.04, 4200, 0.16, 0.02);
+    } else if (kind === 'rack') {
+      click(0, 1800, 0.18, 0.06);
+      click(0.12, 2600, 0.3, 0.04);
+      thump(0.12, 240, 0.1, 0.05);
+    } else {
+      click(0, 2800, 0.2, 0.03);
+      click(0.06, 1600, 0.1, 0.05);
+    }
+    this.registerVoice(sources, nodes);
+  }
+
+  /**
    * Radius-differentiated procedural gunshot:
    * - `radius >= 25` (rifle=40 / smg=30): sharp transient crack + low punch + decaying tail.
    * - `10 <= radius < 25` (pepperball=15): pneumatic pop/thump.

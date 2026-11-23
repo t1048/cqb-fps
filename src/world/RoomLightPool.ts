@@ -16,6 +16,7 @@ export interface LightSpot {
  */
 export const ROOM_LIGHT_SLOTS = 8;
 const RESELECT_SEC = 0.2;
+const SHADOW_MAP = 512;
 const FADE_PER_SEC = 5;
 /** 階が違う照明は壁・床越しにしか届かないので距離を割増して優先度を下げる。 */
 const VERTICAL_WEIGHT = 3;
@@ -31,6 +32,8 @@ export class RoomLightPool {
   private readonly slots: Slot[] = [];
   private timer = 0;
   private readonly wanted = new Set<LightSpot>();
+  /** 最寄りの照明（影付きスロットへ回す） */
+  private nearest: LightSpot | null = null;
 
   constructor(
     private readonly spots: readonly LightSpot[],
@@ -40,6 +43,15 @@ export class RoomLightPool {
     for (let i = 0; i < n; i++) {
       const light = new THREE.PointLight(0xffffff, 0, 1, 1);
       light.name = 'room-light';
+      if (i === 0) {
+        // 先頭スロットだけ影を落とす（キューブ影 6 面描画なので 1 灯に限定）
+        light.castShadow = true;
+        light.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP);
+        light.shadow.bias = -0.004;
+        light.shadow.normalBias = 0.03;
+        light.shadow.radius = 3;
+        light.shadow.camera.near = 0.15;
+      }
       parent.add(light);
       this.slots.push({ light, spot: null, w: 0 });
     }
@@ -51,27 +63,48 @@ export class RoomLightPool {
       this.timer = RESELECT_SEC;
       this.select(eye);
     }
+    const shadow = this.slots[0]!;
+    const near = this.nearest;
+    // 影スロットが最寄り以外を照らしていたらフェードアウトさせて空ける
+    const shadowBusyElse = shadow.spot !== null && shadow.spot !== near;
     for (const s of this.slots) {
-      if (s.spot && !this.wanted.has(s.spot)) {
+      if (s === shadow && shadowBusyElse) {
+        s.w = Math.max(0, s.w - dt * FADE_PER_SEC);
+        if (s.w === 0) s.spot = null;
+      } else if (s.spot && !this.wanted.has(s.spot)) {
         s.w = Math.max(0, s.w - dt * FADE_PER_SEC);
         if (s.w === 0) s.spot = null;
       } else if (s.spot) {
         s.w = Math.min(1, s.w + dt * FADE_PER_SEC);
       }
     }
+    // 影スロットが空いたら最寄り照明を移す（通常スロットの明るさを引き継ぐので切替は見えない）
+    if (near && shadow.spot === null) {
+      const holder = this.slots.find((s) => s.spot === near);
+      this.assign(shadow, near, holder ? holder.w : 0);
+      if (holder) {
+        holder.spot = null;
+        holder.w = 0;
+      }
+    }
     // 空きスロットへ未割当の希望照明を入れる
     for (const spot of this.wanted) {
       if (this.slots.some((s) => s.spot === spot)) continue;
-      const free = this.slots.find((s) => s.spot === null);
+      const free = this.slots.find((s) => s.spot === null && (s !== shadow || spot === near));
       if (!free) break;
-      free.spot = spot;
-      free.w = 0;
-      free.light.color.setHex(spot.color);
-      free.light.distance = spot.distance;
-      free.light.decay = spot.decay;
-      free.light.position.set(spot.x, spot.y, spot.z);
+      this.assign(free, spot, 0);
     }
     for (const s of this.slots) s.light.intensity = s.spot ? s.spot.intensity * s.w : 0;
+  }
+
+  private assign(s: Slot, spot: LightSpot, w: number): void {
+    s.spot = spot;
+    s.w = w;
+    s.light.color.setHex(spot.color);
+    s.light.distance = spot.distance;
+    s.light.decay = spot.decay;
+    s.light.position.set(spot.x, spot.y, spot.z);
+    if (s.light.castShadow) s.light.shadow.camera.far = Math.max(1, spot.distance);
   }
 
   /** 初回など、フェード無しで即座に近傍照明を点ける。 */
@@ -97,6 +130,7 @@ export class RoomLightPool {
     });
     scored.sort((a, b) => a.d - b.d);
     this.wanted.clear();
+    this.nearest = scored[0]?.spot ?? null;
     for (let i = 0; i < n && i < scored.length; i++) this.wanted.add(scored[i]!.spot);
   }
 }

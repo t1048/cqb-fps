@@ -68,6 +68,8 @@ const TONE_COLOR: Record<NegotiationLine['tone'], string> = {
 };
 
 const STYLE_ID = 'negotiation-phase-style';
+/** オート交渉で進める手数（全ターンは使わず「交渉した感」だけ出す） */
+const AUTO_ROUNDS = 3;
 const CSS = `
 .ngp-root{position:fixed;inset:0;z-index:15;display:none;align-items:center;justify-content:center;padding:2vh 2vw;box-sizing:border-box;background:rgba(6,10,16,.92);color:#e6eef8;font:16px/1.55 sans-serif}
 .ngp-card{width:100%;max-width:1320px;max-height:96vh;overflow:auto;background:#111822;border:1px solid #3a5170;border-radius:10px;padding:24px 30px;box-sizing:border-box;box-shadow:0 14px 40px rgba(0,0,0,.7)}
@@ -109,6 +111,23 @@ const CSS = `
 .ngp-help{font-size:14px;color:#8399b0}
 .ngp-finish{padding:14px 32px;font:bold 18px sans-serif;color:#0a121a;background:#f2c14e;border:none;border-radius:8px;cursor:pointer}
 .ngp-finish:hover{background:#ffd36b}
+.ngp-actions{display:flex;gap:10px;flex-wrap:wrap}
+.ngp-auto{padding:14px 24px;font:bold 18px sans-serif;color:#e6eef8;background:#2a4562;border:2px solid #5d8dbd;border-radius:8px;cursor:pointer}
+.ngp-auto:hover{background:#34587d}
+.ngp-pop{position:fixed;inset:0;z-index:16;display:flex;align-items:center;justify-content:center;background:rgba(4,7,12,.7);animation:ngp-fade .18s ease-out}
+.ngp-pop-card{width:min(560px,92vw);max-height:90vh;overflow:auto;background:#121b26;border:1px solid #4b6a8e;border-radius:12px;padding:22px 26px;box-shadow:0 18px 50px rgba(0,0,0,.75);animation:ngp-rise .25s ease-out}
+.ngp-pop-title{font:bold 24px sans-serif;color:#f4f8fc;margin-bottom:4px}
+.ngp-pop-sub{font:14px sans-serif;color:#9fb2c6;margin-bottom:14px}
+.ngp-pop-sec{font:bold 13px sans-serif;letter-spacing:.08em;margin:12px 0 6px}
+.ngp-pop-item{font:15px/1.5 sans-serif;padding:7px 10px;border-radius:6px;margin-bottom:5px;opacity:0;animation:ngp-in .3s ease-out forwards}
+.ngp-pop-good{background:rgba(92,214,125,.13);color:#9af2b2;border-left:3px solid #5cd67d}
+.ngp-pop-bad{background:rgba(255,110,110,.12);color:#ffaaaa;border-left:3px solid #ff6e6e}
+.ngp-pop-none{font:14px sans-serif;color:#7d8fa3;margin-bottom:5px}
+.ngp-pop-go{margin-top:16px;width:100%;padding:14px;font:bold 19px sans-serif;color:#0a121a;background:#f2c14e;border:none;border-radius:8px;cursor:pointer}
+.ngp-pop-go:hover{background:#ffd36b}
+@keyframes ngp-fade{from{opacity:0}to{opacity:1}}
+@keyframes ngp-rise{from{transform:translateY(16px) scale(.97);opacity:0}to{transform:none;opacity:1}}
+@keyframes ngp-in{from{transform:translateX(-8px);opacity:0}to{transform:none;opacity:1}}
 @media (max-width:640px){.ngp-card{padding:16px}.ngp-title{font-size:22px}.ngp-options{grid-template-columns:1fr}}
 `;
 
@@ -129,6 +148,9 @@ export class NegotiationPhase {
   private readonly metersEl = el('div', 'ngp-meters');
   private readonly optionsEl = el('div', 'ngp-options');
   private readonly finishBtn = el('button', 'ngp-finish');
+  private readonly autoBtn = el('button', 'ngp-auto', '⚡ オート交渉 (A)');
+  private popup: HTMLElement | null = null;
+  private lastLines: NegotiationLine[] = [];
   private visible = false;
   private disposed = false;
 
@@ -153,7 +175,12 @@ export class NegotiationPhase {
     footer.appendChild(el('div', 'ngp-help', '数字キー 1〜9 / クリックで選択 ・ 緑 = 得るもの　赤 = 失うもの　点線 = 失敗したとき'));
     this.finishBtn.type = 'button';
     this.finishBtn.addEventListener('click', this.finish);
-    footer.appendChild(this.finishBtn);
+    this.autoBtn.type = 'button';
+    this.autoBtn.title = '交渉をおまかせで数手進め、結果だけ見てすぐ突入する';
+    this.autoBtn.addEventListener('click', this.auto);
+    const actions = el('div', 'ngp-actions');
+    actions.append(this.autoBtn, this.finishBtn);
+    footer.appendChild(actions);
 
     card.append(
       el('div', 'ngp-badge', 'NEGOTIATION — 突入前交渉'),
@@ -199,7 +226,8 @@ export class NegotiationPhase {
     const sep = document.createElement('div');
     sep.style.cssText = 'border-top:1px dashed #2a3c52;margin:8px 0';
     this.logEl.appendChild(sep);
-    for (const l of opt.run()) this.pushLine(l);
+    this.lastLines = opt.run();
+    for (const l of this.lastLines) this.pushLine(l);
     if (this.scenario.isOver() || this.scenario.turnsLeft() <= 0) {
       const sep2 = document.createElement('div');
       sep2.style.cssText = 'border-top:1px solid #4a5a70;margin:10px 0 6px';
@@ -279,15 +307,108 @@ export class NegotiationPhase {
     this.finishBtn.textContent = `${this.scenario.finishLabel} (Enter)`;
   }
 
+  /**
+   * オート交渉: 決裂の危険がない選択肢から成功率重視でランダムに数手選び、
+   * 得たもの / 失ったものをポップアップで見せてそのまま突入できるようにする。
+   */
+  private auto = (): void => {
+    if (this.disposed || !this.visible || this.popup) return;
+    const good: string[] = [];
+    const bad: string[] = [];
+    const rounds = Math.min(AUTO_ROUNDS, this.scenario.turnsLeft());
+    const used = new Set<number>();
+    for (let r = 0; r < rounds; r++) {
+      if (this.scenario.isOver() || this.scenario.turnsLeft() <= 0) break;
+      const pick = this.pickAuto(used);
+      if (pick < 0) break;
+      const opt = this.scenario.options[pick]!;
+      // 実行前の効果見込み（実行後は状況が変わるので先に取る）
+      const fx = opt.effects?.() ?? {};
+      const chance = opt.chance?.() ?? null;
+      const before = this.logEl.childElementCount;
+      this.choose(pick);
+      if (this.logEl.childElementCount === before) break;
+      used.add(pick);
+      const name = `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`;
+      const lines = this.lastLines;
+      const failed = chance !== null && lines.some((l) => l.tone === 'bad') && !lines.some((l) => l.tone === 'good');
+      if (failed) {
+        bad.push(`${name} — 失敗${fx.fail?.length ? '：' + fx.fail.join(' / ') : ''}`);
+      } else {
+        if (fx.gain?.length) good.push(`${name}：${fx.gain.join(' / ')}`);
+        if (fx.cost?.length) bad.push(`${name}：${fx.cost.join(' / ')}`);
+      }
+      // 決裂など、見込みに無い重大な結果は原文で
+      for (const l of lines) if (l.tone === 'bad' && /決裂|殺害/.test(l.text)) bad.push(l.text);
+    }
+    this.showPopup(good, bad);
+  };
+
+  private pickAuto(used: ReadonlySet<number>): number {
+    const all: { i: number; w: number; c: number }[] = [];
+    this.scenario.options.forEach((opt, i) => {
+      if (opt.disabledReason() !== null) return;
+      const fx = opt.effects?.() ?? {};
+      if (fx.warn) return; // 決裂リスクのある手は避ける
+      const c = opt.chance?.() ?? 1;
+      // 成功しやすく得るものが多い手ほど選ばれやすい。同じ手の連打は避ける
+      const w = c * c * (1 + 0.25 * (fx.gain?.length ?? 0)) * (used.has(i) ? 0.3 : 1);
+      all.push({ i, w, c });
+    });
+    // 分の悪い賭け（成功率 35% 未満）は他に手が無いときだけ
+    const sane = all.filter((x) => x.c >= 0.35);
+    const cands = sane.length > 0 ? sane : all;
+    if (cands.length === 0) return -1;
+    let r = Math.random() * cands.reduce((a, b) => a + b.w, 0);
+    for (const c of cands) {
+      r -= c.w;
+      if (r <= 0) return c.i;
+    }
+    return cands[cands.length - 1]!.i;
+  }
+
+  private showPopup(good: string[], bad: string[]): void {
+    const pop = el('div', 'ngp-pop');
+    const card = el('div', 'ngp-pop-card');
+    card.append(el('div', 'ngp-pop-title', '📞 交渉結果'), el('div', 'ngp-pop-sub', 'おまかせで交渉を進めた。'));
+    let delay = 0;
+    const section = (title: string, color: string, items: string[], cls: string, none: string): void => {
+      const h = el('div', 'ngp-pop-sec', title);
+      h.style.color = color;
+      card.appendChild(h);
+      if (items.length === 0) card.appendChild(el('div', 'ngp-pop-none', none));
+      for (const t of items) {
+        const it = el('div', `ngp-pop-item ${cls}`, t);
+        it.style.animationDelay = `${(delay += 0.12)}s`;
+        card.appendChild(it);
+      }
+    };
+    section('▲ 得たもの', '#8ff0a8', good, 'ngp-pop-good', '特になし');
+    section('▼ デメリット', '#ff9a9a', bad, 'ngp-pop-bad', '特になし');
+    const go = el('button', 'ngp-pop-go', `${this.scenario.finishLabel} (Enter)`);
+    go.type = 'button';
+    go.addEventListener('click', this.finish);
+    card.appendChild(go);
+    pop.appendChild(card);
+    this.root.appendChild(pop);
+    this.popup = pop;
+    go.focus();
+  }
+
   private finish = (): void => {
     if (this.disposed || !this.visible) return;
+    this.popup?.remove();
+    this.popup = null;
     this.hide();
     this.onFinish();
   };
 
   private onKey = (e: KeyboardEvent): void => {
     if (this.disposed || !this.visible || e.repeat) return;
-    if (/^(Digit|Numpad)[1-9]$/.test(e.code)) {
+    if (e.code === 'KeyA' && !this.popup) {
+      e.preventDefault();
+      this.auto();
+    } else if (/^(Digit|Numpad)[1-9]$/.test(e.code) && !this.popup) {
       e.preventDefault();
       this.choose(Number(e.code.slice(-1)) - 1);
     } else if (e.code === 'Enter' || e.code === 'NumpadEnter') {
@@ -301,6 +422,7 @@ export class NegotiationPhase {
     this.hide();
     this.disposed = true;
     this.finishBtn.removeEventListener('click', this.finish);
+    this.autoBtn.removeEventListener('click', this.auto);
     this.root.remove();
   }
 }

@@ -2,7 +2,7 @@ import type * as THREE from 'three';
 
 /** 解像度倍率の上限（高 DPI でも 1.5 まで。2 倍は描画ピクセル数が 1.8 倍に増える割に見た目の差が小さい）。 */
 const MAX_RATIO = 1.5;
-const MIN_RATIO = 0.6;
+export const MIN_RATIO = 0.6;
 const STEP = 0.15;
 /** この FPS を下回り続けたら解像度を下げる。 */
 const LOW_FPS = 48;
@@ -26,6 +26,8 @@ export class AdaptiveResolution {
   private fpsBeforeDrop = 0;
   private ratioBeforeDrop = 0;
   private frozen = false;
+  /** 倍率が変わったとき（ポストプロセスのバッファ追従用） */
+  onChange: ((ratio: number) => void) | null = null;
 
   constructor(private readonly renderer: THREE.WebGLRenderer) {
     this.ceiling = Math.min(window.devicePixelRatio || 1, MAX_RATIO);
@@ -75,5 +77,6 @@ export class AdaptiveResolution {
     if (next === this.ratio) return;
     this.ratio = next;
     this.renderer.setPixelRatio(next);
+    this.onChange?.(next);
   }
 }
