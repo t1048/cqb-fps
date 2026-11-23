@@ -28,15 +28,15 @@ import type { Subtitle } from '../ui/Subtitle';
  * 通常モードの容疑者プロファイルは変えない。開けた場所では危険だが、遮蔽と短いピークの隙で撃ち返せる強さ。
  */
 const SWAT_COMBAT: CombatParams = {
-  decisionSec: 0.95,
+  decisionSec: 0.7,
   alertCalmSec: 10,
   hesitateFireSec: 3,
   hesitateRetreatSpeed: 0.8,
   hesitateRetreatMax: 1.5,
   hesitateShakeDeg: 0,
   moveSpeed: 2.15,
-  fireInterval: 0.28,
-  shotsPerPeek: 3,
+  fireInterval: 0.2,
+  shotsPerPeek: 4,
   magazineSize: 30,
   reloadSec: 2.2,
   coverSecMin: 0.9,
@@ -48,8 +48,8 @@ const SWAT_COMBAT: CombatParams = {
   crouchCoverMaxHeight: 1.5,
   flinchSec: 0.35,
   gunshotNoiseRadius: 40,
-  shotDamage: 12,
-  baseSpreadDeg: 5.2,
+  shotDamage: 13,
+  baseSpreadDeg: 3.2,
 };
 
 const SWAT_MOBILITY: MobilityParams = {
@@ -75,8 +75,8 @@ const SWAT_MOBILITY: MobilityParams = {
 const SHIELD_COMBAT: CombatParams = {
   ...SWAT_COMBAT,
   moveSpeed: 1.75,
-  fireInterval: 0.42,
-  shotsPerPeek: 4,
+  fireInterval: 0.32,
+  shotsPerPeek: 5,
   magazineSize: 15,
   reloadSec: 1.8,
   coverSecMin: 0.25,
@@ -84,7 +84,7 @@ const SHIELD_COMBAT: CombatParams = {
   peekSecMax: 2.4,
   coverSearchRange: 0,
   shotDamage: 9,
-  baseSpreadDeg: 3.8,
+  baseSpreadDeg: 2.6,
 };
 const SHIELD_MOBILITY: MobilityParams = {
   ...SWAT_MOBILITY,
@@ -124,7 +124,8 @@ const HP = 100;
 const VISION_FOV_DEG = 86;
 const VISION_RANGE = 16;
 const VISION_RANGE_CROUCH = 11;
-const REACTION_SEC = 0.7;
+/** 視認してから反応して交戦に入るまで。圧力で短くなる（SwatTeam が更新） */
+const BASE_REACTION_SEC = 0.4;
 const HEARING_MUL = 1.0;
 const OCCLUDED_MUL = 0.5;
 const ENGAGE_LOST_SEC = 5;
@@ -445,7 +446,7 @@ class SwatHunter implements HitTarget {
         return;
       }
       this.spotTimer += dt;
-      if (this.spotTimer < REACTION_SEC) return;
+      if (this.spotTimer < this.team.reactionSec) return;
       this.spotTimer = 0;
       this.known = { x: threat.x, y: p.position.y, z: threat.z };
       this.team.onContact(this, this.known);
@@ -883,6 +884,7 @@ export class SwatTeam {
   private pressure = 0;
   private pressureTick = 0;
   private pressureStep = 0;
+  reactionSec = BASE_REACTION_SEC;
   private intelCd = 0;
   private contactCd = 0;
   private radioCd = 0;
@@ -968,7 +970,7 @@ export class SwatTeam {
           const m = 0.12;
           if (e.pos.x < b.min.x - m || e.pos.x > b.max.x + m || e.pos.z < b.min.z - m || e.pos.z > b.max.z + m || e.pos.y > b.max.y + m) continue;
           this.shieldHintShown = true;
-          d.subtitle.show('防弾盾に弾かれた！ 足元を撃つか、側面・背後へ回り込め', 2.6);
+          d.subtitle.show('防弾盾に弾かれた！ 腰より下を撃つか、側面・背後へ回り込め', 2.6);
           return;
         }
       }),
@@ -1297,20 +1299,21 @@ export class SwatTeam {
   private applyPressure(): void {
     const t = Math.min(1, this.assaultSec / PRESSURE_RAMP_SEC + this.downBonus);
     this.pressure = t;
+    this.reactionSec = lerp(BASE_REACTION_SEC, 0.2, t);
     const c = SWAT_COMBAT;
     const b = BASE_COMBAT;
     c.coverSecMin = lerp(b.coverSecMin, 0.35, t);
     c.coverSecMax = lerp(b.coverSecMax, 0.8, t);
-    c.fireInterval = lerp(b.fireInterval, 0.2, t);
-    c.baseSpreadDeg = lerp(b.baseSpreadDeg, 3.6, t);
-    c.shotsPerPeek = Math.round(lerp(b.shotsPerPeek, 5, t));
+    c.fireInterval = lerp(b.fireInterval, 0.14, t);
+    c.baseSpreadDeg = lerp(b.baseSpreadDeg, 2.0, t);
+    c.shotsPerPeek = Math.round(lerp(b.shotsPerPeek, 6, t));
     c.peekSecMax = lerp(b.peekSecMax, 2.1, t);
     c.moveSpeed = lerp(b.moveSpeed, 2.55, t);
     c.decisionSec = lerp(b.decisionSec, 0.5, t);
     const sc = SHIELD_COMBAT;
     const sb = BASE_SHIELD_COMBAT;
-    sc.fireInterval = lerp(sb.fireInterval, 0.3, t);
-    sc.baseSpreadDeg = lerp(sb.baseSpreadDeg, 2.8, t);
+    sc.fireInterval = lerp(sb.fireInterval, 0.22, t);
+    sc.baseSpreadDeg = lerp(sb.baseSpreadDeg, 1.8, t);
     sc.moveSpeed = lerp(sb.moveSpeed, 2.1, t);
     sc.decisionSec = c.decisionSec;
     const m = SWAT_MOBILITY;

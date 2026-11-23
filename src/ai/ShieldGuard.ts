@@ -1,7 +1,8 @@
 import type { Vec3 } from '../core/types';
 
-/** 盾が守る下端（立ち姿勢での足元からの高さ m）。これより低い位置（脛・足）は撃たれる */
-export const SHIELD_BOTTOM = 0.42;
+/** 盾が守る範囲（立ち姿勢での足元からの高さ m）。腰より下と、頭頂部は撃たれる */
+export const SHIELD_BOTTOM = 0.75;
+export const SHIELD_TOP = 1.6;
 /** 盾が守る正面の扇（片側 °）。側面・背後からは普通に撃てる */
 export const SHIELD_HALF_ARC_DEG = 65;
 const COS_ARC = Math.cos((SHIELD_HALF_ARC_DEG * Math.PI) / 180);
@@ -23,8 +24,10 @@ export interface ShieldBearer {
  */
 export function shieldBlocks(b: ShieldBearer, from: Vec3, hit: Vec3): boolean {
   if (!b.hasShield || b.isDown) return false;
-  const bottom = SHIELD_BOTTOM * Math.min(1, b.height / STAND_H);
-  if (hit.y - b.footY <= bottom) return false;
+  // しゃがむと盾も体と一緒に下がる
+  const drop = Math.max(0, STAND_H - b.height);
+  const y = hit.y - b.footY;
+  if (y <= SHIELD_BOTTOM - drop || y > SHIELD_TOP - drop) return false;
   const sx = from.x - b.px;
   const sz = from.z - b.pz;
   const l = Math.hypot(sx, sz);

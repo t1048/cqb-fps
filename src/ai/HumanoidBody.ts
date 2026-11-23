@@ -162,14 +162,14 @@ export class HumanoidBody {
       const edge = this.makeMat(tex, 'metal', 0x3a4250, 0.5);
       const glass = new THREE.MeshStandardMaterial({ color: 0x6f8fa8, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.55 });
       this.mats.push(glass);
-      // 足元から 0.42m〜頭の高さまで。窓付きの大型防弾盾
-      const top = 1.74;
-      const bottom = 0.42;
-      this.part(this.geo(new THREE.BoxGeometry(0.64, top - bottom, 0.045)), plate, g, 0, (top + bottom) / 2, 0);
-      this.part(this.geo(new THREE.BoxGeometry(0.68, 0.04, 0.06)), edge, g, 0, top, 0);
-      this.part(this.geo(new THREE.BoxGeometry(0.68, 0.04, 0.06)), edge, g, 0, bottom, 0);
-      for (const sx of [-1, 1]) this.part(this.geo(new THREE.BoxGeometry(0.04, top - bottom, 0.06)), edge, g, sx * 0.32, (top + bottom) / 2, 0);
-      this.part(this.geo(new THREE.BoxGeometry(0.4, 0.11, 0.05)), glass, g, 0, 1.52, 0.004);
+      // 腰〜顔の下まで（上半身を守る）。窓付きの防弾盾
+      const top = 1.6;
+      const bottom = 0.75;
+      this.part(this.geo(new THREE.BoxGeometry(0.5, top - bottom, 0.045)), plate, g, 0, (top + bottom) / 2, 0);
+      this.part(this.geo(new THREE.BoxGeometry(0.54, 0.04, 0.06)), edge, g, 0, top, 0);
+      this.part(this.geo(new THREE.BoxGeometry(0.54, 0.04, 0.06)), edge, g, 0, bottom, 0);
+      for (const sx of [-1, 1]) this.part(this.geo(new THREE.BoxGeometry(0.04, top - bottom, 0.06)), edge, g, sx * 0.25, (top + bottom) / 2, 0);
+      this.part(this.geo(new THREE.BoxGeometry(0.32, 0.1, 0.05)), glass, g, 0, 1.46, 0.004);
       g.position.set(0, 0, -0.5);
       this.rig.add(g);
       this.shieldMesh = g;
