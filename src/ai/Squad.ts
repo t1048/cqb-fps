@@ -30,6 +30,7 @@ import {
 } from './SquadRoute';
 import { blockedAt, resolveOverlap, stepToward, type XZ } from './EngageBehavior';
 import { layoutStackSlots } from './stackSlots';
+import { shieldBlocks } from './ShieldGuard';
 import { HumanoidBody } from './HumanoidBody';
 import { segmentHitsAABB } from './HostageShield';
 import type { EntityManager } from './EntityManager';
@@ -260,6 +261,8 @@ export class SquadSystem {
         role: 'ally',
         footY: def.y ?? 0,
         textures,
+        // 先頭の隊員（ポイントマン）は防弾盾 + ハンドガン: 盾越しに撃つ。足元・側面・背後以外の被弾は盾が止める
+        shield: index === 0 && defs.length >= 2,
       });
       body.setReadyPose('low');
       const label = new AIDebugLabel();
@@ -320,6 +323,7 @@ export class SquadSystem {
         stairPick: null,
         label,
         getAABB: () => body.getAABB(),
+        shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
       };
       this.allies.push(ally);
       this.root.add(body.group, label.sprite);
@@ -366,7 +370,7 @@ export class SquadSystem {
   }
 
   /** 視線が通る生存隊員の情報一覧（敵AI知覚・射撃ターゲット用）。 */
-  getLivingAllies(): readonly { id: string; px: number; pz: number; footY: number; height: number; getEye(): Vec3; getChest(): Vec3; getAABB(): ReturnType<HumanoidBody['getAABB']> }[] {
+  getLivingAllies(): readonly { id: string; px: number; pz: number; footY: number; height: number; getEye(): Vec3; getChest(): Vec3; getAABB(): ReturnType<HumanoidBody['getAABB']>; shieldBlocks(from: Vec3, hit: Vec3): boolean }[] {
     return this.allies
       .filter((a) => !a.down)
       .map((a) => ({
@@ -378,6 +382,7 @@ export class SquadSystem {
         getEye: () => a.body.eye(new THREE.Vector3()),
         getChest: () => a.body.chestPos(),
         getAABB: () => a.body.getAABB(),
+        shieldBlocks: (from, hit) => shieldBlocks(a.body, from, hit),
       }));
   }
 
@@ -2174,10 +2179,11 @@ export class SquadSystem {
     if (ally.holdingFire || ally.fireCd > 0) return;
     const bearing = Math.atan2(from.x - best.x, from.z - best.z);
     if (Math.cos(bearing - ally.body.yawRad) < Math.cos(Math.PI / 15)) return;
-    ally.fireCd = this.cfg.fireInterval;
+    const pistol = ally.body.hasShield;
+    ally.fireCd = this.cfg.fireInterval * (pistol ? 1.3 : 1);
     ally.body.showMuzzleFlash(0.06);
     const pos = ally.body.chestPos();
-    this.bus.emit('entityHit', { targetId: best.id, shooter: ally.id, damage: this.cfg.damage, pos: best.pos, weaponId: 'rifle' });
+    this.bus.emit('entityHit', { targetId: best.id, shooter: ally.id, damage: pistol ? Math.round(this.cfg.damage * 0.6) : this.cfg.damage, pos: best.pos, weaponId: pistol ? 'pistol' : 'rifle' });
     this.bus.emit('shotFired', { shooter: ally.id, pos });
     this.bus.emit('noise', { pos, radius: 30, kind: 'gunshot' });
   }

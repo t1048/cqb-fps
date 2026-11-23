@@ -13,6 +13,8 @@ const PLAYER_ID = 'player';
 export interface HitTarget {
   id: string;
   getAABB(): AABB;
+  /** 盾持ち: from から撃たれた弾が hit で盾に止められるか（足元・側面・背後は止まらない） */
+  shieldBlocks?(from: { x: number; y: number; z: number }, hit: { x: number; y: number; z: number }): boolean;
 }
 
 export interface ShotResult {
@@ -21,6 +23,8 @@ export interface ShotResult {
   /** 命中した標的 id（壁やミス時は null） */
   targetId: string | null;
   distance: number;
+  /** 盾持ちの盾に止められた（ダメージなし） */
+  shielded?: boolean;
 }
 
 /**
@@ -230,23 +234,35 @@ export class WeaponSystem {
     this.ray.direction.copy(dir);
     let best = range;
     let bestId: string | null = null;
+    let shielded = false;
 
     for (const c of this.colliders) {
       const d = this.rayDistance(c.aabb);
       if (d !== null && d < best) {
         best = d;
         bestId = null;
+        shielded = false;
       }
     }
     for (const t of this.targets) {
       const d = this.rayDistance(t.getAABB());
       if (d !== null && d < best) {
+        if (t.shieldBlocks) {
+          this.ray.at(d, this.hitPoint);
+          if (t.shieldBlocks(origin, this.hitPoint)) {
+            best = d;
+            bestId = null;
+            shielded = true;
+            continue;
+          }
+        }
         best = d;
         bestId = t.id;
+        shielded = false;
       }
     }
     this.ray.at(best, this.hitPoint);
-    return { point: this.hitPoint.clone(), targetId: bestId, distance: best };
+    return { point: this.hitPoint.clone(), targetId: bestId, distance: best, ...(shielded ? { shielded: true } : {}) };
   }
 
   private rayDistance(a: AABB): number | null {

@@ -37,6 +37,8 @@ export interface AllyTarget {
   getEye(): Vec3;
   getChest(): Vec3;
   getAABB(): AABB;
+  /** 盾持ち: from から撃たれた弾が hit で盾に止められるか */
+  shieldBlocks?(from: Vec3, hit: Vec3): boolean;
 }
 
 export interface CombatThreat {
@@ -1043,6 +1045,15 @@ export class EngageBehavior {
       for (const a of this.ctx.allies()) {
         const d = this.rayDist(a.getAABB());
         if (d !== null && d < bestT) {
+          if (a.shieldBlocks) {
+            this.ray.at(d, this.tmpHit);
+            if (a.shieldBlocks(pos, this.tmpHit)) {
+              bestT = d;
+              hitKind = 'wall';
+              hitAllyId = '';
+              continue;
+            }
+          }
           bestT = d;
           hitKind = 'ally';
           hitAllyId = a.id;

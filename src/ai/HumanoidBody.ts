@@ -11,6 +11,8 @@ export interface HumanoidOptions {
   role?: HumanoidRole;
   footY?: number;
   textures?: TextureLibrary;
+  /** 防弾盾 + ハンドガン（盾は脛より上の正面を覆う。足元は無防備） */
+  shield?: boolean;
 }
 
 const STAND_H = 1.75;
@@ -67,6 +69,9 @@ export class HumanoidBody {
   private restrainBlend = 0;
   private readonly cuffs = new THREE.Group();
   footY: number;
+  /** 防弾盾を構えている（盾越しにハンドガンを撃つ） */
+  readonly hasShield: boolean;
+  private readonly shieldMesh: THREE.Group | null = null;
 
   constructor(
     private x: number,
@@ -77,6 +82,7 @@ export class HumanoidBody {
     options: HumanoidOptions = {},
   ) {
     this.baseColor = color;
+    this.hasShield = options.shield === true;
     this.footY = options.footY ?? 0;
     const role = options.role ?? (armed ? 'suspect' : 'civilian');
     const tex = options.textures;
@@ -129,10 +135,16 @@ export class HumanoidBody {
       this.gun = new THREE.Group();
       const gunMat = this.makeMat(tex, 'metal', 0x22262a, 0.45);
       const wood = this.makeMat(tex, 'wood', 0x6b4424, 0.7);
-      this.part(this.geo(new THREE.BoxGeometry(0.04, 0.05, 0.42)), gunMat, this.gun, 0, 0.02, -0.12);
-      this.part(this.geo(new THREE.BoxGeometry(0.035, 0.08, 0.14)), wood, this.gun, 0, -0.02, 0.08);
-      this.part(this.geo(new THREE.BoxGeometry(0.03, 0.1, 0.04)), gunMat, this.gun, 0, -0.06, 0.02);
-      this.part(this.geo(new THREE.BoxGeometry(0.02, 0.03, 0.08)), gunMat, this.gun, 0, 0.05, -0.22);
+      if (this.hasShield) {
+        // ハンドガン（盾の裏で構える短い銃）
+        this.part(this.geo(new THREE.BoxGeometry(0.035, 0.045, 0.2)), gunMat, this.gun, 0, 0.02, -0.06);
+        this.part(this.geo(new THREE.BoxGeometry(0.03, 0.09, 0.045)), gunMat, this.gun, 0, -0.04, 0.03);
+      } else {
+        this.part(this.geo(new THREE.BoxGeometry(0.04, 0.05, 0.42)), gunMat, this.gun, 0, 0.02, -0.12);
+        this.part(this.geo(new THREE.BoxGeometry(0.035, 0.08, 0.14)), wood, this.gun, 0, -0.02, 0.08);
+        this.part(this.geo(new THREE.BoxGeometry(0.03, 0.1, 0.04)), gunMat, this.gun, 0, -0.06, 0.02);
+        this.part(this.geo(new THREE.BoxGeometry(0.02, 0.03, 0.08)), gunMat, this.gun, 0, 0.05, -0.22);
+      }
       this.rig.add(this.gun);
     } else {
       this.gun = null;
@@ -141,8 +153,27 @@ export class HumanoidBody {
     this.mats.push(muzzleMat);
     this.muzzle = new THREE.Mesh(this.geo(new THREE.BoxGeometry(0.08, 0.08, 0.08)), muzzleMat);
     this.muzzle.visible = false;
-    this.muzzle.position.set(0, 0.02, -0.36);
+    this.muzzle.position.set(0, 0.02, this.hasShield ? -0.17 : -0.36);
     this.gun?.add(this.muzzle);
+
+    if (this.hasShield) {
+      const g = new THREE.Group();
+      const plate = this.makeMat(tex, 'metal', 0x1c2430, 0.4);
+      const edge = this.makeMat(tex, 'metal', 0x3a4250, 0.5);
+      const glass = new THREE.MeshStandardMaterial({ color: 0x6f8fa8, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.55 });
+      this.mats.push(glass);
+      // 足元から 0.42m〜頭の高さまで。窓付きの大型防弾盾
+      const top = 1.74;
+      const bottom = 0.42;
+      this.part(this.geo(new THREE.BoxGeometry(0.64, top - bottom, 0.045)), plate, g, 0, (top + bottom) / 2, 0);
+      this.part(this.geo(new THREE.BoxGeometry(0.68, 0.04, 0.06)), edge, g, 0, top, 0);
+      this.part(this.geo(new THREE.BoxGeometry(0.68, 0.04, 0.06)), edge, g, 0, bottom, 0);
+      for (const sx of [-1, 1]) this.part(this.geo(new THREE.BoxGeometry(0.04, top - bottom, 0.06)), edge, g, sx * 0.32, (top + bottom) / 2, 0);
+      this.part(this.geo(new THREE.BoxGeometry(0.4, 0.11, 0.05)), glass, g, 0, 1.52, 0.004);
+      g.position.set(0, 0, -0.5);
+      this.rig.add(g);
+      this.shieldMesh = g;
+    }
 
     for (const child of [...this.rig.children]) {
       if (!this.legs.some(leg => leg.hip === child) && child !== this.gun) this.torso.add(child);
@@ -198,6 +229,7 @@ export class HumanoidBody {
     this.fallStart = this.rig.position.y;
     this.pose = pose;
     this.cloth.color.setHex(pose === 'down' ? 0x444444 : this.baseColor);
+    if (this.shieldMesh) this.shieldMesh.visible = pose !== 'down';
     this.placeWeapon();
   }
 
@@ -438,6 +470,10 @@ export class HumanoidBody {
     const limit = Math.min(maxTurn, 5 * this.lastDt);
     this.group.rotation.y += THREE.MathUtils.clamp(shortest, -limit, limit);
     this.torso.rotation.y = THREE.MathUtils.clamp(shortest, -0.26, 0.26);
+  }
+
+  get isDown(): boolean {
+    return this.pose === 'down';
   }
 
   get px(): number {
