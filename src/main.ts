@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { AdaptiveResolution } from './core/AdaptiveResolution';
 import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
@@ -52,6 +53,7 @@ type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'ended';
 /** 1 回の起動で生成した全リソースをまとめて破棄できるアプリ。リトライ = destroy → 再 create。 */
 class App {
   private readonly renderer: THREE.WebGLRenderer;
+  private readonly resolution: AdaptiveResolution;
   private readonly scene = new THREE.Scene();
   private readonly equipmentScene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -122,8 +124,8 @@ class App {
       swatCount = setup.swatCount;
     }
     this.mapId = map.id;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.resolution = new AdaptiveResolution(this.renderer);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(this.renderer.domElement);
 
@@ -406,8 +408,12 @@ class App {
       (window as unknown as { __cqbApp?: unknown }).__cqbApp = this;
     }
 
+    this.world.lights.snap(this.camera.position);
     this.loop = new GameLoop(
-      (dt) => this.update(dt),
+      (dt, raw) => {
+        this.resolution.sample(raw, this.phase === 'playing');
+        this.update(dt);
+      },
       () => this.render(),
     );
     this.loop.start();
@@ -479,6 +485,7 @@ class App {
     this.audio.update(dt);
     this.interaction.update(dt);
     this.doors.update(dt);
+    this.world.update(dt, this.camera.position);
     this.flashbang.update(dt);
     this.weapons.update(dt);
     this.entities.update(dt);

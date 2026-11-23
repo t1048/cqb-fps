@@ -107,7 +107,9 @@ export class Fortify {
   private readonly el = document.createElement('div');
   private lastText = '';
   private holdDone = false;
-  private readonly blasts: { mesh: THREE.Mesh; light: THREE.PointLight; t: number }[] = [];
+  private readonly blasts: { mesh: THREE.Mesh; t: number }[] = [];
+  /** 爆発の閃光。ライト数が変わると全マテリアルのシェーダが再コンパイルされて固まるので 1 灯を常設して使い回す。 */
+  private readonly blastLight = new THREE.PointLight(0xffa050, 0, 14, 2);
   private readonly unsubs: (() => void)[] = [];
   private readonly woodMat: THREE.MeshStandardMaterial;
   private readonly backMat: THREE.MeshStandardMaterial;
@@ -117,6 +119,7 @@ export class Fortify {
   constructor(private readonly d: FortifyDeps) {
     this.root.name = 'fortify';
     d.scene.add(this.root);
+    this.root.add(this.blastLight);
     this.woodMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x9a7a52, roughness: 0.85 });
     this.backMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x6e5236, roughness: 0.9 });
     for (const w of d.windows) this.barricades.push(this.makeBarricade(w));
@@ -392,10 +395,9 @@ export class Fortify {
     );
     mesh.position.set(center.x, center.y, center.z);
     mesh.scale.setScalar(0.2);
-    const light = new THREE.PointLight(0xffa050, 60, 14, 2);
-    light.position.copy(mesh.position);
-    this.root.add(mesh, light);
-    this.blasts.push({ mesh, light, t: 0 });
+    this.blastLight.position.copy(mesh.position);
+    this.root.add(mesh);
+    this.blasts.push({ mesh, t: 0 });
     this.d.bus.emit('noise', { pos, radius: 45, kind: 'breach', source: 'suspect' });
 
     // 巻き込み: SWAT（SwatTeam 側で処理）・プレイヤー・民間人
@@ -428,21 +430,22 @@ export class Fortify {
 
   update(rawDt: number): void {
     const dt = Math.min(rawDt, 0.05);
+    let flash = 0;
     for (let i = this.blasts.length - 1; i >= 0; i--) {
       const b = this.blasts[i]!;
       b.t += dt;
       const k = b.t / 0.45;
       b.mesh.scale.setScalar(0.2 + 2.6 * Math.min(1, k));
       (b.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.9 * (1 - k));
-      b.light.intensity = Math.max(0, 60 * (1 - b.t / 0.6));
+      flash = Math.max(flash, 60 * (1 - b.t / 0.6));
       if (b.t > 0.65) {
-        this.root.remove(b.mesh, b.light);
+        this.root.remove(b.mesh);
         b.mesh.geometry.dispose();
         (b.mesh.material as THREE.Material).dispose();
-        b.light.dispose();
         this.blasts.splice(i, 1);
       }
     }
+    this.blastLight.intensity = flash;
     if (this.d.isPrep()) this.updatePrep(dt);
     this.renderStatus();
   }

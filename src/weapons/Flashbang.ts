@@ -47,25 +47,45 @@ export function hasLineOfSight(colliders: readonly Collider[], a: Vec3, b: Vec3)
   return !someColliderAlongSegment(colliders, a.x, a.z, b.x, b.z, (c) => segmentHitsAABB(a, dx, dy, dz, c.aabb));
 }
 
+/** スラブ法。視線判定の最内ループなので配列を確保せず軸ごとに展開している。 */
 function segmentHitsAABB(o: Vec3, dx: number, dy: number, dz: number, box: AABB): boolean {
   let t0 = 0;
   let t1 = 1;
-  const axes: [number, number, number, number][] = [
-    [o.x, dx, box.min.x, box.max.x],
-    [o.y, dy, box.min.y, box.max.y],
-    [o.z, dz, box.min.z, box.max.z],
-  ];
-  for (const [org, d, mn, mx] of axes) {
-    if (Math.abs(d) < 1e-9) {
-      if (org < mn || org > mx) return false;
-    } else {
-      let ta = (mn - org) / d;
-      let tb = (mx - org) / d;
-      if (ta > tb) [ta, tb] = [tb, ta];
-      t0 = Math.max(t0, ta);
-      t1 = Math.min(t1, tb);
-      if (t0 > t1) return false;
-    }
+  // X
+  if (Math.abs(dx) < 1e-9) {
+    if (o.x < box.min.x || o.x > box.max.x) return false;
+  } else {
+    const inv = 1 / dx;
+    let ta = (box.min.x - o.x) * inv;
+    let tb = (box.max.x - o.x) * inv;
+    if (ta > tb) { const t = ta; ta = tb; tb = t; }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return false;
+  }
+  // Y
+  if (Math.abs(dy) < 1e-9) {
+    if (o.y < box.min.y || o.y > box.max.y) return false;
+  } else {
+    const inv = 1 / dy;
+    let ta = (box.min.y - o.y) * inv;
+    let tb = (box.max.y - o.y) * inv;
+    if (ta > tb) { const t = ta; ta = tb; tb = t; }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return false;
+  }
+  // Z
+  if (Math.abs(dz) < 1e-9) {
+    if (o.z < box.min.z || o.z > box.max.z) return false;
+  } else {
+    const inv = 1 / dz;
+    let ta = (box.min.z - o.z) * inv;
+    let tb = (box.max.z - o.z) * inv;
+    if (ta > tb) { const t = ta; ta = tb; tb = t; }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return false;
   }
   return true;
 }

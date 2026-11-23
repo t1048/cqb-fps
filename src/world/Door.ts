@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
 import { disposeObject } from '../core/dispose';
+import { batchStaticMeshes } from './StaticBatcher';
 import type { DoorConfig, DoorDef, MapData } from '../core/types';
 import type { InputManager } from '../core/InputManager';
 import type { PlayerController } from '../player/PlayerController';
@@ -163,6 +164,9 @@ export class Door {
       this.tmp.push({ min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } });
     }
     this.buildMesh();
+    // 扉板の部材（框・モール・金物）はピボットごとに 1〜数ドローへ統合する
+    batchStaticMeshes(this.pivot);
+    if (this.rightPivot) batchStaticMeshes(this.rightPivot);
     this.computeBoxes(0, this.colliders.map((c) => c.aabb));
     this.applyMesh();
   }
@@ -778,6 +782,8 @@ export class DoorSystem {
       this.root.add(door.root);
       for (const c of door.colliders) colliders.push(c);
     }
+    // 動かないドア枠は全ドア分をまとめて統合（扉板のピボット配下は除外）
+    batchStaticMeshes(this.root, { skip: (o) => o.name.startsWith('door-pivot'), cellSize: 16 });
     this.unregister = interaction.register<DoorTarget>({
       id: 'door',
       priority: 200,

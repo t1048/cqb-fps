@@ -1,5 +1,6 @@
 /** requestAnimationFrame ベースのゲームループ。delta は最大 0.05s にクランプ。 */
-export type UpdateFn = (delta: number) => void;
+/** delta はクランプ後、rawDelta は実測の経過秒。 */
+export type UpdateFn = (delta: number, rawDelta: number) => void;
 
 export class GameLoop {
   private rafId: number | null = null;
@@ -32,9 +33,10 @@ export class GameLoop {
 
   private tick = (now: number): void => {
     if (!this.running) return;
-    const delta = Math.min((now - this.last) / 1000, 0.05);
+    const raw = (now - this.last) / 1000;
+    const delta = Math.min(raw, 0.05);
     this.last = now;
-    this.update(delta);
+    this.update(delta, raw);
     this.render();
     this.rafId = requestAnimationFrame(this.tick);
   };

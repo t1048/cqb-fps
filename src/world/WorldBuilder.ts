@@ -5,6 +5,11 @@ import type { TextureLibrary, TextureName } from './Materials';
 import { buildItem, buildWindow } from './Props';
 import { isLegacyGroundMap, registerGroundPolicy, type StairMark } from './Walk';
 import { subtractRects, type Rect } from './generator/Layout';
+import { RoomLightPool, type LightSpot } from './RoomLightPool';
+import { batchStaticMeshes } from './StaticBatcher';
+
+/** 静的メッシュ統合の空間セル（m）。大きいほどドローコールが減り、小さいほどカリングが効く。 */
+const STATIC_BATCH_CELL = 16;
 
 /** XZ 平面 + 高さ範囲の軸平行ボックス（衝突判定用）。ワールド座標。 */
 export interface AABB {
@@ -85,6 +90,12 @@ export class WorldBuilder {
   readonly stairs: StairMark[] = [];
   private readonly materials: THREE.Material[] = [];
   private disposed = false;
+  private housingGeo?: THREE.BoxGeometry;
+  private housingMat?: THREE.MeshStandardMaterial;
+  private diffuserGeo?: THREE.BoxGeometry;
+  private diffuserMat?: THREE.MeshBasicMaterial;
+  /** 部屋照明。全室分の PointLight を常時置くとフラグメントシェーダが室数ぶん重くなるため、近傍だけに割り当てる。 */
+  lights!: RoomLightPool;
 
   constructor(
     private readonly map: MapData,
@@ -99,6 +110,13 @@ export class WorldBuilder {
     for (const w of map.windows) this.root.add(buildWindow(w, textures));
     for (const item of map.items) this.root.add(buildItem(item, textures));
     this.buildLights();
+    // 静的ジオメトリを統合してドローコールを削減する（コライダは別管理なので見た目だけに影響）
+    batchStaticMeshes(this.root, { cellSize: STATIC_BATCH_CELL });
+  }
+
+  /** 毎フレーム: カメラ近傍の部屋へ照明を割り当てる。 */
+  update(dt: number, eye: { x: number; y: number; z: number }): void {
+    this.lights.update(dt, eye);
   }
 
   private material(name: TextureName, color: number, doubleSide = false): THREE.MeshStandardMaterial {
@@ -413,29 +431,33 @@ export class WorldBuilder {
     sun.position.set(12, 24, 10);
     this.root.add(sun);
     const story = this.map.storyHeight ?? this.map.ceilingHeight;
+    const spots: LightSpot[] = [];
     for (const room of this.map.rooms) {
       const floorY = room.floorY ?? 0;
       if (room.outdoor) {
-        const outLight = new THREE.PointLight(0xdce8f8, 6.5, Math.max(room.width, room.depth) * 1.9, 1.2);
-        outLight.position.set(room.x, floorY + 4.8, room.z);
-        this.root.add(outLight);
+        spots.push({
+          x: room.x, y: floorY + 4.8, z: room.z,
+          color: 0xdce8f8, intensity: 6.5, distance: Math.max(room.width, room.depth) * 1.9, decay: 1.2,
+        });
         continue;
       }
       const roomCeilY =
         room.ceilingY ??
         (this.map.ceilingHeight > floorY + 0.5 ? this.map.ceilingHeight : floorY + story);
       const lightY = Math.min(floorY + story, roomCeilY) - 0.35;
-      const light = new THREE.PointLight(0xfff2d8, 5.5, Math.max(room.width, room.depth) * 1.6, 1.4);
-      light.position.set(room.x, lightY, room.z);
-      const housing = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.09, 0.27), this.material('metal', 0x74767a));
-      housing.position.copy(light.position);
-      housing.position.y += 0.24;
-      const diffuser = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.028, 0.2),
-        new THREE.MeshBasicMaterial({ color: 0xffebcc }));
+      spots.push({
+        x: room.x, y: lightY, z: room.z,
+        color: 0xfff2d8, intensity: 5.5, distance: Math.max(room.width, room.depth) * 1.6, decay: 1.4,
+      });
+      const housing = new THREE.Mesh(this.housingGeo ??= new THREE.BoxGeometry(1.05, 0.09, 0.27), this.housingMat ??= this.material('metal', 0x74767a));
+      housing.position.set(room.x, lightY + 0.24, room.z);
+      const diffuser = new THREE.Mesh(this.diffuserGeo ??= new THREE.BoxGeometry(0.94, 0.028, 0.2),
+        this.diffuserMat ??= new THREE.MeshBasicMaterial({ color: 0xffebcc }));
       diffuser.position.y = -0.054;
       housing.add(diffuser);
-      this.root.add(housing, light);
+      this.root.add(housing);
     }
+    this.lights = new RoomLightPool(spots, this.root);
   }
 
   dispose(): void {

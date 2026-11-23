@@ -59,8 +59,8 @@ export function assignElement(index: number, total: number): { elementKey: 'alph
   const teamSize = isAlpha ? alphaSize : total - alphaSize;
   return { elementKey: isAlpha ? 'alpha' : 'bravo', callsign: teamSize > 1 ? `${team}-${n}` : team };
 }
-/** 視認セル（クリアリング範囲）を全件判定し直す周期（秒） */
-const COVERAGE_PERIOD = 0.1;
+/** 視認セル（クリアリング範囲）を全件判定し直す周期（秒）。セル数×視点数の視線判定になるため短すぎると大型マップで CPU を食い尽くす */
+const COVERAGE_PERIOD = 0.25;
 /** 階段候補の到達判定（経路探索）をやり直す間隔（s） */
 const STAIR_PICK_INTERVAL = 1.0;
 /** タイムアウトしたドアを一時的に通行不能扱いする時間（s） */
