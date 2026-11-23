@@ -29,6 +29,7 @@ import {
   type StairChoice,
 } from './SquadRoute';
 import { blockedAt, resolveOverlap, stepToward, type XZ } from './EngageBehavior';
+import { layoutStackSlots } from './stackSlots';
 import { HumanoidBody } from './HumanoidBody';
 import { segmentHitsAABB } from './HostageShield';
 import type { EntityManager } from './EntityManager';
@@ -164,9 +165,10 @@ export interface SquadRosterEntry {
 }
 
 /**
- * 2名連携 CQB 分隊AI + 隊長指揮システム。
+ * CQB 分隊AI + 隊長指揮システム。
  * - 指示系統: GOLD(全員) / ALPHA(Miller) / BRAVO(Cole)
  * - 扉クリア: スタック → 開放/蹴破り → (実体投擲フラッシュ) → 時間差交互突入(PoD確保) → 死角クリア → 相互援護拘束・証拠回収
+ * - 扉前スタックは人数ぶん別の位置を取る（2人までは左右、3人目以降は後方の縦列）
  * - 指定位置移動(move)・射線ロック(overwatch)・対象確保(restrain)・残務自動掃討
  */
 export class SquadSystem {
@@ -673,10 +675,14 @@ export class SquadSystem {
         ally.entryPortal = portal;
         ally.door = portal.door;
         ally.targetRoom = room;
-        ally.stackPos = slots[roleIdx] ?? slots[0] ?? { x: portal.centerX, z: portal.centerZ };
+        // 枠が足りないときは先頭と重ねず、扉から離した位置に置く（重なると personalSpace で整列が終わらない）
+        ally.stackPos = slots[roleIdx] ?? {
+          x: portal.centerX - portal.intoX * (1.15 + roleIdx * 0.9),
+          z: portal.centerZ - portal.intoZ * (1.15 + roleIdx * 0.9),
+        };
         ally.podPos = pods[roleIdx]?.pos ?? null;
         ally.podLook = pods[roleIdx]?.look ?? null;
-        ally.entryDelay = roleIdx === 0 ? 0 : this.cfg.staggerSec;
+        ally.entryDelay = roleIdx * this.cfg.staggerSec;
 
         const alreadyNearDoor =
           Math.abs(ally.body.footY - portal.sillY) < 0.65 &&
@@ -1759,41 +1765,9 @@ export class SquadSystem {
   }
 
   private computeStackSlots(portal: EntryPortal, count: number): XZ[] {
-    const off = portal.width / 2 + this.cfg.stackOffset;
-    const pt = (along: number, back: number): XZ => ({
-      x: portal.centerX + portal.axisX * along - portal.intoX * back,
-      z: portal.centerZ + portal.axisZ * along - portal.intoZ * back,
-    });
-    const pickFallback = (cands: readonly XZ[], lastResort: XZ): XZ => {
-      for (const c of cands) {
-        if (this.isStandable(c.x, c.z, portal.sillY)) return c;
-      }
-      return lastResort;
-    };
-
-    const left1 = pt(-off, 0.62);
-    const right1 = pt(+off, 0.62);
-    const leftOk = this.isStandable(left1.x, left1.z, portal.sillY);
-    const rightOk = this.isStandable(right1.x, right1.z, portal.sillY);
-    const center1 = pickFallback([pt(0, 0.9), pt(0, 0.65), pt(0, 1.25), pt(0, 0.45)], pt(0, 0.65));
-
-    if (count <= 1) {
-      if (leftOk) return [left1];
-      if (rightOk) return [right1];
-      return [center1];
-    }
-
-    if (leftOk && rightOk) return [left1, right1];
-    if (leftOk) {
-      const second = pickFallback([pt(-off, 1.38), pt(-off * 0.4, 1.25), center1], left1);
-      return [left1, second];
-    }
-    if (rightOk) {
-      const second = pickFallback([pt(+off, 1.38), pt(+off * 0.4, 1.25), center1], right1);
-      return [right1, second];
-    }
-    const center2 = pickFallback([pt(0, 1.65), pt(0, 1.3), center1], center1);
-    return [center1, center2];
+    return layoutStackSlots(portal, count, this.cfg.stackOffset, this.cfg.personalSpace, (x, z) =>
+      this.isStandable(x, z, portal.sillY),
+    );
   }
 
   private computeDominationPoints(
