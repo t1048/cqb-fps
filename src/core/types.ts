@@ -175,7 +175,7 @@ export interface MapData {
   windows: WindowDef[];
   items: ItemDef[];
   allies: AllyDef[];
-  /** プロシージャル生成マップのシード（固定 JSON マップでは undefined） */
+  /** プロシージャル生成マップのシード */
   seed?: number;
 }
 
@@ -187,8 +187,8 @@ export interface StageEntry {
   size?: string;
   /** 選択 UI に出す一行の特徴 */
   tagline?: string;
-  /** 指定時は maps/{id}.json ではなく generators/{generator}.json のテンプレートからランダム生成する */
-  generator?: string;
+  /** generators/{generator}.json のテンプレートからシードでランダム生成する */
+  generator: string;
 }
 
 export interface StagesData {

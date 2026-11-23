@@ -637,22 +637,22 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
       const firstStage = loadedStages[0];
       if (!firstStage) throw new Error('ステージ一覧が空です');
       const requestedId = mapId !== undefined ? mapId : (currentMapId ?? firstStage.id);
-      // 存在しない ID（削除済みの固定ステージの URL など）は先頭ステージにフォールバック
+      // 存在しない ID（廃止した固定ステージの URL など）は先頭ステージにフォールバック
       const stage = loadedStages.find((s) => s.id === requestedId) ?? firstStage;
       const targetId = stage.id;
       if (targetId !== requestedId) console.warn(`[data] ステージ "${requestedId}" は存在しないため "${stage.id}" を使用します`);
-      // ランダム生成ステージ: 明示シード > リトライ（同ステージ・mapId 省略）は前回シード > 新規シード
-      let useSeed: number | undefined;
-      if (stage.generator !== undefined) {
-        if (seed !== undefined) useSeed = normalizeSeed(seed);
-        else if (mapId === undefined && targetId === currentMapId && currentSeed !== undefined) useSeed = currentSeed;
-        else useSeed = randomSeed();
-      }
+      // シード: 明示シード > リトライ（同ステージ・mapId 省略）は前回シード > 新規シード
+      const useSeed =
+        seed !== undefined
+          ? normalizeSeed(seed)
+          : mapId === undefined && targetId === currentMapId && currentSeed !== undefined
+            ? currentSeed
+            : randomSeed();
       const data = await DataLoader.loadAll(stage, useSeed);
       if (token !== startToken) return; // 再 start された場合は破棄
       currentMapId = targetId;
       currentSeed = useSeed;
-      console.info('[data] loaded', data.map.id, useSeed !== undefined ? `seed=${useSeed}` : '', `weapons=${data.weapons.length}`, `profiles=${data.aiProfiles.length}`, `allies=${data.map.allies.length}`, `stairs=${data.map.stairs.length}`, `floors=${data.map.floors.length}`);
+      console.info('[data] loaded', data.map.id, `seed=${useSeed}`, `weapons=${data.weapons.length}`, `profiles=${data.aiProfiles.length}`, `allies=${data.map.allies.length}`, `stairs=${data.map.stairs.length}`, `floors=${data.map.floors.length}`);
       app = new App(
         document.body,
         data.map,

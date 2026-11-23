@@ -374,7 +374,10 @@ export function validateStages(raw: unknown, source = 'stages'): StageEntry[] {
       r.fail(`${p}.id`, '英数字・ハイフン・アンダースコアのみ使用できます');
     }
     const name = r.str(e, 'name', p);
-    const entry: StageEntry = { id, name };
+    // ステージはすべてランダム生成（固定マップは廃止）なので generator は必須
+    const generator = r.str(e, 'generator', p);
+    if (!STAGE_ID_RE.test(generator)) r.fail(`${p}.generator`, '英数字・ハイフン・アンダースコアのみ使用できます');
+    const entry: StageEntry = { id, name, generator };
     const desc = e.description;
     if (desc !== undefined) {
       if (typeof desc === 'string') {
@@ -388,11 +391,6 @@ export function validateStages(raw: unknown, source = 'stages'): StageEntry[] {
       if (v === undefined) continue;
       if (typeof v === 'string') entry[key] = v;
       else r.fail(`${p}.${key}`, '文字列が必要です');
-    }
-    if (e.generator !== undefined) {
-      const gen = r.str(e, 'generator', p);
-      if (!STAGE_ID_RE.test(gen)) r.fail(`${p}.generator`, '英数字・ハイフン・アンダースコアのみ使用できます');
-      entry.generator = gen;
     }
     return entry;
   });
@@ -1634,13 +1632,6 @@ export const DataLoader = {
     const url = dataUrl('stages.json');
     return validateStages(await fetchJson(url), url);
   },
-  async loadMap(mapId: string): Promise<MapData> {
-    if (!STAGE_ID_RE.test(mapId)) {
-      throw new DataError('map', 'mapId', `不正なステージID "${mapId}" です（英数字・ハイフン・アンダースコアのみ使用できます）`);
-    }
-    const url = dataUrl(`maps/${mapId}.json`);
-    return validateMap(await fetchJson(url), url);
-  },
   async loadWeapons(): Promise<WeaponDef[]> {
     const url = dataUrl('weapons.json');
     return validateWeapons(await fetchJson(url), url);
@@ -1681,7 +1672,7 @@ export const DataLoader = {
     return validateGeneratorTemplate(await fetchJson(url), url);
   },
   /**
-   * ステージのマップを取得。generator 指定ステージは seed から間取りを生成し、固定マップと同じ validateMap を通す。
+   * ステージのマップを取得。generator テンプレートと seed から間取りを生成し、validateMap を通す。
    */
   async loadStageMap(
     stage: StageEntry,
@@ -1689,7 +1680,6 @@ export const DataLoader = {
     profiles: AIProfile[],
     doorConfig?: DoorConfig,
   ): Promise<MapData> {
-    if (stage.generator === undefined) return DataLoader.loadMap(stage.id);
     if (seed === undefined || !Number.isFinite(seed)) {
       throw new DataError('map', 'seed', `ランダム生成ステージ "${stage.id}" には有限数値のシードが必要です (現在 ${String(seed)})`);
     }
