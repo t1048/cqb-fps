@@ -520,7 +520,11 @@ class SwatHunter implements HitTarget {
       this.breachWait += dt;
       this.body.faceToward(door.centerX, door.centerZ);
       if (this.breachWait < 0.6) return; // 構え
-      door.breach(this.body.px, this.body.pz);
+      const opened = door.breach(this.body.px, this.body.pz, 'swat');
+      if (!opened) {
+        this.breachWait = 0; // 同じドアでもう一蹴り
+        return;
+      }
       this.team.onBreach(this, door);
       this.breachDoor = null;
       this.setState(this.huntTarget ? 'hunt' : 'sweep');

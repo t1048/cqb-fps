@@ -11,6 +11,23 @@ import type { TextureLibrary } from './Materials';
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
 const EPS = 0.01; // 度
+/** 同じドアへの連続蹴りを 1 回と数える間隔（秒）。AI が毎フレーム呼んでも 1 蹴りにまとめる。 */
+const SWAT_KICK_GAP_SEC = 0.48;
+/** 失敗した蹴りで扉が跳ねる角度（度）。その後、元の角度へ戻る。 */
+const SWAT_KICK_BUMP_DEG = 14;
+
+/**
+ * SWAT の蹴破りに必要な回数。ドア id の FNV-1a で 2 か 3 に固定する（再読込でも変わらない）。
+ * 容疑者の開閉・施錠には使わない。
+ */
+export function swatBreachKicks(doorId: string): 2 | 3 {
+  let h = 2166136261;
+  for (let i = 0; i < doorId.length; i++) {
+    h ^= doorId.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) & 1 ? 3 : 2;
+}
 const DEFAULT_WIDTH = 1.2;
 const DEFAULT_FRAME_THICKNESS = 0.055;
 const DEFAULT_FRAME_DEPTH = 0.3;
@@ -71,6 +88,12 @@ export class Door {
   /** +1 / -1: 扉板が法線 n 側 / 反対側へ振れる */
   private swingSign = 1;
   private speedMul = 1;
+  /** SWAT がこのドアを蹴った回数。必要回数に達した蹴りだけ解錠して全開にする。 */
+  private swatKicks = 0;
+  private lastSwatKickAt = -1e9;
+  /** 失敗蹴り: out = 少し開く、back = 元の角度へ戻す */
+  private kickRecoil: 'out' | 'back' | null = null;
+  private kickRecoilReturn = 0;
   private readonly hinge = new THREE.Vector2(); // 左（単開き）ヒンジ XZ
   private readonly rightHinge = new THREE.Vector2(); // 両開き時の右ヒンジ XZ
   private readonly u = new THREE.Vector2(); // 扉に沿った単位ベクトル（閉状態）
@@ -513,24 +536,59 @@ export class Door {
   }
 
   /**
-   * ブリーチング（蹴破り）: 施錠解除して勢いよく全開へ。全開済みは不可。
-   * 閉状態ならプレイヤーと反対側（部屋の内側）へ振る。
-   * 成功時 noise(kind:'breach') と doorBreached(室内近距離の半径・内向き方向) を発行。
+   * ブリーチング（蹴破り）。全開済みは不可。
+   * faction 'swat'（SWAT モードのプレイヤーと、両モードの AI SWAT）は同じドアに swatBreachKicks 回必要。
+   * 足りない蹴りは音と扉の跳ね返りだけで、施錠・閉じた状態を維持する。
+   * faction 'suspect' は 1 回で開く（容疑者の施錠・開閉は command / locked 代入のまま）。
+   * 成功時だけ解錠して全開し、doorBreached を発行する。noise(kind:'breach') は毎蹴り。
    */
-  breach(playerX: number, playerZ: number): boolean {
+  breach(playerX: number, playerZ: number, faction: 'swat' | 'suspect' = 'swat', nowSec = performance.now() / 1000): boolean {
     if (this.disposed) return false;
     if (this.stage === 'open' && !this.isMoving) return false;
+    if (faction === 'swat') {
+      if (nowSec - this.lastSwatKickAt < SWAT_KICK_GAP_SEC) return false;
+      this.lastSwatKickAt = nowSec;
+      this.swatKicks += 1;
+      this.emitBreachNoise();
+      if (this.swatKicks < swatBreachKicks(this.id)) {
+        this.beginKickRecoil(playerX, playerZ);
+        return false;
+      }
+    }
+    return this.finishBreach(playerX, playerZ, faction !== 'swat');
+  }
+
+  private emitBreachNoise(): { x: number; y: number; z: number } {
+    const pos = { x: this.cx, y: this.sillY + 1, z: this.cz };
+    this.bus.emit('noise', { pos, radius: this.cfg.breach.noiseRadius, kind: 'breach' });
+    return pos;
+  }
+
+  /** 蹴ったがまだ開かない。扉を少し弾いて閉じた位置へ戻す。 */
+  private beginKickRecoil(playerX: number, playerZ: number): void {
     if (this.angle < EPS) {
       this.swingSign = -this.sideOf(playerX, playerZ);
       this.applyMesh();
     }
+    this.kickRecoilReturn = this.angle < EPS ? 0 : this.targetAngle;
+    this.kickRecoil = 'out';
+    this.targetAngle = Math.min(this.maxAngle, this.angle + SWAT_KICK_BUMP_DEG);
+    this.speedMul = this.cfg.breach.speedMultiplier;
+  }
+
+  /** 必要回数に達した蹴り。施錠を外して全開にする。 */
+  private finishBreach(playerX: number, playerZ: number, emitNoise: boolean): boolean {
+    if (this.angle < EPS) {
+      this.swingSign = -this.sideOf(playerX, playerZ);
+      this.applyMesh();
+    }
+    this.kickRecoil = null;
+    this.swatKicks = 0;
     this.locked = false;
     this.targetAngle = this.maxAngle;
     this.speedMul = this.cfg.breach.speedMultiplier;
-    const pos = { x: this.cx, y: this.sillY + 1, z: this.cz };
-    // 扉が振れる側＝部屋の内側方向（法線 n × swingSign）
+    const pos = emitNoise ? this.emitBreachNoise() : { x: this.cx, y: this.sillY + 1, z: this.cz };
     const dir = { x: this.n.x * this.swingSign, y: 0, z: this.n.y * this.swingSign };
-    this.bus.emit('noise', { pos, radius: this.cfg.breach.noiseRadius, kind: 'breach' });
     this.bus.emit('doorBreached', { doorId: this.id, pos, radius: this.cfg.breach.effectRadius, dir });
     return true;
   }
@@ -556,7 +614,16 @@ export class Door {
    * 角度を目標へ dt 基準で進める。進んだ先で円(プレイヤー)と重なるなら動かさず停止する（挟まない）。
    */
   update(rawDt: number, playerX: number, playerZ: number, playerRadius: number, playerY = 0): void {
-    if (this.disposed || !this.isMoving) return;
+    if (this.disposed) return;
+    if (this.kickRecoil === 'out' && !this.isMoving) {
+      this.kickRecoil = 'back';
+      this.targetAngle = this.kickRecoilReturn;
+      this.speedMul = this.cfg.breach.speedMultiplier;
+    } else if (this.kickRecoil === 'back' && !this.isMoving) {
+      this.kickRecoil = null;
+      this.speedMul = 1;
+    }
+    if (!this.isMoving) return;
     const dt = Math.min(rawDt, MAX_DT);
     const step = this.cfg.swingSpeed * this.speedMul * dt;
     const diff = this.targetAngle - this.angle;
@@ -689,6 +756,8 @@ export class DoorSystem {
     interaction: Interaction,
     private readonly input: InputManager,
     private readonly textures?: TextureLibrary,
+    /** プレイヤーの蹴り。SWAT は複数回、容疑者は 1 回。AI は Door.breach を直接 'swat' で呼ぶ。 */
+    private readonly playerFaction: 'swat' | 'suspect' = 'swat',
   ) {
     this.root.name = 'doors';
     const clearance = map.storyHeight ?? map.ceilingHeight;
@@ -764,7 +833,7 @@ export class DoorSystem {
     if (this.input.isPointerLocked && this.input.wasPressed('breach')) {
       // 蹴破りはドアに照準が合っている時のみ（F の Interaction 優先度とは独立）
       const t = this.resolveTarget();
-      if (t) t.door.breach(x, z);
+      if (t) t.door.breach(x, z, this.playerFaction);
     }
     for (const d of this.doors) d.update(dt, x, z, this.playerRadius, this.player.position.y);
   }

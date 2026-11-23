@@ -136,7 +136,18 @@ class App {
     this.audioBridge = new AudioBridge(this.bus, this.audio, this.player, this.world.colliders, playerCfg.arrest.radioReportChance ?? 0.38);
     this.audioBridge.updateListener(this.camera);
     this.interaction = new Interaction(this.input, doorCfg.wheelStepThreshold);
-    this.doors = new DoorSystem(map, doorCfg, this.world.colliders, this.bus, this.player, playerCfg.radius, this.interaction, this.input, this.textures);
+    this.doors = new DoorSystem(
+      map,
+      doorCfg,
+      this.world.colliders,
+      this.bus,
+      this.player,
+      playerCfg.radius,
+      this.interaction,
+      this.input,
+      this.textures,
+      suspect ? 'suspect' : 'swat',
+    );
     this.scene.add(this.doors.root);
     this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
