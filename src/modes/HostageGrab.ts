@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { Civilian } from '../ai/Civilian';
 import { blockedAtFiltered } from '../ai/SquadRoute';
 import type { EntityManager } from '../ai/EntityManager';
@@ -13,17 +14,35 @@ const GRAB_CONE_COS = Math.cos((70 / 2) * (Math.PI / 180));
 const GRAB_HOLD_SEC = 0.6;
 /** 人質を抱えている間の移動速度倍率 */
 const CARRY_SPEED = 0.72;
-/** 人質の位置: 前方 FORWARD m の正面（拘束中の人質には自分の弾が当たらない＝肩越しに撃つ扱い） */
-const FORWARD = 0.45;
-const SIDE = 0;
+/**
+ * 立ち位置はカメラ基準（リーンで目線が横に動いても画面中央に戻さない）。
+ * 頭は目線の高さ（約 1.56m）にあり半幅約 0.11m、肩の張りは約 0.30m。
+ * 横偏移をそれより大きく取り、照準の先（画面中央）が体を通らないようにする。
+ * 拘束中の人質は武器の標的から外しているので、自分の弾は当たらない。
+ */
+const HOLD_FORWARD = 0.78;
+const HOLD_SIDE = 0.5;
+const HOLD_RADIUS = 0.2;
+/** 四周が塞がっていても使う。頭の内側が照準から約 24° 外れ、画面中央は開いたまま */
+const HOLD_FALLBACK: readonly [forward: number, side: number] = [0.55, 0.36];
+/** 優先順。左が壁なら右。いずれも横偏移は頭の半幅より大きい */
+const HOLD_SPOTS: readonly (readonly [forward: number, side: number])[] = [
+  [HOLD_FORWARD, HOLD_SIDE],
+  [0.62, 0.42],
+  HOLD_FALLBACK,
+  [HOLD_FORWARD, -HOLD_SIDE],
+  [0.62, -0.42],
+  [0.55, -0.36],
+];
 
 /**
  * 容疑者モード: 民間人を人質として拘束し連れ回す（人間の盾）。
- * F 長押しで拘束、拘束中に F で解放。拘束中は移動が遅くなり、人質は常に前方左に立たされる。
+ * F 長押しで拘束、拘束中に F で解放。拘束中は移動が遅くなり、人質はカメラの前方左（左が壁なら右）に立たされる。
  * SWAT は射線上に民間人がいると発砲しないため、正面からの撃ち合いを避けられる（側面・背後は無防備）。
  */
 export class HostageGrab {
   private held: Civilian | null = null;
+  private readonly eye = new THREE.Vector3();
   private readonly unreg: () => void;
 
   constructor(
@@ -111,25 +130,31 @@ export class HostageGrab {
       return;
     }
     this.player.speedMultiplier *= CARRY_SPEED;
-    const p = this.player.position;
+    const feetY = this.player.position.y;
+    this.player.getEyePosition(this.eye);
     const yaw = this.player.yawRad;
     const fx = -Math.sin(yaw);
     const fz = -Math.cos(yaw);
-    // 左 = 前方を反時計回りに 90°
+    // 左 = 前方を反時計回りに 90°（画面左）。正の side が左
     const lx = fz;
     const lz = -fx;
-    // 前方の空きに立たせる。家具等で塞がれていても常に正面（最小距離）には置く
+    let x = 0;
+    let z = 0;
     let placed = false;
-    for (const f of [FORWARD, FORWARD * 0.7]) {
-      const x = p.x + fx * f + lx * SIDE;
-      const z = p.z + fz * f + lz * SIDE;
-      if (!blockedAtFiltered(this.colliders, x, z, 0.2, p.y)) {
-        c.body.setPosition(x, z, p.y);
+    for (const [f, s] of HOLD_SPOTS) {
+      x = this.eye.x + fx * f + lx * s;
+      z = this.eye.z + fz * f + lz * s;
+      if (!blockedAtFiltered(this.colliders, x, z, HOLD_RADIUS, feetY)) {
         placed = true;
         break;
       }
     }
-    if (!placed) c.body.setPosition(p.x + fx * 0.22, p.z + fz * 0.22, p.y);
+    if (!placed) {
+      const [f, s] = HOLD_FALLBACK;
+      x = this.eye.x + fx * f + lx * s;
+      z = this.eye.z + fz * f + lz * s;
+    }
+    c.body.setPosition(x, z, feetY);
     c.body.faceToward(c.body.px + fx, c.body.pz + fz);
   }
 
