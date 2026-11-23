@@ -2,8 +2,33 @@ import type { BriefingRange, MapData, StageEntry } from '../core/types';
 import type { GameMode } from '../modes/SuspectMode';
 import { collectFloorLevels, drawFloorPlan, floorLabelAt, resolveActiveFloor } from './Minimap';
 
-const PLAN_WIDTH = 440;
-const PLAN_HEIGHT = 340;
+const PLAN_WIDTH = 560;
+const PLAN_HEIGHT = 420;
+
+const STYLE_ID = 'briefing-screen-style';
+const CSS = `
+.bfs-card{width:100%;max-width:1280px;max-height:96vh;overflow:auto;background:#111822;border:1px solid #3a5170;border-radius:10px;padding:24px 30px;box-shadow:0 14px 40px rgba(0,0,0,.7);box-sizing:border-box}
+.bfs-setup{display:grid;grid-template-columns:minmax(260px,2fr) minmax(320px,3fr);gap:18px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #263649}
+.bfs-step{display:flex;flex-direction:column;gap:8px}
+.bfs-step-title{font:bold 15px sans-serif;color:#b8cbe0;letter-spacing:.04em}
+.bfs-step-title b{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;margin-right:6px;border-radius:50%;background:#f2c14e;color:#0a121a;font-size:13px}
+.bfs-choices{display:grid;gap:8px}
+.bfs-choice{text-align:left;padding:12px 14px;border-radius:8px;background:#192534;border:2px solid #34495f;color:#dce6f2;cursor:pointer;font:15px/1.4 sans-serif;display:flex;flex-direction:column;gap:4px;transition:background .12s,border-color .12s}
+.bfs-choice:not(.active):hover,.bfs-choice:not(.active):focus-visible{background:#213248;border-color:#7fb4ec;outline:none}
+.bfs-choice.active{cursor:default;color:#f4f8fc}
+.bfs-choice-name{font:bold 18px sans-serif;display:flex;align-items:center;gap:8px}
+.bfs-choice-desc{font-size:13px;color:#9fb2c6}
+.bfs-choice.active .bfs-choice-desc{color:#c9d8e8}
+.bfs-check{margin-left:auto;white-space:nowrap;font:bold 12px sans-serif;padding:2px 8px;border-radius:999px}
+.bfs-size{font:bold 34px/1 sans-serif;margin-bottom:2px}
+.bfs-reroll{padding:10px 16px;font:bold 15px sans-serif;color:#e6eef8;background:#1d2b3c;border:2px solid #4a6787;border-radius:8px;cursor:pointer}
+.bfs-reroll:hover{background:#26384e;border-color:#7fb4ec}
+.bfs-seed{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font:13px sans-serif;color:#8399b0}
+.bfs-seed input{width:110px;padding:6px 8px;font:13px monospace;color:#e6eef8;background:#0b1118;border:1px solid #354a63;border-radius:5px}
+.bfs-seed button{padding:6px 10px;font:13px sans-serif;color:#d6e4f0;background:#192534;border:1px solid #354a63;border-radius:5px;cursor:pointer}
+.bfs-start{padding:15px 36px;font:bold 19px sans-serif;color:#0a121a;border:none;border-radius:8px;cursor:pointer;letter-spacing:.04em}
+@media (max-width:760px){.bfs-setup{grid-template-columns:1fr}.bfs-card{padding:16px}.bfs-check{font-size:0;padding:2px 6px}.bfs-check::first-letter{font-size:12px}}
+`;
 
 export interface BriefingScreenOptions {
   /** 突入開始ボタン / Enter 押下時のコールバック */
@@ -51,34 +76,41 @@ export class BriefingScreen {
     this.onStart = options.onStart;
     const suspectMode = options.mode === 'suspect';
 
+    if (!document.getElementById(STYLE_ID)) {
+      const style = document.createElement('style');
+      style.id = STYLE_ID;
+      style.textContent = CSS;
+      document.head.appendChild(style);
+    }
     this.root.style.cssText =
-      'position:fixed;inset:0;z-index:15;pointer-events:auto;background:rgba(8,12,18,0.9);color:#e6eef8;font:14px/1.5 sans-serif;display:none;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+      'position:fixed;inset:0;z-index:15;pointer-events:auto;background:rgba(6,10,16,0.92);color:#e6eef8;font:15px/1.55 sans-serif;display:none;align-items:center;justify-content:center;padding:2vh 2vw;box-sizing:border-box';
 
     const card = document.createElement('div');
-    card.style.cssText =
-      'width:100%;max-width:880px;max-height:92vh;overflow:auto;background:#111822;border:1px solid #354a63;border-radius:8px;padding:22px 26px;box-shadow:0 12px 36px rgba(0,0,0,0.65);box-sizing:border-box';
+    card.className = 'bfs-card';
 
-    // ヘッダー
-    const header = document.createElement('div');
-    header.style.cssText =
-      'display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:1px solid #263649;padding-bottom:14px;margin-bottom:18px';
+    // 上段: ミッション設定（① モード ② マップの広さ）
+    const setup = document.createElement('div');
+    setup.className = 'bfs-setup';
+    if (options.onSelectMode) setup.appendChild(this.buildModeStep(options.mode ?? 'swat', options.onSelectMode));
 
-    const titleWrap = document.createElement('div');
-    const badge = document.createElement('div');
-    badge.textContent = suspectMode ? 'SUSPECT MODE — 籠城' : 'MISSION BRIEFING';
-    badge.style.cssText = `font:bold 11px monospace;letter-spacing:0.14em;color:${suspectMode ? '#ff7b7b' : '#56c8d8'};margin-bottom:4px`;
-    const title = document.createElement('div');
-    title.textContent = map.name;
-    title.style.cssText = 'font:bold 24px sans-serif;color:#f4f8fc';
-    titleWrap.append(badge, title);
-    if (options.onSelectMode) titleWrap.appendChild(this.buildModeRow(options.mode ?? 'swat', options.onSelectMode));
-
-    this.stageSlot.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px';
+    this.stageSlot.className = 'bfs-step';
     if (options.stages && options.stages.length > 0 && options.onSelectStage) {
-      this.renderStageButtons(options.stages, options.currentStageId ?? map.id, options.onSelectStage);
+      this.renderStageButtons(options.stages, options.currentStageId ?? map.id, options.onSelectStage, options.onSelectMode ? 2 : 1);
+      if (map.seed !== undefined && options.onRegenerate) this.stageSlot.appendChild(this.buildSeedRow(map.seed, options.onRegenerate));
     }
     if (options.stageSelector) this.stageSlot.appendChild(options.stageSelector);
-    header.append(titleWrap, this.stageSlot);
+    setup.appendChild(this.stageSlot);
+
+    // ブリーフィング見出し
+    const header = document.createElement('div');
+    header.style.cssText = 'margin-bottom:14px';
+    const badge = document.createElement('div');
+    badge.textContent = suspectMode ? 'SUSPECT MODE — 籠城' : 'MISSION BRIEFING';
+    badge.style.cssText = `font:bold 13px monospace;letter-spacing:0.14em;color:${suspectMode ? '#ff7b7b' : '#56c8d8'};margin-bottom:2px`;
+    const title = document.createElement('div');
+    title.textContent = map.name;
+    title.style.cssText = 'font:bold 26px sans-serif;color:#f4f8fc';
+    header.append(badge, title);
 
     // 2 カラム本体（左: 間取り図、右: インテル＆操作ガイド）
     const body = document.createElement('div');
@@ -86,13 +118,13 @@ export class BriefingScreen {
 
     // 左カラム: 間取り図
     const mapCol = document.createElement('div');
-    mapCol.style.cssText = 'flex:1 1 420px;min-width:300px';
+    mapCol.style.cssText = 'flex:3 1 480px;min-width:300px';
 
     const mapHeader = document.createElement('div');
     mapHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px';
     const mapLabel = document.createElement('div');
     mapLabel.textContent = '建物間取り図（侵入前情報）';
-    mapLabel.style.cssText = 'font:bold 12px sans-serif;color:#9cb4cc;letter-spacing:0.04em';
+    mapLabel.style.cssText = 'font:bold 14px sans-serif;color:#9cb4cc;letter-spacing:0.04em';
     mapHeader.appendChild(mapLabel);
 
     const canvasWrap = document.createElement('div');
@@ -131,8 +163,8 @@ export class BriefingScreen {
         tabBtns.forEach((b, idx) => {
           const active = floorLevels[idx] === selectedFloor;
           b.style.cssText = active
-            ? 'padding:3px 10px;font:bold 11px monospace;color:#0a121a;background:#56c8d8;border:1px solid #56c8d8;border-radius:4px;cursor:default'
-            : 'padding:3px 10px;font:11px monospace;color:#cfe0f0;background:#192534;border:1px solid #354a63;border-radius:4px;cursor:pointer';
+            ? 'padding:5px 14px;font:bold 14px monospace;color:#0a121a;background:#56c8d8;border:1px solid #56c8d8;border-radius:5px;cursor:default'
+            : 'padding:5px 14px;font:14px monospace;color:#cfe0f0;background:#192534;border:1px solid #354a63;border-radius:5px;cursor:pointer';
         });
       };
       floorLevels.forEach((fy, idx) => {
@@ -158,7 +190,7 @@ export class BriefingScreen {
     // 凡例
     const legend = document.createElement('div');
     legend.style.cssText =
-      'display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;font:12px sans-serif;color:#9fb4c8';
+      'display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font:13px sans-serif;color:#9fb4c8';
     const legendItems: [string, string][] = [
       ['#56c8d8', suspectMode ? 'あなたの潜伏位置' : '突入地点'],
       ['#d89b3c', suspectMode ? 'ドア（F 長押しで施錠）' : 'ドア'],
@@ -176,13 +208,10 @@ export class BriefingScreen {
       legend.appendChild(item);
     }
     mapCol.append(mapHeader, canvasWrap, legend);
-    if (map.seed !== undefined && options.onRegenerate) {
-      mapCol.appendChild(this.buildSeedRow(map.seed, options.onRegenerate));
-    }
 
     // 右カラム: インテル＆操作
     const intelCol = document.createElement('div');
-    intelCol.style.cssText = 'flex:1 1 280px;min-width:260px;display:flex;flex-direction:column;gap:14px';
+    intelCol.style.cssText = 'flex:2 1 320px;min-width:260px;display:flex;flex-direction:column;gap:14px';
 
     // 推定人数
     const countsGrid = document.createElement('div');
@@ -200,10 +229,10 @@ export class BriefingScreen {
         'background:#16202c;border:1px solid #293b50;border-radius:6px;padding:12px 14px';
       const sumTitle = document.createElement('div');
       sumTitle.textContent = '状況概要';
-      sumTitle.style.cssText = 'font:bold 12px sans-serif;color:#9cb4cc;margin-bottom:6px';
+      sumTitle.style.cssText = 'font:bold 14px sans-serif;color:#9cb4cc;margin-bottom:6px';
       const sumText = document.createElement('div');
       sumText.textContent = map.briefing.summary;
-      sumText.style.cssText = 'font:13px/1.6 sans-serif;color:#dce6f2';
+      sumText.style.cssText = 'font:15px/1.65 sans-serif;color:#dce6f2';
       sumBox.append(sumTitle, sumText);
       intelCol.appendChild(sumBox);
     }
@@ -214,10 +243,10 @@ export class BriefingScreen {
       'background:#16202c;border:1px solid #293b50;border-radius:6px;padding:12px 14px';
     const ctrlTitle = document.createElement('div');
     ctrlTitle.textContent = '基本操作';
-    ctrlTitle.style.cssText = 'font:bold 12px sans-serif;color:#9cb4cc;margin-bottom:6px';
+    ctrlTitle.style.cssText = 'font:bold 14px sans-serif;color:#9cb4cc;margin-bottom:6px';
     const ctrlList = document.createElement('div');
     ctrlList.style.cssText =
-      'display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font:12px/1.45 sans-serif;color:#c7d6e6';
+      'display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font:14px/1.5 sans-serif;color:#c7d6e6';
     const controls: [string, string][] = suspectMode
       ? [
           ['WASD / Shift / C', '移動 / 静音（足音小） / しゃがみ（発見されにくい）'],
@@ -255,110 +284,159 @@ export class BriefingScreen {
 
     // フッター（突入開始ボタン）
     const footer = document.createElement('div');
-    footer.style.cssText = 'margin-top:20px;padding-top:14px;border-top:1px solid #263649;display:flex;justify-content:flex-end';
+    footer.style.cssText = 'margin-top:20px;padding-top:14px;border-top:1px solid #263649;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap';
+    const footHelp = document.createElement('div');
+    footHelp.textContent = 'モードとマップの広さを選んだら、交渉フェーズへ進む';
+    footHelp.style.cssText = 'font-size:14px;color:#8399b0';
     this.startBtn.type = 'button';
+    this.startBtn.className = 'bfs-start';
     this.startBtn.textContent = '交渉フェーズへ (Enter)';
-    this.startBtn.style.cssText = `padding:11px 28px;font:bold 16px sans-serif;color:#0a121a;background:${suspectMode ? '#ff7b7b' : '#56c8d8'};border:none;border-radius:6px;cursor:pointer;letter-spacing:0.04em`;
+    this.startBtn.style.background = suspectMode ? '#ff7b7b' : '#56c8d8';
+    footer.appendChild(footHelp);
     this.startBtn.addEventListener('click', this.handleStart);
     footer.appendChild(this.startBtn);
 
-    card.append(header, body, footer);
+    card.append(setup, header, body, footer);
     this.root.appendChild(card);
     parent.appendChild(this.root);
+  }
+
+  private stepTitle(num: number, text: string): HTMLElement {
+    const t = document.createElement('div');
+    t.className = 'bfs-step-title';
+    const b = document.createElement('b');
+    b.textContent = String(num);
+    t.append(b, document.createTextNode(text));
+    return t;
+  }
+
+  /** 選択カード（選択中はハイライトして押せない） */
+  private choiceButton(active: boolean, color: string, build: (btn: HTMLButtonElement) => void, onSelect: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = active ? 'bfs-choice active' : 'bfs-choice';
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (active) {
+      btn.style.borderColor = color;
+      btn.style.background = `${color}22`;
+      btn.style.boxShadow = `0 0 0 1px ${color}55 inset`;
+    }
+    build(btn);
+    if (!active) {
+      const onClick = (): void => {
+        if (this.disposed || !this.visible) return;
+        onSelect();
+      };
+      btn.addEventListener('click', onClick);
+      this.stageBtnCleanups.push(() => btn.removeEventListener('click', onClick));
+    }
+    return btn;
+  }
+
+  private checkBadge(color: string): HTMLElement {
+    const c = document.createElement('span');
+    c.className = 'bfs-check';
+    c.textContent = '✓ 選択中';
+    c.style.cssText = `color:#0a121a;background:${color}`;
+    return c;
   }
 
   private renderStageButtons(
     stages: readonly StageEntry[],
     currentStageId: string,
     onSelectStage: (stageId: string) => void,
+    stepNum: number,
   ): void {
-    const label = document.createElement('span');
-    label.textContent = 'STAGE:';
-    label.style.cssText = 'font:bold 11px monospace;letter-spacing:0.08em;color:#8aa4be;margin-right:2px';
-    this.stageSlot.appendChild(label);
-
+    this.stageSlot.appendChild(this.stepTitle(stepNum, 'マップの広さ（間取りは毎回ランダム）'));
+    const grid = document.createElement('div');
+    grid.className = 'bfs-choices';
+    grid.style.gridTemplateColumns = `repeat(${Math.min(stages.length, 3)}, minmax(0, 1fr))`;
+    const color = '#f2c14e';
     for (const stage of stages) {
       const active = stage.id === currentStageId;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = stage.name;
-      btn.title = stage.description ?? stage.name;
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-      btn.dataset.stageId = stage.id;
-      btn.disabled = active;
-      btn.style.cssText = active
-        ? 'padding:6px 12px;font:bold 12px sans-serif;color:#0a121a;background:#56c8d8;border:1px solid #56c8d8;border-radius:4px;cursor:default'
-        : 'padding:6px 12px;font:12px sans-serif;color:#d6e4f0;background:#192534;border:1px solid #354a63;border-radius:4px;cursor:pointer';
-      if (!active) {
-        const onClick = (): void => {
-          if (this.disposed || !this.visible) return;
-          onSelectStage(stage.id);
-        };
-        btn.addEventListener('click', onClick);
-        this.stageBtnCleanups.push(() => btn.removeEventListener('click', onClick));
-      }
-      this.stageSlot.appendChild(btn);
+      const btn = this.choiceButton(
+        active,
+        color,
+        (b) => {
+          b.dataset.stageId = stage.id;
+          b.title = stage.description ?? stage.name;
+          const head = document.createElement('div');
+          head.className = 'bfs-choice-name';
+          if (stage.size) {
+            const sz = document.createElement('span');
+            sz.className = 'bfs-size';
+            sz.textContent = stage.size;
+            sz.style.color = active ? color : '#cfe0f0';
+            head.appendChild(sz);
+          } else {
+            head.appendChild(document.createTextNode(stage.name));
+          }
+          if (active) head.appendChild(this.checkBadge(color));
+          b.appendChild(head);
+          const desc = document.createElement('div');
+          desc.className = 'bfs-choice-desc';
+          desc.textContent = stage.tagline ?? stage.description ?? '';
+          b.appendChild(desc);
+        },
+        () => onSelectStage(stage.id),
+      );
+      grid.appendChild(btn);
     }
+    this.stageSlot.appendChild(grid);
   }
 
-  private buildModeRow(mode: GameMode, onSelectMode: (mode: GameMode) => void): HTMLElement {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px';
-    const label = document.createElement('span');
-    label.textContent = 'MODE:';
-    label.style.cssText = 'font:bold 11px monospace;letter-spacing:0.08em;color:#8aa4be;margin-right:2px';
-    row.appendChild(label);
-    const items: [GameMode, string, string][] = [
-      ['swat', 'SWAT（突入）', '#56c8d8'],
-      ['suspect', '容疑者（籠城 vs SWAT）', '#ff7b7b'],
+  private buildModeStep(mode: GameMode, onSelectMode: (mode: GameMode) => void): HTMLElement {
+    const step = document.createElement('div');
+    step.className = 'bfs-step';
+    step.appendChild(this.stepTitle(1, 'モード'));
+    const grid = document.createElement('div');
+    grid.className = 'bfs-choices';
+    const items: [GameMode, string, string, string][] = [
+      ['swat', '🛡 SWAT（突入側）', '隊長として部隊を指揮。人質を救出し容疑者を制圧する', '#56c8d8'],
+      ['suspect', '🔒 容疑者（籠城側）', '立てこもり犯として突入してくる SWAT をしのぐ', '#ff7b7b'],
     ];
-    for (const [m, text, color] of items) {
+    for (const [m, name, descText, color] of items) {
       const active = m === mode;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = text;
-      btn.dataset.mode = m;
-      btn.disabled = active;
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-      btn.style.cssText = active
-        ? `padding:6px 12px;font:bold 12px sans-serif;color:#0a121a;background:${color};border:1px solid ${color};border-radius:4px;cursor:default`
-        : 'padding:6px 12px;font:12px sans-serif;color:#d6e4f0;background:#192534;border:1px solid #354a63;border-radius:4px;cursor:pointer';
-      if (!active) {
-        const onClick = (): void => {
-          if (this.disposed || !this.visible) return;
-          onSelectMode(m);
-        };
-        btn.addEventListener('click', onClick);
-        this.stageBtnCleanups.push(() => btn.removeEventListener('click', onClick));
-      }
-      row.appendChild(btn);
+      grid.appendChild(
+        this.choiceButton(
+          active,
+          color,
+          (b) => {
+            b.dataset.mode = m;
+            const head = document.createElement('div');
+            head.className = 'bfs-choice-name';
+            head.textContent = name;
+            if (active) head.appendChild(this.checkBadge(color));
+            const desc = document.createElement('div');
+            desc.className = 'bfs-choice-desc';
+            desc.textContent = descText;
+            b.append(head, desc);
+          },
+          () => onSelectMode(m),
+        ),
+      );
     }
-    return row;
+    step.appendChild(grid);
+    return step;
   }
 
   private buildSeedRow(seed: number, onRegenerate: (seed?: number) => void): HTMLElement {
     const row = this.seedRow;
-    row.style.cssText =
-      'display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px;padding:8px 10px;background:#16202c;border:1px solid #293b50;border-radius:6px;font:12px sans-serif;color:#9fb4c8';
-    const label = document.createElement('span');
-    label.textContent = `ランダム間取り SEED: ${seed}`;
-    label.style.cssText = 'font-family:monospace;color:#7ce2f0;margin-right:auto';
-    const btnCss =
-      'padding:5px 10px;font:12px sans-serif;color:#d6e4f0;background:#192534;border:1px solid #354a63;border-radius:4px;cursor:pointer';
+    row.className = 'bfs-seed';
     const reroll = document.createElement('button');
     reroll.type = 'button';
-    reroll.textContent = '別の間取りを生成';
-    reroll.style.cssText = btnCss;
+    reroll.className = 'bfs-reroll';
+    reroll.textContent = '🎲 同じ広さで別の間取りにする';
+    const label = document.createElement('span');
+    label.textContent = `SEED ${seed}`;
+    label.style.cssText = 'font-family:monospace;color:#7ce2f0;margin-left:auto';
     const input = document.createElement('input');
     input.type = 'text';
     input.inputMode = 'numeric';
     input.placeholder = 'シード指定';
-    input.style.cssText =
-      'width:110px;padding:5px 6px;font:12px monospace;color:#e6eef8;background:#0b1118;border:1px solid #354a63;border-radius:4px';
     const apply = document.createElement('button');
     apply.type = 'button';
     apply.textContent = '適用';
-    apply.style.cssText = btnCss;
 
     const onReroll = (): void => {
       if (this.disposed || !this.visible) return;
@@ -387,7 +465,7 @@ export class BriefingScreen {
       apply.removeEventListener('click', onApply);
       input.removeEventListener('keydown', onInputKey);
     });
-    row.append(label, reroll, input, apply);
+    row.append(reroll, label, input, apply);
     return row;
   }
 
@@ -397,10 +475,10 @@ export class BriefingScreen {
       'background:#16202c;border:1px solid #293b50;border-radius:6px;padding:10px 12px';
     const lbl = document.createElement('div');
     lbl.textContent = label;
-    lbl.style.cssText = 'font:11px sans-serif;color:#9cb4cc;margin-bottom:4px';
+    lbl.style.cssText = 'font:13px sans-serif;color:#9cb4cc;margin-bottom:4px';
     const val = document.createElement('div');
     val.textContent = value;
-    val.style.cssText = `font:bold 20px sans-serif;color:${valueColor}`;
+    val.style.cssText = `font:bold 24px sans-serif;color:${valueColor}`;
     box.append(lbl, val);
     return box;
   }
