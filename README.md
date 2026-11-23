@@ -66,17 +66,13 @@ npm run preview
 
 ## 収録ステージ
 
-突入前ブリーフィング画面およびリザルト画面からステージを切り替えられます。多階層ステージではブリーフィング画面のフロアタブ（初期表示 `1F`、`B1` / `1F` / `2F`）で全階層の間取りを事前確認でき、プレイ中のミニマップもプレイヤーの現在階層に合わせて自動切り替えされます。
+ステージはすべてランダム生成で、ブリーフィング画面の「② マップの広さ」から **小 / 中 / 大** を選びます（リザルト画面からも切替可）。選ぶたび・「🎲 同じ広さで別の間取りにする」を押すたびに間取りと人物配置が変わります。多階層マップではブリーフィング画面のフロアタブ（初期表示 `1F`、`B1` / `1F` / `2F`）で全階層の間取りを事前確認でき、プレイ中のミニマップもプレイヤーの現在階層に合わせて自動切り替えされます。
 
-| ID | ステージ名 | 構成・特徴 |
+| ID | 広さ | 構成・特徴 |
 | --- | --- | --- |
-| `stage01_office` | **Stage 01: 雑居ビル 事務所フロア** | 屋外踊り場から突入する L 字型オフィス。受付ロビー・西会議棟・東サービス通路・施錠サーバー室を制圧。 |
-| `stage02_house` | **Stage 02: 郊外のL字型邸宅** | 前庭・私道から開始する L 字型ヴィラ住宅。ガレージ勝手口と正面玄関の 2 経路からギャラリー廊下と LDK・主寝室を制圧。 |
-| `stage03_warehouse` | **Stage 03: 複合型物流倉庫** | 屋外トラックヤードから突入する物流拠点。多層遮蔽の保管フロアと資材室・管理室をクリアリング。 |
-| `stage04_townhouse` | **Stage 04: 二階建てL字邸宅（ガレージ棟付）** | 前庭から東側 1F ガレージ棟と 2F 建て本宅・階段ホールを制圧する立体 CQB ミッション。 |
-| `random_small` | **Random Small: コンパクト住宅（ランダム）** | `generators/house_compact.json` によるモジュラー生成ステージ（平屋 / 2F 建て / B1+1F の最大 2 階層構成）。 |
-| `random_house` | **Random House: 大型ヴィラ住宅（ランダム）** | `generators/house.json` によるモジュラー生成ステージ（平屋 / 2F 建て / B1+1F / B1+1F+2F の全 4 階層構成）。 |
-| `random_embassy` | **Random Embassy: 大使館複合施設（ランダム）** | `generators/embassy.json` による大規模モジュラー生成ステージ（全 4 階層構成・最大 2 階段コア・中庭・地下保管庫対応）。 |
+| `random_small` | **小** | `generators/house_compact.json` によるコンパクトな一戸建て（平屋 / 2F 建て / B1+1F の最大 2 階層構成）。 |
+| `random_house` | **中** | `generators/house.json` による中庭付き大型邸宅（平屋 / 2F 建て / B1+1F / B1+1F+2F の全 4 階層構成）。 |
+| `random_embassy` | **大** | `generators/embassy.json` による大使館複合施設（全 4 階層構成・最大 2 階段コア・中庭・地下保管庫対応）。 |
 
 ランダム生成ステージでは外窓に加えて、隣り合う部屋の仕切り壁に**室内の窓口**（腰壁＋カウンター付きの素通し開口。通り抜けはできないが見通し・射線は通る）が生成されます（生成テンプレートの `window.interiorChance` / `interiorWidth` / `interiorSill` / `interiorHeight` / `interiorMaxPerLevel`）。
 
@@ -159,11 +155,6 @@ npm run preview
 ```text
 public/data/
 ├── stages.json          # ステージ一覧マニフェスト（選択 UI に自動反映）
-├── maps/                # 固定ステージ定義（部屋・壁・床・階段・ドア・遮蔽物・人物・ブリーフィング）
-│   ├── stage01_office.json
-│   ├── stage02_house.json
-│   ├── stage03_warehouse.json
-│   └── stage04_townhouse.json
 ├── generators/          # モジュラー建築生成テンプレート（type: "modular"）
 │   ├── house_compact.json
 │   ├── house.json

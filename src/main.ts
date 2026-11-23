@@ -636,9 +636,11 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
       if (token !== startToken) return; // 再 start された場合は破棄
       const firstStage = loadedStages[0];
       if (!firstStage) throw new Error('ステージ一覧が空です');
-      const targetId = mapId !== undefined ? mapId : (currentMapId ?? firstStage.id);
-      const stage = loadedStages.find((s) => s.id === targetId);
-      if (!stage) throw new Error(`ステージ "${targetId}" は stages.json に存在しません`);
+      const requestedId = mapId !== undefined ? mapId : (currentMapId ?? firstStage.id);
+      // 存在しない ID（削除済みの固定ステージの URL など）は先頭ステージにフォールバック
+      const stage = loadedStages.find((s) => s.id === requestedId) ?? firstStage;
+      const targetId = stage.id;
+      if (targetId !== requestedId) console.warn(`[data] ステージ "${requestedId}" は存在しないため "${stage.id}" を使用します`);
       // ランダム生成ステージ: 明示シード > リトライ（同ステージ・mapId 省略）は前回シード > 新規シード
       let useSeed: number | undefined;
       if (stage.generator !== undefined) {
@@ -690,7 +692,7 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
   start(qStage, qSeed, parseGameMode(params.get('mode')));
 }
 
-// リトライ・ステージ切替検証用: コンソールから `__cqbRetry()` / `__cqbRetry('stage02_house')` / `__cqbRetry('random_house', 12345)` で destroy→再生成。HMR 時は破棄のみ。
+// リトライ・ステージ切替検証用: コンソールから `__cqbRetry()` / `__cqbRetry('random_small')` / `__cqbRetry('random_house', 12345)` で destroy→再生成。HMR 時は破棄のみ。
 (window as unknown as { __cqbRetry: (mapId?: string, seed?: number, mode?: GameMode) => void }).__cqbRetry = (mapId?: string, seed?: number, mode?: GameMode) =>
   start(mapId, seed, mode);
 

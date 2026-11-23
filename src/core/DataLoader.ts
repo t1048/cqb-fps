@@ -383,6 +383,12 @@ export function validateStages(raw: unknown, source = 'stages'): StageEntry[] {
         r.fail(`${p}.description`, '文字列が必要です');
       }
     }
+    for (const key of ['size', 'tagline'] as const) {
+      const v = e[key];
+      if (v === undefined) continue;
+      if (typeof v === 'string') entry[key] = v;
+      else r.fail(`${p}.${key}`, '文字列が必要です');
+    }
     if (e.generator !== undefined) {
       const gen = r.str(e, 'generator', p);
       if (!STAGE_ID_RE.test(gen)) r.fail(`${p}.generator`, '英数字・ハイフン・アンダースコアのみ使用できます');

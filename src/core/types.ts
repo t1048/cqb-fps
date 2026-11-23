@@ -183,6 +183,10 @@ export interface StageEntry {
   id: string;
   name: string;
   description?: string;
+  /** 選択 UI に大きく出す規模ラベル（例: 小 / 中 / 大） */
+  size?: string;
+  /** 選択 UI に出す一行の特徴 */
+  tagline?: string;
   /** 指定時は maps/{id}.json ではなく generators/{generator}.json のテンプレートからランダム生成する */
   generator?: string;
 }
