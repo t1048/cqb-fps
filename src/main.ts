@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { AdaptiveResolution } from './core/AdaptiveResolution';
+import { AdaptiveResolution, MIN_RATIO } from './core/AdaptiveResolution';
+import { PostFX } from './core/PostFX';
 import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
@@ -54,6 +55,9 @@ type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'ended';
 class App {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly resolution: AdaptiveResolution;
+  private readonly postfx: PostFX;
+  private shadowScanTimer = 0;
+  private lastReloadP = -1;
   private readonly scene = new THREE.Scene();
   private readonly equipmentScene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -127,14 +131,25 @@ class App {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.resolution = new AdaptiveResolution(this.renderer);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // 室内の明暗差を潰さないトーンマップ + 近傍照明 1 灯だけの柔らかい影
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
-    this.scene.background = new THREE.Color(0x161e28);
-    this.scene.fog = new THREE.Fog(0x161e28, 38, 105);
+    // 夕暮れ寄りの空。霧は遠景だけを沈めて奥行きを出す
+    this.scene.background = new THREE.Color(0x3a4656);
+    this.scene.fog = new THREE.Fog(0x3a4656, 30, 100);
     this.textures = new TextureLibrary();
     this.world = new WorldBuilder(map, this.textures);
     this.scene.add(this.world.root);
+    this.postfx = new PostFX(this.renderer, this.scene, this.camera);
+    this.resolution.onChange = (r) => {
+      this.postfx.setPixelRatio(r);
+      this.postfx.setAO(r > MIN_RATIO + 0.01);
+    };
 
     this.input = new InputManager(this.renderer.domElement);
     this.player = new PlayerController(this.camera, this.input, this.world.colliders, playerCfg, this.bus, map);
@@ -194,11 +209,14 @@ class App {
     this.scene.add(this.squad.root);
     this.viewModel = new ViewModel(this.textures);
     this.viewModel.resize(this.camera.aspect);
+    this.bus.on('shotFired', ({ shooter }) => {
+      if (shooter === 'player') this.viewModel.kick();
+    });
     this.equipmentScene.add(
       this.viewModel.root,
-      new THREE.HemisphereLight(0xfff4e4, 0x9ca6b4, 1.6),
+      new THREE.HemisphereLight(0xfff0dc, 0x5a6270, 3.0),
     );
-    const equipmentLight = new THREE.DirectionalLight(0xfff1d6, 1.1);
+    const equipmentLight = new THREE.DirectionalLight(0xfff1d6, 2.6);
     equipmentLight.position.set(-1, 2, 1);
     this.equipmentScene.add(equipmentLight);
     this.avatar = new PlayerAvatar(this.textures);
@@ -408,6 +426,7 @@ class App {
       (window as unknown as { __cqbApp?: unknown }).__cqbApp = this;
     }
 
+    this.applyShadowFlags();
     this.world.lights.snap(this.camera.position);
     this.loop = new GameLoop(
       (dt, raw) => {
@@ -496,7 +515,14 @@ class App {
     this.fortify?.update(dt);
     const viewStyle = this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
-    this.viewModel.update(dt, this.player.isMoving);
+    const reloadP = this.flashbang.equipped ? null : this.weapons.reloadProgress;
+    this.viewModel.update(dt, this.player.isMoving, reloadP, this.weapons.reloadFromEmpty);
+    this.playReloadCues(reloadP);
+    this.shadowScanTimer -= dt;
+    if (this.shadowScanTimer <= 0) {
+      this.shadowScanTimer = 1;
+      this.applyShadowFlags();
+    }
     this.avatar.update(this.player);
     this.arrest?.update(dt);
     this.warningCall?.update(dt);
@@ -512,9 +538,38 @@ class App {
     this.input.endFrame();
   }
 
+  /** リロード進捗の節目で機械音を鳴らす。 */
+  private playReloadCues(p: number | null): void {
+    const prev = this.lastReloadP;
+    this.lastReloadP = p ?? -1;
+    if (p === null) return;
+    const crossed = (at: number): boolean => prev < at && p >= at;
+    if (this.viewModel.hasMagazine) {
+      if (crossed(0.2)) this.audio.playReload('out');
+      if (crossed(0.66)) this.audio.playReload('in');
+      if (this.weapons.reloadFromEmpty && crossed(0.78)) this.audio.playReload('rack');
+    } else if (crossed(0.3) || crossed(0.7)) {
+      this.audio.playReload('click');
+    }
+  }
+
+  /** 後から生成される人物・ドア等も含め、不透明メッシュに影の投影/受けを設定する。 */
+  private applyShadowFlags(): void {
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || m.userData.shadowSet) return;
+      m.userData.shadowSet = true;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const opaque = mats.every((x) => !x.transparent && !(x instanceof THREE.MeshBasicMaterial));
+      m.receiveShadow = opaque;
+      m.castShadow = opaque && !m.userData.noShadow;
+    });
+  }
+
   private render(): void {
     this.renderer.autoClear = true;
-    this.renderer.render(this.scene, this.camera);
+    if (this.phase === 'playing') this.postfx.render();
+    else this.renderer.render(this.scene, this.camera);
     if (this.phase === 'playing') {
       this.renderer.autoClear = false;
       this.renderer.clearDepth();
@@ -527,6 +582,7 @@ class App {
     this.camera.updateProjectionMatrix();
     this.viewModel.resize(this.camera.aspect);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.postfx.setSize(window.innerWidth, window.innerHeight);
   };
 
   getDebugInfo(): {
@@ -590,6 +646,7 @@ class App {
     this.world.dispose();
     this.textures.dispose();
     disposeObject(this.scene);
+    this.postfx.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

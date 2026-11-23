@@ -38,6 +38,8 @@ export class WeaponSystem {
   private readonly reserve = new Map<string, number>();
   private cooldown = 0;
   private reloadLeft = 0;
+  private reloadTotal = 0;
+  private reloadEmpty = false;
   private recoilPitch = 0; // 蓄積した上向きキック（ラジアン）
   private recoilYaw = 0; // 蓄積した横キック（ラジアン、符号付き）
   /** 外部要因の拡散加算（度。ペッパーボールで目が開けられない等） */
@@ -109,6 +111,20 @@ export class WeaponSystem {
   get isReloading(): boolean {
     return this.reloadLeft > 0;
   }
+  /** リロード進捗 0..1（リロード中でなければ null）。一人称モーション用。 */
+  get reloadProgress(): number | null {
+    if (this.reloadLeft <= 0 || this.reloadTotal <= 0) return null;
+    return 1 - this.reloadLeft / this.reloadTotal;
+  }
+  /** 弾倉が空の状態から始めたリロードか */
+  get reloadFromEmpty(): boolean {
+    return this.reloadEmpty;
+  }
+  private startReload(w: WeaponDef): void {
+    this.reloadLeft = w.reloadTime;
+    this.reloadTotal = w.reloadTime;
+    this.reloadEmpty = this.ammoInMagazine === 0;
+  }
   get ammoInMagazine(): number {
     return this.ammo.get(this.current.id) ?? 0;
   }
@@ -159,7 +175,7 @@ export class WeaponSystem {
         }
       }
     } else if (!this.suppressFire && this.input.wasPressed('reload') && this.ammoInMagazine < w.magazineSize && this.canReload(w)) {
-      this.reloadLeft = w.reloadTime;
+      this.startReload(w);
     }
 
     // 連射
@@ -169,7 +185,7 @@ export class WeaponSystem {
         this.fire();
         this.cooldown = 1 / w.fireRate;
       } else if (this.canReload(w)) {
-        this.reloadLeft = w.reloadTime; // 弾切れで自動リロード
+        this.startReload(w); // 弾切れで自動リロード
       }
     }
 

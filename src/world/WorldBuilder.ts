@@ -8,6 +8,10 @@ import { subtractRects, type Rect } from './generator/Layout';
 import { RoomLightPool, type LightSpot } from './RoomLightPool';
 import { batchStaticMeshes } from './StaticBatcher';
 
+/** 太陽の影を描く範囲（カメラ中心の半径 m） */
+const SUN_SHADOW_HALF = 28;
+const SUN_DIR = new THREE.Vector3(0.45, 0.8, 0.38).normalize();
+
 /** 静的メッシュ統合の空間セル（m）。大きいほどドローコールが減り、小さいほどカリングが効く。 */
 const STATIC_BATCH_CELL = 16;
 
@@ -96,6 +100,7 @@ export class WorldBuilder {
   private diffuserMat?: THREE.MeshBasicMaterial;
   /** 部屋照明。全室分の PointLight を常時置くとフラグメントシェーダが室数ぶん重くなるため、近傍だけに割り当てる。 */
   lights!: RoomLightPool;
+  private sun!: THREE.DirectionalLight;
 
   constructor(
     private readonly map: MapData,
@@ -117,6 +122,12 @@ export class WorldBuilder {
   /** 毎フレーム: カメラ近傍の部屋へ照明を割り当てる。 */
   update(dt: number, eye: { x: number; y: number; z: number }): void {
     this.lights.update(dt, eye);
+    // 影の範囲をカメラに追従（テクセル単位にスナップしてちらつきを防ぐ）
+    const texel = (SUN_SHADOW_HALF * 2) / this.sun.shadow.mapSize.x;
+    const cx = Math.round(eye.x / texel) * texel;
+    const cz = Math.round(eye.z / texel) * texel;
+    this.sun.target.position.set(cx, 0, cz);
+    this.sun.position.set(cx + SUN_DIR.x * 50, SUN_DIR.y * 50, cz + SUN_DIR.z * 50);
   }
 
   private material(name: TextureName, color: number, doubleSide = false): THREE.MeshStandardMaterial {
@@ -426,20 +437,35 @@ export class WorldBuilder {
   }
 
   private buildLights(): void {
-    this.root.add(new THREE.HemisphereLight(0xfff4e4, 0x3a4038, 1.05));
-    const sun = new THREE.DirectionalLight(0xfff1d6, 0.75);
-    sun.position.set(12, 24, 10);
-    this.root.add(sun);
+    // 環境光は控えめにして、部屋照明の減衰と影で奥行きを作る
+    this.root.add(new THREE.HemisphereLight(0xb8c6dc, 0x2a2620, 0.5));
+    // 太陽は影付き: 屋外と窓から差す光だけが明るくなり、屋内は部屋照明が主になる
+    const sun = new THREE.DirectionalLight(0xffe6c4, 2.4);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    const cam = sun.shadow.camera;
+    cam.left = -SUN_SHADOW_HALF;
+    cam.right = SUN_SHADOW_HALF;
+    cam.top = SUN_SHADOW_HALF;
+    cam.bottom = -SUN_SHADOW_HALF;
+    cam.near = 1;
+    cam.far = 120;
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.04;
+    this.root.add(sun, sun.target);
+    this.sun = sun;
     const story = this.map.storyHeight ?? this.map.ceilingHeight;
     const spots: LightSpot[] = [];
-    for (const room of this.map.rooms) {
+    // 部屋ごとに色温度を少し振る（白熱灯寄り / 蛍光灯寄り）
+    const tints = [0xffd9a8, 0xffe6c4, 0xf2f0ea, 0xffdcb4, 0xe6eef8];
+    this.map.rooms.forEach((room, idx) => {
       const floorY = room.floorY ?? 0;
       if (room.outdoor) {
         spots.push({
           x: room.x, y: floorY + 4.8, z: room.z,
-          color: 0xdce8f8, intensity: 6.5, distance: Math.max(room.width, room.depth) * 1.9, decay: 1.2,
+          color: 0xc8d8f0, intensity: 7, distance: Math.max(room.width, room.depth) * 1.9, decay: 1.3,
         });
-        continue;
+        return;
       }
       const roomCeilY =
         room.ceilingY ??
@@ -447,7 +473,7 @@ export class WorldBuilder {
       const lightY = Math.min(floorY + story, roomCeilY) - 0.35;
       spots.push({
         x: room.x, y: lightY, z: room.z,
-        color: 0xfff2d8, intensity: 5.5, distance: Math.max(room.width, room.depth) * 1.6, decay: 1.4,
+        color: tints[idx % tints.length]!, intensity: 11, distance: Math.max(room.width, room.depth) * 2.1, decay: 1.7,
       });
       const housing = new THREE.Mesh(this.housingGeo ??= new THREE.BoxGeometry(1.05, 0.09, 0.27), this.housingMat ??= this.material('metal', 0x74767a));
       housing.position.set(room.x, lightY + 0.24, room.z);
@@ -456,7 +482,7 @@ export class WorldBuilder {
       diffuser.position.y = -0.054;
       housing.add(diffuser);
       this.root.add(housing);
-    }
+    });
     this.lights = new RoomLightPool(spots, this.root);
   }
 
