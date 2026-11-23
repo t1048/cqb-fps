@@ -77,14 +77,31 @@ const REACTION_SEC = 0.7;
 const HEARING_MUL = 1.0;
 const OCCLUDED_MUL = 0.5;
 const ENGAGE_LOST_SEC = 5;
-const SWEEP_SPEED = 0.8;
+const SWEEP_SPEED = 1.0;
 const HUNT_SPEED = 1.05;
 const FLASH_TEAM_CD = 14;
 const FLASH_PER_TEAM = 3;
 const FLASH_MIN_DIST = 3.2;
 const FLASH_MAX_DIST = 9;
 const SELF_NOISE_RADIUS = 3.2;
-const ROOM_STAND_SEC = 1.1;
+/** 掃討カバレッジ格子の間隔(m)・視認更新間隔(s)・視認距離(m)・視野角(°)・近接で無条件に確認済みとする距離(m) */
+const COVER_CELL = 1.4;
+const COVER_TICK = 0.18;
+const COVER_RANGE = 11;
+const COVER_FOV_DEG = 120;
+const COVER_NEAR = 1.5;
+const GOAL_TIMEOUT_SEC = 30;
+
+/** 屋内を格子状に区切った 1 マス。視界に入ると seen になる（未視認 = まだクリアしていない場所） */
+export interface CoverCell {
+  x: number;
+  y: number;
+  z: number;
+  room: string;
+  seen: boolean;
+  /** 到達できなかったマス（再捜索の周回までは対象にしない） */
+  bad: boolean;
+}
 const RADIO_NAME = 'SWAT無線(傍受)';
 
 type HunterState = 'staging' | 'sweep' | 'hunt' | 'breach' | 'engage' | 'disarm' | 'down';
@@ -185,7 +202,10 @@ class SwatHunter implements HitTarget {
   /** 所属する組（先頭ほど序列が上。生存者の先頭がその組のリーダー） */
   cell: SwatHunter[] = [this];
   callsign: string;
-  targetRoom: RoomDef | null = null;
+  /** 掃討中に向かっている未クリアのマス */
+  goalCell: CoverCell | null = null;
+  goalTime = 0;
+  goalRoom = '';
   huntTarget: Vec3 | null = null;
   known: Vec3 | null = null;
   sees = false;
@@ -193,7 +213,6 @@ class SwatHunter implements HitTarget {
   spotTimer = 0;
   lostSec = 0;
   stateTime = 0;
-  roomStand = 0;
   blindLeft = 0;
   breachDoor: Door | null = null;
   breachApproach: Vec3 | null = null;
@@ -273,7 +292,7 @@ class SwatHunter implements HitTarget {
       this.body.setPose('stand');
       this.engage.enter(this.known);
     }
-    if (next === 'sweep') this.targetRoom = null;
+    if (next === 'sweep') this.goalCell = null;
     if (next !== 'disarm' && this.disarmDoor) {
       this.team.abandonDisarm(this.disarmDoor);
       this.disarmDoor = null;
@@ -504,30 +523,23 @@ class SwatHunter implements HitTarget {
       return;
     }
 
-    if (!this.targetRoom) {
-      this.targetRoom = this.team.pickRoom(this);
-      this.roomStand = 0;
-      if (!this.targetRoom) {
+    // 未クリア（視界に入っていない）マスを塗りつぶすように、最寄りの未視認マスへ次々と向かう
+    if (!this.goalCell || this.goalCell.seen || this.goalCell.bad) {
+      this.goalCell = this.team.pickCell(this);
+      this.goalTime = 0;
+      if (!this.goalCell) {
         this.scanAround(dt, this.body.yawRad);
         return;
       }
     }
-    const r = this.targetRoom;
-    const fy = r.floorY ?? 0;
-    const inRoom =
-      Math.abs(this.body.footY - fy) < 0.7 &&
-      Math.abs(this.body.px - r.x) < r.width / 2 - 0.3 &&
-      Math.abs(this.body.pz - r.z) < r.depth / 2 - 0.3;
-    if (inRoom) {
-      this.roomStand += dt;
-      this.scanAround(dt, this.body.yawRad);
-      if (this.roomStand >= ROOM_STAND_SEC) {
-        this.team.markCleared(r, this);
-        this.targetRoom = null;
-      }
+    this.goalTime += dt;
+    const cell = this.goalCell;
+    const goal = { x: cell.x, y: cell.y, z: cell.z };
+    if (this.goalTime > GOAL_TIMEOUT_SEC) {
+      this.team.markBad(cell);
+      this.goalCell = null;
       return;
     }
-    const goal = this.team.roomPoint(r);
     const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, goal);
     if (route.phase !== 'direct') {
       this.followEntry(route, dt, SWEEP_SPEED);
@@ -544,20 +556,14 @@ class SwatHunter implements HitTarget {
       arriveDist: 0.9,
     });
     if (res === 'arrived') {
-      this.roomStand += dt;
-      if (this.roomStand >= ROOM_STAND_SEC) {
-        this.team.markCleared(r, this);
-        this.targetRoom = null;
-      }
+      this.team.markSeenAround(this.body.px, this.body.pz, this.body.footY, COVER_NEAR);
+      cell.seen = true;
+      this.goalCell = null;
     } else if (res === 'blocked') {
       this.noteBlocked();
       if (this.tryBeginBreach(goal)) return;
-      this.team.markUnreachable(r);
-      this.targetRoom = null;
-    } else if (this.stateTime > 40) {
-      this.team.markUnreachable(r);
-      this.targetRoom = null;
-      this.stateTime = 0;
+      this.team.markBad(cell);
+      this.goalCell = null;
     }
   }
 
@@ -792,9 +798,10 @@ export class SwatTeam {
   lastSighting: Vec3 | null = null;
   private readonly cleared = new Set<string>();
   private entryCache: EntryPortal[] | null = null;
-  /** pickRoom 中に hunt へ切り替えたい隊員（sweep 更新中の再入を避けるため次フレームで遷移） */
+  /** pickCell 中に hunt へ切り替えたい隊員（sweep 更新中の再入を避けるため次フレームで遷移） */
   private readonly pendingHunt = new Set<SwatHunter>();
-  private readonly unreachable = new Set<string>();
+  private cells: CoverCell[] | null = null;
+  private coverCd = 0;
   private readonly rooms: RoomDef[];
   private readonly unsubs: (() => void)[] = [];
   private flashCd = 6;
@@ -990,6 +997,11 @@ export class SwatTeam {
     this.radioCd = Math.max(0, this.radioCd - dt);
     this.sightingAge += dt;
     for (const h of this.hunters) h.update(dt);
+    this.coverCd -= dt;
+    if (this.started && this.coverCd <= 0) {
+      this.coverCd = COVER_TICK;
+      for (const h of this.hunters) if (h.alive && h.state !== 'staging' && h.blindLeft <= 0) this.scanCoverage(h);
+    }
     this.separate(dt);
     this.watchTraps();
     for (const h of this.pendingHunt) if (h.alive && h.state === 'sweep' && h.huntTarget) h.setState('hunt');
@@ -1167,15 +1179,80 @@ export class SwatTeam {
 
   // ---------- 部屋の掃討 ----------
 
-  pickRoom(h: SwatHunter): RoomDef | null {
-    const taken = new Set(this.hunters.filter((x) => x !== h && x.alive && x.targetRoom).map((x) => x.targetRoom!.id));
-    let pool = this.rooms.filter((r) => !this.cleared.has(r.id) && !this.unreachable.has(r.id));
-    if (pool.length === 0) {
-      // 全室掃討済み: 再捜索。ドローンの熱源探知で大まかな位置（±4m）を全隊に共有する
-      this.cleared.clear();
-      if (this.unreachable.size >= this.rooms.length) this.unreachable.clear();
-      pool = this.rooms.filter((r) => !this.unreachable.has(r.id));
-      if (this.droneCd > 0) return this.nearestRoom(h, pool);
+  /** 屋内を格子に区切る（初回のみ）。壁・家具で塞がれたマスは除く */
+  private coverCells(): CoverCell[] {
+    if (this.cells) return this.cells;
+    const out: CoverCell[] = [];
+    for (const r of this.rooms) {
+      const fy = r.floorY ?? 0;
+      const nx = Math.max(1, Math.round((r.width - 0.8) / COVER_CELL));
+      const nz = Math.max(1, Math.round((r.depth - 0.8) / COVER_CELL));
+      for (let i = 0; i < nx; i++) {
+        for (let j = 0; j < nz; j++) {
+          const x = r.x - r.width / 2 + 0.4 + ((i + 0.5) * (r.width - 0.8)) / nx;
+          const z = r.z - r.depth / 2 + 0.4 + ((j + 0.5) * (r.depth - 0.8)) / nz;
+          if (blockedAtFiltered(this.d.colliders, x, z, 0.3, fy)) continue;
+          out.push({ x, y: fy, z, room: r.id, seen: false, bad: false });
+        }
+      }
+    }
+    this.cells = out;
+    return out;
+  }
+
+  /** 隊員の視界（視野角・距離・遮蔽）に入ったマスを確認済みにする */
+  private scanCoverage(h: SwatHunter): void {
+    const cells = this.coverCells();
+    const eye = { x: h.body.px, y: h.body.footY + 1.5, z: h.body.pz };
+    const fx = -Math.sin(h.body.yawRad);
+    const fz = -Math.cos(h.body.yawRad);
+    const cosHalf = Math.cos((COVER_FOV_DEG / 2) * DEG2RAD);
+    const touched = new Set<string>();
+    for (const c of cells) {
+      if (c.seen || Math.abs(c.y - h.body.footY) > 0.9) continue;
+      const dx = c.x - eye.x;
+      const dz = c.z - eye.z;
+      const d = Math.hypot(dx, dz);
+      if (d > COVER_RANGE) continue;
+      if (d > COVER_NEAR && (dx * fx + dz * fz) / d < cosHalf) continue;
+      if (d > 0.6 && !hasLineOfSight(this.d.colliders, eye, { x: c.x, y: c.y + 1.0, z: c.z })) continue;
+      c.seen = true;
+      touched.add(c.room);
+    }
+    for (const id of touched) this.checkRoomClear(id, h);
+  }
+
+  /** 部屋の全マスを確認し終えたら「クリア」を無線で報告する */
+  private checkRoomClear(roomId: string, by: SwatHunter): void {
+    if (this.cleared.has(roomId)) return;
+    const mine = this.coverCells().filter((c) => c.room === roomId);
+    if (mine.some((c) => !c.seen && !c.bad)) return;
+    const r = this.rooms.find((x) => x.id === roomId);
+    if (r) this.markCleared(r, by);
+  }
+
+  markSeenAround(x: number, z: number, y: number, radius: number): void {
+    for (const c of this.coverCells()) {
+      if (Math.abs(c.y - y) < 0.9 && Math.hypot(c.x - x, c.z - z) <= radius) c.seen = true;
+    }
+  }
+
+  markBad(c: CoverCell): void {
+    c.bad = true;
+  }
+
+  /**
+   * 次に向かう未クリアのマス。最寄りを優先し、他の隊員の目標とは離れた場所を選んで手分けする。
+   * 全マスをクリアしたら再捜索（ドローンの熱源探知で大まかな位置を共有）。
+   */
+  pickCell(h: SwatHunter): CoverCell | null {
+    let cell = this.nearestCell(h);
+    if (cell) return cell;
+    // 全区画クリア: 再捜索
+    for (const c of this.coverCells()) c.seen = false;
+    this.cleared.clear();
+    if (this.coverCells().every((c) => c.bad)) for (const c of this.coverCells()) c.bad = false;
+    if (this.droneCd <= 0) {
       this.droneCd = 30;
       const p = this.d.player.position;
       const a = Math.random() * Math.PI * 2;
@@ -1187,44 +1264,33 @@ export class SwatTeam {
         x.huntTarget = { ...guess };
         if (x !== h) x.setState('hunt');
       }
-      if (h.huntTarget && (!h.leader || !h.leader.alive)) {
+      if (!h.leader || !h.leader.alive) {
         h.huntTarget = { ...guess };
         this.pendingHunt.add(h);
       }
     }
-    return this.nearestRoom(h, pool, taken);
+    cell = this.nearestCell(h);
+    return cell;
   }
 
-  private nearestRoom(h: SwatHunter, pool: readonly RoomDef[], taken: ReadonlySet<string> = new Set()): RoomDef | null {
-    let best: RoomDef | null = null;
+  private nearestCell(h: SwatHunter): CoverCell | null {
+    const taken: CoverCell[] = [];
+    for (const x of this.hunters) if (x !== h && x.alive && x.goalCell) taken.push(x.goalCell);
+    let best: CoverCell | null = null;
     let bestScore = Infinity;
-    for (const r of pool) {
-      const fy = r.floorY ?? 0;
-      let score = Math.hypot(r.x - h.body.px, r.z - h.body.pz) + Math.abs(fy - h.body.footY) * 6;
-      if (taken.has(r.id)) score += 25;
-      score += Math.random() * 3;
+    for (const c of this.coverCells()) {
+      if (c.seen || c.bad) continue;
+      let score = Math.hypot(c.x - h.body.px, c.z - h.body.pz) + Math.abs(c.y - h.body.footY) * 6;
+      if (h.goalRoom === c.room) score -= 3; // 今いる部屋を先に塗りつぶす
+      for (const t of taken) if (Math.hypot(t.x - c.x, t.z - c.z) < 4 && Math.abs(t.y - c.y) < 0.9) score += 20;
+      score += Math.random() * 1.2;
       if (score < bestScore) {
         bestScore = score;
-        best = r;
+        best = c;
       }
     }
+    if (best) h.goalRoom = best.room;
     return best;
-  }
-
-  roomPoint(r: RoomDef): Vec3 {
-    const fy = r.floorY ?? 0;
-    if (!blockedAtFiltered(this.d.colliders, r.x, r.z, 0.3, fy)) return { x: r.x, y: fy, z: r.z };
-    for (const [ox, oz] of [
-      [0.25, 0],
-      [-0.25, 0],
-      [0, 0.25],
-      [0, -0.25],
-    ] as const) {
-      const x = r.x + ox * r.width;
-      const z = r.z + oz * r.depth;
-      if (!blockedAtFiltered(this.d.colliders, x, z, 0.3, fy)) return { x, y: fy, z };
-    }
-    return { x: r.x, y: fy, z: r.z };
   }
 
   markCleared(r: RoomDef, by: SwatHunter): void {
@@ -1233,13 +1299,9 @@ export class SwatTeam {
     if (this.radioCd <= 0 && Math.random() < 0.45) this.radio(by, `${r.name}、クリア。`, 'Room clear.');
   }
 
-  markUnreachable(r: RoomDef): void {
-    this.unreachable.add(r.id);
-  }
-
+  /** 追跡の到達地点周辺は確認済みとみなす */
   markRoomAt(x: number, z: number, y: number): void {
-    const r = this.roomAt(x, z, y);
-    if (r) this.cleared.add(r.id);
+    this.markSeenAround(x, z, y, 2.5);
   }
 
   private roomAt(x: number, z: number, y: number): RoomDef | null {
