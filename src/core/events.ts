@@ -46,6 +46,8 @@ export interface GameEvents {
   /** radius = 室内近距離の影響半径、dir = 部屋の内側方向（水平単位ベクトル）。士気-20 は T3 が消費 */
   doorBreached: { doorId: string; pos: Vec3; radius: number; dir: Vec3 };
   shotFired: { shooter: ActorId; pos: Vec3 };
+  /** 弾が壁・遮蔽物などの静的物に当たった（人物以外）。窓のバリケードの破壊に使う */
+  bulletImpact: { shooter: ActorId; pos: Vec3; damage: number };
   /** 容疑者の発砲（T3-3 追加）。warned=発砲時点で警告コールを受けていたか（false=警告前発砲） */
   suspectFired: { id: string; pos: Vec3; warned: boolean };
   entityHit: {

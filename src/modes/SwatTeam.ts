@@ -87,7 +87,19 @@ const SELF_NOISE_RADIUS = 3.2;
 const ROOM_STAND_SEC = 1.1;
 const RADIO_NAME = 'SWAT無線(傍受)';
 
-type HunterState = 'staging' | 'sweep' | 'hunt' | 'breach' | 'engage' | 'down';
+type HunterState = 'staging' | 'sweep' | 'hunt' | 'breach' | 'engage' | 'disarm' | 'down';
+
+/** ペッパーボール（人質・民間人が射線上にいて実弾を撃てないとき） */
+const PEPPER_INTERVAL = 0.42;
+const PEPPER_RANGE = 20;
+/** トラップに気付く距離と確率（一度トラップを見つけた後は警戒して上がる） */
+const TRAP_SPOT_DIST = 2.1;
+const TRAP_SPOT_CHANCE = 0.35;
+const TRAP_SPOT_CHANCE_WARY = 0.65;
+const DISARM_SEC_MIN = 7;
+const DISARM_SEC_MAX = 12;
+const DISARM_FAIL_CHANCE = 0.15;
+const TRAP_TRIGGER_DIST = 2.8;
 
 interface ShieldBody {
   readonly alive: boolean;
@@ -121,6 +133,18 @@ export interface SwatTeamDeps {
   textures?: TextureLibrary;
   /** 味方容疑者 NPC。未指定ならプレイヤーだけを狙う */
   suspects?: () => readonly AllyTarget[];
+  /** 人質の盾が今有効か（人質が暴れている間は無効）。未指定なら常に有効 */
+  shieldActive?: () => boolean;
+  /** ペッパーボールの命中（プレイヤー本人 / 抱えた人質） */
+  onPepper?: (target: 'player' | 'hostage') => void;
+}
+
+/** ドアのブービートラップ（Fortify が実装） */
+export interface TrapHooks {
+  isTrapped(doorId: string): boolean;
+  trappedDoorIds(): Iterable<string>;
+  detonate(doorId: string): void;
+  disarm(doorId: string): void;
 }
 
 /** 隊員同士がこれより近づいたら押し分ける（m）と、その最大速度（m/s） */
@@ -174,6 +198,12 @@ class SwatHunter implements HitTarget {
   breachDoor: Door | null = null;
   breachApproach: Vec3 | null = null;
   breachWait = 0;
+  /** 民間人が射線上で実弾を撃てない脅威（ペッパーボールで撃つ） */
+  pepperThreat: Vec3 | null = null;
+  pepperCd = Math.random() * PEPPER_INTERVAL;
+  disarmDoor: Door | null = null;
+  disarmSec = 0;
+  readonly checkedTraps = new Set<string>();
   private readonly skipDoors = new Set<string>();
   private blockedCount = 0;
   private blockedWindow = 0;
@@ -244,6 +274,10 @@ class SwatHunter implements HitTarget {
       this.engage.enter(this.known);
     }
     if (next === 'sweep') this.targetRoom = null;
+    if (next !== 'disarm' && this.disarmDoor) {
+      this.team.abandonDisarm(this.disarmDoor);
+      this.disarmDoor = null;
+    }
   }
 
   /** 被弾。戻り値: 倒れたか */
@@ -287,6 +321,7 @@ class SwatHunter implements HitTarget {
       return;
     }
     this.sense(dt);
+    if (this.state !== 'engage' && this.state !== 'disarm') this.team.checkTraps(this);
     switch (this.state) {
       case 'engage':
         this.updateEngage(dt);
@@ -296,6 +331,9 @@ class SwatHunter implements HitTarget {
         break;
       case 'breach':
         this.updateBreach(dt);
+        break;
+      case 'disarm':
+        this.updateDisarm(dt);
         break;
       case 'sweep':
         this.updateSweep(dt);
@@ -307,6 +345,7 @@ class SwatHunter implements HitTarget {
   private sense(dt: number): void {
     this.sees = false;
     this.threat = null;
+    this.pepperThreat = null;
     const p = this.ctx.player;
     if (p.alive === false) return;
     const engaged = this.state === 'engage';
@@ -337,7 +376,11 @@ class SwatHunter implements HitTarget {
     this.known = { x: threat.x, y: p.position.y, z: threat.z };
     this.team.shareSighting(this.known);
     const from = { x: this.body.px, y: eyeY, z: this.body.pz };
-    if (this.team.civilianInLine(from, threat.point) || this.team.coveredByHostage(this.body.px, this.body.pz)) return; // 人質が射線上: 発砲しない
+    if (this.team.civilianInLine(from, threat.point) || this.team.coveredByHostage(this.body.px, this.body.pz)) {
+      // 人質・民間人が射線上: 実弾は撃たず、ペッパーボールで盾ごと制圧する
+      if (threat.id === 'player') this.pepperThreat = threat.point;
+      return;
+    }
     this.sees = true;
     this.threat = threat;
   }
@@ -347,6 +390,13 @@ class SwatHunter implements HitTarget {
     else this.lostSec += dt;
     const k = this.known ?? this.team.lastSighting;
     this.engage.update(dt, k, this.sees, this.threat);
+    this.pepperCd = Math.max(0, this.pepperCd - dt);
+    if (!this.sees && this.pepperThreat && this.pepperCd <= 0) {
+      this.pepperCd = PEPPER_INTERVAL * (0.8 + Math.random() * 0.5);
+      this.lostSec = 0;
+      this.body.faceToward(this.pepperThreat.x, this.pepperThreat.z);
+      this.team.firePepper(this, this.pepperThreat);
+    }
     if (!this.sees && this.lostSec >= ENGAGE_LOST_SEC) {
       this.huntTarget = k ? { ...k } : null;
       this.setState(this.huntTarget ? 'hunt' : 'sweep');
@@ -546,7 +596,7 @@ class SwatHunter implements HitTarget {
   private tryBeginBreach(goal: Vec3, preferId?: string): boolean {
     const preferred = preferId ? this.team.doorById(preferId) : null;
     const door =
-      preferred && preferred.locked && !this.skipDoors.has(preferred.id)
+      preferred && preferred.locked && !this.skipDoors.has(preferred.id) && !this.team.trapHeld(preferred)
         ? preferred
         : this.team.findLockedDoor(this, goal, this.skipDoors);
     if (!door) return false;
@@ -599,6 +649,31 @@ class SwatHunter implements HitTarget {
       this.breachDoor = null;
       this.setState('sweep');
     }
+  }
+
+  /** トラップに気付いた: その場でしゃがんで解除する（時間がかかる。失敗すると起爆） */
+  beginDisarm(door: Door): void {
+    this.setState('disarm');
+    this.disarmDoor = door;
+    this.disarmSec = DISARM_SEC_MIN + Math.random() * (DISARM_SEC_MAX - DISARM_SEC_MIN);
+    this.body.setPose('crouch');
+  }
+
+  private updateDisarm(_dt: number): void {
+    const door = this.disarmDoor;
+    if (!door || !this.team.trapStillThere(door)) {
+      this.disarmDoor = null;
+      this.body.setPose('stand');
+      this.setState('sweep');
+      return;
+    }
+    this.body.faceToward(door.centerX, door.centerZ, 3 * _dt);
+    this.body.setPose('crouch');
+    if (this.stateTime < this.disarmSec) return;
+    this.disarmDoor = null;
+    this.body.setPose('stand');
+    this.team.finishDisarm(this, door, Math.random() >= DISARM_FAIL_CHANCE);
+    if (this.alive) this.setState('sweep');
   }
 
   dispose(): void {
@@ -735,6 +810,13 @@ export class SwatTeam {
   private disposed = false;
   /** 統計 */
   kills = 0;
+  pepperShots = 0;
+  trapsDisarmed = 0;
+  trapKills = 0;
+  private traps: TrapHooks | null = null;
+  /** 解除のために一時施錠したドア → 元の施錠状態 */
+  private readonly heldDoors = new Map<string, { wasLocked: boolean; by: SwatHunter | null }>();
+  private trapsSeen = 0;
 
   constructor(private readonly d: SwatTeamDeps) {
     this.root.name = 'swatTeam';
@@ -909,6 +991,7 @@ export class SwatTeam {
     this.sightingAge += dt;
     for (const h of this.hunters) h.update(dt);
     this.separate(dt);
+    this.watchTraps();
     for (const h of this.pendingHunt) if (h.alive && h.state === 'sweep' && h.huntTarget) h.setState('hunt');
     this.pendingHunt.clear();
   }
@@ -1175,7 +1258,7 @@ export class SwatTeam {
     let best: Door | null = null;
     let bestScore = Infinity;
     for (const door of this.d.doors.doors) {
-      if (!door.locked || skip.has(door.id)) continue;
+      if (!door.locked || skip.has(door.id) || this.trapHeld(door)) continue;
       if (Math.abs(door.sillY - h.body.footY) > 0.75 && Math.abs(door.sillY - goal.y) > 0.75) continue;
       const dh = Math.hypot(door.centerX - h.body.px, door.centerZ - h.body.pz);
       if (dh > 22) continue;
@@ -1201,6 +1284,7 @@ export class SwatTeam {
       }
     }
     if (!holding) return false;
+    if (this.d.shieldActive && !this.d.shieldActive()) return false; // 人質が暴れて盾が崩れている
     const p = this.d.player.position;
     const yaw = this.d.player.yawRad;
     const fx = -Math.sin(yaw);
@@ -1229,6 +1313,125 @@ export class SwatTeam {
       if (this.ray.intersectBox(this.box, this.hit) && this.hit.distanceTo(this.ray.origin) < len - 0.2) return true;
     }
     return false;
+  }
+
+  // ---------- ペッパーボール ----------
+
+  /** 盾持ちへのペッパーボール。命中はプレイヤー本人か抱えた人質（人質は暴れ、盾が崩れやすくなる） */
+  firePepper(by: SwatHunter, at: Vec3): void {
+    const eye = by.body.footY + 1.55;
+    const from = { x: by.body.px, y: eye, z: by.body.pz };
+    const dist = Math.hypot(at.x - from.x, at.z - from.z);
+    if (dist > PEPPER_RANGE) return;
+    this.pepperShots++;
+    this.d.bus.emit('noise', { pos: from, radius: 14, kind: 'gunshot', source: 'ally' });
+    if (this.radioCd <= 0 && Math.random() < 0.3) this.radio(by, '人質がいる、実弾は撃つな！ ペッパーで制圧する！', 'Hostage in line, pepperball only!');
+    const hitChance = Math.max(0.2, 0.75 - dist * 0.025);
+    if (Math.random() >= hitChance) return;
+    const holding = [...this.d.civilians()].some((c) => c.alive && c.shieldedBy === 'player');
+    this.d.onPepper?.(holding && Math.random() < 0.4 ? 'hostage' : 'player');
+  }
+
+  // ---------- ブービートラップ ----------
+
+  attachTraps(t: TrapHooks): void {
+    this.traps = t;
+  }
+
+  /** 解除のために押さえているドア（ブリーチ対象から外す） */
+  trapHeld(door: Door): boolean {
+    return this.heldDoors.has(door.id);
+  }
+
+  trapStillThere(door: Door): boolean {
+    return !!this.traps?.isTrapped(door.id);
+  }
+
+  /** 隊員の近くの閉じた仕掛けドアに気付くか判定。気付けば解除を始める */
+  checkTraps(h: SwatHunter): void {
+    const t = this.traps;
+    if (!t || !this.started || h.blindLeft > 0) return;
+    for (const id of t.trappedDoorIds()) {
+      const door = this.doorById(id);
+      if (!door || door.angle > 2) continue;
+      if (Math.abs(door.sillY - h.body.footY) > 0.75) continue;
+      if (Math.hypot(door.centerX - h.body.px, door.centerZ - h.body.pz) > TRAP_SPOT_DIST) continue;
+      const held = this.heldDoors.get(id);
+      if (held) {
+        if (held.by && held.by.alive && held.by.state === 'disarm') continue;
+        held.by = h; // 前任者が解除を中断した: 引き継ぐ
+        h.beginDisarm(door);
+        return;
+      }
+      if (h.checkedTraps.has(id)) continue;
+      h.checkedTraps.add(id);
+      if (Math.random() >= (this.trapsSeen > 0 ? TRAP_SPOT_CHANCE_WARY : TRAP_SPOT_CHANCE)) continue;
+      this.trapsSeen++;
+      this.heldDoors.set(id, { wasLocked: door.locked, by: h });
+      door.locked = true; // 解除が終わるまで誰も開けない
+      h.beginDisarm(door);
+      this.radio(h, 'ワイヤーだ！ ドアにブービートラップ！ 解除する、時間をくれ。', 'Tripwire! Door is rigged, stand by.', true);
+      if (this.canPlayerHear({ x: door.centerX, y: door.sillY, z: door.centerZ }, 10)) this.d.subtitle.show('SWAT「トラップだ…慎重にいけ」— 解除に手間取っている', 2.0);
+      return;
+    }
+  }
+
+  abandonDisarm(door: Door): void {
+    const held = this.heldDoors.get(door.id);
+    if (held) held.by = null;
+  }
+
+  finishDisarm(h: SwatHunter, door: Door, success: boolean): void {
+    const held = this.heldDoors.get(door.id);
+    this.heldDoors.delete(door.id);
+    door.locked = held?.wasLocked ?? false;
+    if (success) {
+      this.trapsDisarmed++;
+      this.traps?.disarm(door.id);
+      this.radio(h, 'トラップ解除完了。前進する。', 'Trap disarmed, moving.', true);
+    } else {
+      this.radio(h, 'しまった、解除に失敗——！', 'Oh no—', true);
+      this.traps?.detonate(door.id);
+    }
+  }
+
+  /** 毎フレーム: SWAT の近くで仕掛けドアが開いたら起爆 */
+  private watchTraps(): void {
+    const t = this.traps;
+    if (!t || !this.started) return;
+    for (const id of [...t.trappedDoorIds()]) {
+      const door = this.doorById(id);
+      if (!door || door.angle <= 2 || this.heldDoors.has(id)) continue;
+      const near = this.hunters.some(
+        (h) => h.alive && Math.abs(h.body.footY - door.sillY) < 0.9 && Math.hypot(h.body.px - door.centerX, h.body.pz - door.centerZ) < TRAP_TRIGGER_DIST,
+      );
+      if (near) t.detonate(id);
+    }
+  }
+
+  /** トラップの爆発に巻き込まれた隊員の被害 */
+  applyBlast(pos: Vec3, radius: number): void {
+    let downed = 0;
+    for (const h of this.hunters) {
+      if (!h.alive) continue;
+      const c = h.body.chestPos();
+      const dist = Math.hypot(c.x - pos.x, c.y - pos.y, c.z - pos.z);
+      if (dist < radius && hasLineOfSight(this.d.colliders, pos, c)) {
+        const dmg = Math.round(95 * (1 - 0.6 * (dist / radius)));
+        if (h.takeHit(dmg, pos)) {
+          this.d.weapons.removeTarget(h);
+          this.kills++;
+          this.trapKills++;
+          downed++;
+          this.onManDown(h);
+        }
+      } else if (dist < radius * 2.2) {
+        h.onFlashed(2.2 * (1 - dist / (radius * 2.2)));
+      }
+    }
+    const speaker = this.firstAlive();
+    if (speaker) this.radio(speaker, downed > 0 ? '爆発物だ！ 負傷者多数！ ドアに気を付けろ！' : '爆発！ ブービートラップだ、全員ドアを警戒しろ！', 'IED! Watch the doors!', true);
+    this.trapsSeen++; // 以後は警戒してトラップに気付きやすい
   }
 
   // ---------- ユーティリティ ----------

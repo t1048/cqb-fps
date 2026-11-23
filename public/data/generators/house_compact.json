@@ -122,7 +122,12 @@
     "height": 1.1,
     "sill": 0.95,
     "minMargin": 0.3,
-    "keepOutDepth": 0.5
+    "keepOutDepth": 0.5,
+    "interiorChance": 0.4,
+    "interiorWidth": { "min": 0.9, "max": 1.4 },
+    "interiorSill": 1.0,
+    "interiorHeight": 0.95,
+    "interiorMaxPerLevel": 2
   },
   "furnitureGap": 0.8,
   "wallClearance": 0.75,

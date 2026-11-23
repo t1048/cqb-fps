@@ -69,7 +69,7 @@ function buildKind(kind: ItemKind, g: THREE.Group, tex: TextureLibrary): void {
   }
 }
 
-/** 窓枠とガラス。当たり判定は持たない（開口は壁 JSON 側）。 */
+/** 窓枠とガラス（室内の窓口はカウンター板のみ）。当たり判定は持たない（開口は壁 JSON 側）。 */
 export function buildWindow(def: WindowDef, tex: TextureLibrary): THREE.Group {
   const g = new THREE.Group();
   g.name = 'window';
@@ -87,6 +87,13 @@ export function buildWindow(def: WindowDef, tex: TextureLibrary): THREE.Group {
   bar(def.width, t, 0, -(def.height - t) / 2);
   bar(t, def.height - 2 * t, -(def.width - t) / 2, 0);
   bar(t, def.height - 2 * t, (def.width - t) / 2, 0);
+  if (def.interior) {
+    // 室内の窓口: ガラス・中桟なし。腰壁の上にカウンター板を渡す（見た目のみ、当たりは腰壁側）
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(def.width + 0.08, 0.04, 0.46), mat(tex, 'wood', 0x8a6a48));
+    shelf.position.set(0, -def.height / 2 + 0.02, 0);
+    g.add(shelf);
+    return g;
+  }
   bar(t * 0.6, def.height - 2 * t, 0, 0);
   const glassMat = new THREE.MeshStandardMaterial({
     map: tex.get('glass'),

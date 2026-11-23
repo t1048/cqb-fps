@@ -367,6 +367,43 @@ function compileLayout(ctx: CompileContext, rng: Rng, opts: CompileOptions): Mod
     }
   }
 
+  // ---- 室内窓口（同階の屋内室どうしの仕切り壁。腰壁付きの素通し開口で、歩いては通れないが見通し・射線は通る）
+  const interiorChance = tpl.window.interiorChance ?? 0;
+  if (!opts.bare && interiorChance > 0) {
+    const iw = tpl.window.interiorWidth ?? { min: 1.0, max: 1.6 };
+    const sill = tpl.window.interiorSill ?? 1.0;
+    const height = tpl.window.interiorHeight ?? 0.95;
+    const maxPer = tpl.window.interiorMaxPerLevel ?? 3;
+    for (const lv of levels) {
+      const lvRects = wallRectsOf(lv);
+      const cands = indoorOf(lv).filter((r) => !r.coreId && !r.private);
+      const pairs: [PlacedRoom, PlacedRoom][] = [];
+      for (let i = 0; i < cands.length; i++) for (let j = i + 1; j < cands.length; j++) pairs.push([cands[i]!, cands[j]!]);
+      let placed = 0;
+      for (const [a, b] of rng.shuffle(pairs)) {
+        if (placed >= maxPer) break;
+        const sh = sharedEdge(a.rect, b.rect);
+        if (!sh) continue;
+        if (!rng.chance(interiorChance)) continue;
+        const maxW = floorTo(sh.hi - sh.lo - t - 2 * tpl.window.minMargin, s);
+        if (maxW < iw.min - EPS) continue;
+        const width = round3(Math.min(maxW, Math.max(iw.min, rng.inRange(iw))));
+        const existing: Opening[] = [...layout.openings.filter((o) => o.level === lv), ...windowsCanon.filter((w) => w.level === lv).map((w) => w.opening)];
+        const center = pickOpeningCenter(rng, sh, width, tpl.window.minMargin, t, lvRects, existing, s);
+        if (center === null) continue;
+        const opening: Opening = { axis: sh.axis, c: sh.c, center, width, window: { sill, height } };
+        const p = openingPoint(opening);
+        const def: WindowDef = { x: p.x, z: p.z, yaw: sh.axis === 'x' ? 0 : 90, width, height, sill, interior: true };
+        if (fy(lv) !== 0) def.y = round3(fy(lv));
+        windowsCanon.push({ def, opening, roomId: a.id, level: lv });
+        // 両側に大型遮蔽物を置かない（窓口の見通しを家具で塞がない）
+        const dep = tpl.window.keepOutDepth;
+        grid.addKeepOut(openingStrip(opening, width / 2 + tpl.window.minMargin, -dep, dep), fy(lv));
+        placed++;
+      }
+    }
+  }
+
   // ---- 壁（階層別。下に階がある階の壁は上階床上面まで、最上階は有効階高まで）
   const walls: BoxDef[] = [];
   for (const lv of levels) {

@@ -1045,6 +1045,10 @@ export class EngageBehavior {
       }
     }
 
+    if (hitKind === 'wall' && bestT < this.p.engageRange) {
+      this.ray.at(bestT, this.tmpHit);
+      this.bus.emit('bulletImpact', { shooter: this.id, pos: { x: this.tmpHit.x, y: this.tmpHit.y, z: this.tmpHit.z }, damage: this.p.shotDamage });
+    }
     if (hitKind === 'player') {
       this.ctx.playerDamage?.(this.p.shotDamage, pos, this.id);
     } else if (hitKind === 'ally' && hitAllyId) {

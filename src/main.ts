@@ -23,10 +23,12 @@ import { BriefingScreen } from './ui/BriefingScreen';
 import { NegotiationPhase } from './ui/NegotiationPhase';
 import { buildSuspectNegotiation, buildSwatNegotiation } from './modes/PreAssaultNegotiation';
 import { HostageGrab } from './modes/HostageGrab';
+import { Fortify } from './modes/Fortify';
+import { PepperEffect } from './player/PepperEffect';
 import { ResultScreen, ScoreHud } from './ui/ResultScreen';
 import { RoE } from './rules/RoE';
 import { Mission } from './rules/Mission';
-import { WorldBuilder } from './world/WorldBuilder';
+import { WorldBuilder, type Collider } from './world/WorldBuilder';
 import { DoorSystem } from './world/Door';
 import { normalizeSeed, randomSeed } from './world/generator/Rng';
 import { TextureLibrary } from './world/Materials';
@@ -75,6 +77,8 @@ class App {
   private readonly briefingScreen: BriefingScreen;
   private readonly negotiationPhase: NegotiationPhase;
   private readonly hostageGrab: HostageGrab | null = null;
+  private readonly fortify: Fortify | null = null;
+  private readonly pepper: PepperEffect | null = null;
   private readonly roe: RoE;
   private readonly mission: Mission | null = null;
   private readonly scoreHud: ScoreHud | null = null;
@@ -249,6 +253,11 @@ class App {
         civilians: () => this.entities.civilians.values(),
         textures: this.textures,
         suspects: () => this.entities.livingSuspectTargets(),
+        shieldActive: () => this.hostageGrab?.shieldEffective ?? true,
+        onPepper: (target) => {
+          if (target === 'hostage' && this.hostageGrab?.holding) this.hostageGrab.onHostagePeppered();
+          else this.pepper?.hit();
+        },
       });
       this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
       this.scene.add(this.swatTeam.root);
@@ -273,7 +282,31 @@ class App {
         this.interaction,
         (label, ratio) => sm.showGauge(label, ratio),
         () => this.doors.aimed(2.6) !== null,
+        this.bus,
       );
+      this.pepper = new PepperEffect(this.player, this.weapons, this.subtitle, this.renderer.domElement);
+      this.fortify = new Fortify({
+        windows: map.windows,
+        colliders: this.world.colliders as Collider[],
+        scene: this.scene,
+        textures: this.textures,
+        player: this.player,
+        input: this.input,
+        interaction: this.interaction,
+        doors: this.doors,
+        subtitle: this.subtitle,
+        bus: this.bus,
+        weapons: this.weapons,
+        allies: () => this.entities.suspects.values(),
+        civilians: () => this.entities.civilians.values(),
+        entry: swatSpawns[0] ?? { x: 0, y: 0, z: 0 },
+        isPrep: () => sm.preparing,
+        showGauge: (label, ratio) => sm.showGauge(label, ratio),
+        onCivilianKilled: (c) => sm.addEntry(`民間人殺害・トラップ (${c.id})`, -400),
+      });
+      sm.attachFortify(this.fortify);
+      this.swatTeam.attachTraps(this.fortify);
+      this.fortify.attachReceiver(this.swatTeam);
       const team = this.swatTeam;
       this.negotiationPhase = new NegotiationPhase(
         document.body,
@@ -289,6 +322,7 @@ class App {
           hasArmor: () => this.player.armor > 0,
           giveMagazines: (n) => this.weapons.addReserveMagazines(n),
           withdrawSwat: () => team.withdraw(),
+          allies: () => [...this.entities.suspects.values()],
           swatCount: () => team.total,
         }),
         () => this.startMission(),
@@ -397,6 +431,7 @@ class App {
     window.addEventListener('beforeunload', this.onBeforeUnload);
     this.minimap.setVisible(true);
     this.suspectMission?.setVisible(true);
+    this.fortify?.setVisible(true);
     try {
       void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
         // ポインタロックが拒否された場合は通常の画面クリック待機にフォールバック
@@ -420,6 +455,7 @@ class App {
     this.briefingScreen.hide();
     this.minimap.setVisible(false);
     this.suspectMission?.setVisible(false);
+    this.fortify?.setVisible(false);
     if (document.pointerLockElement) document.exitPointerLock();
     this.resultScreen.show(failed, report);
   }
@@ -448,7 +484,9 @@ class App {
     this.entities.update(dt);
     if (this.swatTeam) this.swatTeam.update(dt);
     else this.squad.update(dt);
-    this.hostageGrab?.update();
+    this.hostageGrab?.update(dt);
+    this.pepper?.update(dt);
+    this.fortify?.update(dt);
     const viewStyle = this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
     this.viewModel.update(dt, this.player.isMoving);
@@ -519,6 +557,8 @@ class App {
     this.swatTeam?.dispose();
     this.roe.dispose();
     this.hostageGrab?.dispose();
+    this.fortify?.dispose();
+    this.pepper?.dispose();
     this.negotiationPhase.dispose();
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.hud.dispose();
