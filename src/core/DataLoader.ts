@@ -366,15 +366,22 @@ const STAGE_ID_RE = /^[a-zA-Z0-9_-]+$/;
 export function validateStages(raw: unknown, source = 'stages'): StageEntry[] {
   const r = new Reader(source);
   const o = r.obj(raw, '') as Partial<StagesData>;
-  const stages: StageEntry[] = r.arr(o.stages, 'stages', 1).map((d, i) => {
-    const p = `stages[${i}]`;
+  const raws = r.arr(o.stages, 'stages', 1);
+  // 固定マップは廃止。generator の無いエントリ（古い stages.json のキャッシュ等）は読み飛ばす
+  const legacy = raws.filter((d) => typeof d === 'object' && d !== null && (d as Record<string, unknown>).generator === undefined);
+  if (legacy.length > 0) {
+    console.warn(`[DataLoader] ${source}: generator の無い固定マップのステージ ${legacy.length} 件を無視します（固定マップは廃止）`);
+  }
+  const usable = raws.filter((d) => !legacy.includes(d));
+  if (usable.length === 0) r.fail('stages', 'ランダム生成ステージ（generator 指定）が 1 件以上必要です');
+  const stages: StageEntry[] = usable.map((d) => {
+    const p = `stages[${raws.indexOf(d)}]`;
     const e = r.obj(d, p);
     const id = r.str(e, 'id', p);
     if (!STAGE_ID_RE.test(id)) {
       r.fail(`${p}.id`, '英数字・ハイフン・アンダースコアのみ使用できます');
     }
     const name = r.str(e, 'name', p);
-    // ステージはすべてランダム生成（固定マップは廃止）なので generator は必須
     const generator = r.str(e, 'generator', p);
     if (!STAGE_ID_RE.test(generator)) r.fail(`${p}.generator`, '英数字・ハイフン・アンダースコアのみ使用できます');
     const entry: StageEntry = { id, name, generator };
@@ -1611,7 +1618,8 @@ export function validateSquad(raw: unknown, source = 'squad'): SquadConfig {
 async function fetchJson(url: string): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(url);
+    // data/*.json はファイル名にハッシュが付かないため、デプロイ後に古いキャッシュを掴まないよう毎回再検証する
+    res = await fetch(url, { cache: 'no-cache' });
   } catch (err) {
     throw new DataError(url, '', `取得に失敗しました: ${String(err)}`);
   }
