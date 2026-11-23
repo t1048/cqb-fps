@@ -47,6 +47,8 @@ export {
 };
 
 const MAX_DT = 0.05;
+/** 視認セル（クリアリング範囲）を全件判定し直す周期（秒） */
+const COVERAGE_PERIOD = 0.1;
 /** 階段候補の到達判定（経路探索）をやり直す間隔（s） */
 const STAIR_PICK_INTERVAL = 1.0;
 /** タイムアウトしたドアを一時的に通行不能扱いする時間（s） */
@@ -174,6 +176,8 @@ export interface SquadRosterEntry {
 export class SquadSystem {
   readonly coverage: Cell[] = [];
   private sampleTimer = 0;
+  /** 視認セル判定の巡回位置（毎フレーム一部ずつ処理する） */
+  private coverageCursor = 0;
   private doorStages = '';
   private ack = '';
   private ackLeft = 0;
@@ -543,13 +547,19 @@ export class SquadSystem {
 
   private updateCoverage(dt: number): void {
     this.sampleTimer -= dt;
-    if (this.sampleTimer > 0) return;
-    this.sampleTimer += 0.1;
-    const stages = this.doors.doors.map((d) => d.stage).join(',');
-    if (stages !== this.doorStages) {
-      for (const ally of this.allies) ally.skipped.clear();
-      this.doorStages = stages;
+    if (this.sampleTimer <= 0) {
+      this.sampleTimer += 0.1;
+      const stages = this.doors.doors.map((d) => d.stage).join(',');
+      if (stages !== this.doorStages) {
+        for (const ally of this.allies) ally.skipped.clear();
+        this.doorStages = stages;
+      }
     }
+    // 全セルの視線判定は大型マップで 1 回数十〜百 ms かかるため、まとめて行わず
+    // COVERAGE_PERIOD 秒で一巡するよう毎フレーム dt に比例した分だけ処理する（スパイク防止）
+    const total = this.coverage.length;
+    if (total === 0) return;
+    const chunk = Math.min(total, Math.ceil((total * Math.min(dt, MAX_DT)) / COVERAGE_PERIOD));
     const eye = this.player.getEyePosition();
     const observers = this.allies
       .filter((a) => !a.down)
@@ -558,7 +568,9 @@ export class SquadSystem {
         eye: a.body.eye(new THREE.Vector3()),
         dir: a.body.gaze(new THREE.Vector3()),
       }));
-    for (const cell of this.coverage) {
+    for (let n = 0; n < chunk; n++) {
+      if (this.coverageCursor >= total) this.coverageCursor = 0;
+      const cell = this.coverage[this.coverageCursor++]!;
       const target = { x: cell.x, y: cell.y + 0.35, z: cell.z };
       cell.visible =
         Math.abs(this.player.position.y - cell.y) < 0.7 &&

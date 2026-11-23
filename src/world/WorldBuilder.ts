@@ -17,6 +17,11 @@ export type ColliderKind = 'wall' | 'cover' | 'door' | 'floor' | 'stair' | 'ceil
 export interface Collider {
   kind: ColliderKind;
   aabb: AABB;
+  /**
+   * 動くコライダ（ドア板）が取り得る XZ 範囲の保守的な外接矩形。
+   * 空間索引（ColliderIndex）はこれがあればこの範囲で登録し、無い動的コライダは常に候補へ含める。
+   */
+  sweep?: { minX: number; minZ: number; maxX: number; maxZ: number };
 }
 
 const DEG2RAD = Math.PI / 180;

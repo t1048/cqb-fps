@@ -1,9 +1,12 @@
 import { legacyZeroFallbackOf, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
 import type { Collider } from '../world/WorldBuilder';
 import type { XZ } from './EngageBehavior';
+import { collidersNear } from '../world/ColliderIndex';
 
 const GRID = 0.2;
 const MAX_EXPANSIONS = 70000;
+/** string-pulling で 1 アンカーから視線検査する最大先読み点数（格子 0.2m 換算で約 12m） */
+const SMOOTH_LOOKAHEAD = 60;
 /** 狭隘部（ドア枠・狭い廊下）で格子位相が壁を跨いで全閉塞しないための微小マージン（m） */
 const NARROW_PASSAGE_MARGIN = 0.04;
 /** squadRoute の部分経路末尾と階段進入点の許容距離（これ以内かつ直線通行可なら到達可能） */
@@ -31,7 +34,7 @@ export function blockedAtFiltered(
   passableDoors?: ReadonlySet<Collider>,
 ): boolean {
   const r2 = r * r;
-  for (const c of colliders) {
+  for (const c of collidersNear(colliders, x - r, z - r, x + r, z + r)) {
     if (passableDoors?.has(c)) continue;
     const a = c.aabb;
     if (a.max.y <= feetY + STEP_HEIGHT) continue;
@@ -68,68 +71,103 @@ export function pathSegmentClear(
   return true;
 }
 
-interface HeapItem {
-  id: number;
-  f: number;
-}
-
+/** f 値の最小ヒープ（id と f を並列配列で保持し、要素ごとのオブジェクト確保を避ける） */
 class MinHeap {
-  private readonly data: HeapItem[] = [];
+  private ids: number[] = [];
+  private fs: number[] = [];
 
   get size(): number {
-    return this.data.length;
+    return this.ids.length;
   }
 
-  push(item: HeapItem): void {
-    const d = this.data;
-    d.push(item);
-    let i = d.length - 1;
+  clear(): void {
+    this.ids.length = 0;
+    this.fs.length = 0;
+  }
+
+  push(id: number, f: number): void {
+    const ids = this.ids;
+    const fs = this.fs;
+    let i = ids.length;
+    ids.push(id);
+    fs.push(f);
     while (i > 0) {
       const p = (i - 1) >> 1;
-      if (d[p]!.f <= d[i]!.f) break;
-      const tmp = d[p]!;
-      d[p] = d[i]!;
-      d[i] = tmp;
+      const pf = fs[p]!;
+      if (pf <= f) break;
+      ids[i] = ids[p]!;
+      fs[i] = pf;
       i = p;
     }
+    ids[i] = id;
+    fs[i] = f;
   }
 
-  pop(): HeapItem | undefined {
-    const d = this.data;
-    if (d.length === 0) return undefined;
-    const top = d[0]!;
-    const last = d.pop()!;
-    if (d.length > 0) {
-      d[0] = last;
+  /** 最小要素の id を取り出す（空でないことは呼び出し側で保証） */
+  pop(): number {
+    const ids = this.ids;
+    const fs = this.fs;
+    const top = ids[0]!;
+    const lastId = ids.pop()!;
+    const lastF = fs.pop()!;
+    const n = ids.length;
+    if (n > 0) {
       let i = 0;
-      const n = d.length;
       while (true) {
         const l = i * 2 + 1;
+        if (l >= n) break;
         const r = l + 1;
-        let small = i;
-        if (l < n && d[l]!.f < d[small]!.f) small = l;
-        if (r < n && d[r]!.f < d[small]!.f) small = r;
-        if (small === i) break;
-        const tmp = d[i]!;
-        d[i] = d[small]!;
-        d[small] = tmp;
-        i = small;
+        let c = l;
+        if (r < n && fs[r]! < fs[l]!) c = r;
+        if (fs[c]! >= lastF) break;
+        ids[i] = ids[c]!;
+        fs[i] = fs[c]!;
+        i = c;
       }
+      ids[i] = lastId;
+      fs[i] = lastF;
     }
     return top;
   }
 }
 
-const DIRS: readonly [number, number, number][] = [
-  [1, 0, 1],
-  [-1, 0, 1],
-  [0, 1, 1],
-  [0, -1, 1],
-  [1, 1, Math.SQRT2],
-  [1, -1, Math.SQRT2],
-  [-1, 1, Math.SQRT2],
-  [-1, -1, Math.SQRT2],
-];
+const DIR_X = [1, -1, 0, 0, 1, 1, -1, -1] as const;
+const DIR_Z = [0, 0, 1, -1, 1, -1, 1, -1] as const;
+const DIR_COST = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT2] as const;
+
+/** squadRoute の作業バッファ（呼び出しをまたいで再利用。各配列は世代番号 gen と一致する要素だけ有効） */
+const pool = {
+  size: 0,
+  gen: 0,
+  parent: new Int32Array(0),
+  gScore: new Float32Array(0),
+  seen: new Uint32Array(0),
+  closed: new Uint32Array(0),
+  blockGen: new Uint32Array(0),
+  blockVal: new Int8Array(0),
+};
+const searchHeap = new MinHeap();
+
+function beginSearch(total: number): number {
+  if (total > pool.size) {
+    pool.size = total;
+    pool.parent = new Int32Array(total);
+    pool.gScore = new Float32Array(total);
+    pool.seen = new Uint32Array(total);
+    pool.closed = new Uint32Array(total);
+    pool.blockGen = new Uint32Array(total);
+    pool.blockVal = new Int8Array(total);
+    pool.gen = 0;
+  }
+  pool.gen++;
+  if (pool.gen >= 0xffffffff) {
+    pool.seen.fill(0);
+    pool.closed.fill(0);
+    pool.blockGen.fill(0);
+    pool.gen = 1;
+  }
+  return pool.gen;
+}
 
 /**
  * 現在階での8近傍 A* 経路探索 + 視線スムージング（string-pulling）。
@@ -168,36 +206,43 @@ export function squadRoute(
   const total = cols * rows;
   const origin = startGz * cols + startGx;
 
-  const parent = new Int32Array(total).fill(-1);
-  const gScore = new Float32Array(total).fill(Infinity);
-  const closed = new Uint8Array(total);
-  const blockedCache = new Int8Array(total); // 0=unknown, 1=free, -1=blocked
+  // 作業バッファはモジュール共有（世代番号で無効化）し、呼び出しごとの巨大配列確保・fill を避ける
+  const gen = beginSearch(total);
+  const { parent, gScore, seen, closed, blockGen, blockVal } = pool;
+  const gOf = (id: number): number => (seen[id] === gen ? gScore[id]! : Infinity);
+  const visit = (id: number, g: number, from: number): void => {
+    seen[id] = gen;
+    gScore[id] = g;
+    parent[id] = from;
+  };
+  const isClosed = (id: number): boolean => closed[id] === gen;
 
   const point = (gx: number, gz: number): XZ => ({ x: ox + gx * GRID, z: oz + gz * GRID });
   const isBlocked = (gx: number, gz: number): boolean => {
     if (gx < 0 || gx >= cols || gz < 0 || gz >= rows) return true;
     const id = gz * cols + gx;
-    const cached = blockedCache[id]!;
-    if (cached !== 0) return cached < 0;
-    const p = point(gx, gz);
+    if (blockGen[id] === gen) return blockVal[id]! < 0;
+    const px = ox + gx * GRID;
+    const pz = oz + gz * GRID;
     const bad =
-      Math.abs(p.x) > halfW ||
-      Math.abs(p.z) > halfD ||
-      blockedAtFiltered(colliders, p.x, p.z, gridRadius, feet, passableDoors);
-    blockedCache[id] = bad ? -1 : 1;
+      Math.abs(px) > halfW ||
+      Math.abs(pz) > halfD ||
+      blockedAtFiltered(colliders, px, pz, gridRadius, feet, passableDoors);
+    blockGen[id] = gen;
+    blockVal[id] = bad ? -1 : 1;
     return bad;
   };
 
-  parent[origin] = origin;
-  gScore[origin] = 0;
-  const heap = new MinHeap();
+  visit(origin, 0, origin);
+  const heap = searchHeap;
+  heap.clear();
   const startBlocked = isBlocked(startGx, startGz);
   if (!startBlocked) {
     const h0 = Math.hypot(start.x - goal.x, start.z - goal.z) / GRID;
-    heap.push({ id: origin, f: h0 });
+    heap.push(origin, h0);
   } else {
     // 開始点が壁際・ドア枠等でブロックされている場合、近傍の自由格子からシードする
-    closed[origin] = 1;
+    closed[origin] = gen;
     for (let ring = 1; ring <= 4 && heap.size === 0; ring++) {
       for (let dz = -ring; dz <= ring; dz++) {
         for (let dx = -ring; dx <= ring; dx++) {
@@ -207,18 +252,16 @@ export function squadRoute(
           if (isBlocked(gx, gz)) continue;
           const id = gz * cols + gx;
           const cost = Math.hypot(dx, dz);
-          gScore[id] = cost;
-          parent[id] = origin;
-          const p = point(gx, gz);
-          const h = Math.hypot(p.x - goal.x, p.z - goal.z) / GRID;
-          heap.push({ id, f: cost + h });
+          visit(id, cost, origin);
+          const h = Math.hypot(ox + gx * GRID - goal.x, oz + gz * GRID - goal.z) / GRID;
+          heap.push(id, cost + h);
         }
       }
     }
     if (heap.size === 0) {
       closed[origin] = 0;
       const h0 = Math.hypot(start.x - goal.x, start.z - goal.z) / GRID;
-      heap.push({ id: origin, f: h0 });
+      heap.push(origin, h0);
     }
   }
 
@@ -227,16 +270,16 @@ export function squadRoute(
   let expanded = 0;
 
   while (heap.size > 0 && expanded < MAX_EXPANSIONS) {
-    const item = heap.pop()!;
-    const cur = item.id;
-    if (closed[cur]) continue;
-    closed[cur] = 1;
+    const cur = heap.pop();
+    if (isClosed(cur)) continue;
+    closed[cur] = gen;
     expanded++;
 
     const cx = cur % cols;
-    const cz = Math.floor(cur / cols);
-    const cp = point(cx, cz);
-    const dGoal = Math.hypot(cp.x - goal.x, cp.z - goal.z);
+    const cz = (cur - cx) / cols;
+    const cpx = ox + cx * GRID;
+    const cpz = oz + cz * GRID;
+    const dGoal = Math.hypot(cpx - goal.x, cpz - goal.z);
     if (dGoal < bestDist) {
       bestDist = dGoal;
       best = cur;
@@ -247,29 +290,29 @@ export function squadRoute(
     }
 
     const gCur = gScore[cur]!;
-    for (const [dx, dz, cost] of DIRS) {
+    for (let k = 0; k < 8; k++) {
+      const dx = DIR_X[k]!;
+      const dz = DIR_Z[k]!;
       const nx = cx + dx;
       const nz = cz + dz;
       if (nx < 0 || nx >= cols || nz < 0 || nz >= rows) continue;
       const nid = nz * cols + nx;
-      if (closed[nid]) continue;
+      if (isClosed(nid)) continue;
       if (isBlocked(nx, nz)) continue;
       if (dx !== 0 && dz !== 0) {
         if (isBlocked(cx + dx, cz) || isBlocked(cx, cz + dz)) continue;
       }
-      const ng = gCur + cost;
-      if (ng < gScore[nid]!) {
-        gScore[nid] = ng;
-        parent[nid] = cur;
-        const np = point(nx, nz);
-        const h = Math.hypot(np.x - goal.x, np.z - goal.z) / GRID;
-        heap.push({ id: nid, f: ng + h });
+      const ng = gCur + DIR_COST[k]!;
+      if (ng < gOf(nid)) {
+        visit(nid, ng, cur);
+        const h = Math.hypot(ox + nx * GRID - goal.x, oz + nz * GRID - goal.z) / GRID;
+        heap.push(nid, ng + h);
       }
     }
   }
 
   const raw: XZ[] = [];
-  for (let id = best; id !== origin && id >= 0; id = parent[id]!) {
+  for (let id = best; id !== origin && seen[id] === gen; id = parent[id]!) {
     raw.push(point(id % cols, Math.floor(id / cols)));
   }
   raw.reverse();
@@ -290,7 +333,8 @@ export function squadRoute(
   }
   while (idx < raw.length) {
     let far = idx;
-    for (let j = raw.length - 1; j > idx; j--) {
+    // 先読みは SMOOTH_LOOKAHEAD 点までに制限（長大な経路で O(n^2) の線分検査になるのを防ぐ）
+    for (let j = Math.min(raw.length - 1, idx + SMOOTH_LOOKAHEAD); j > idx; j--) {
       if (pathSegmentClear(colliders, anchor, raw[j]!, radius, feet, passableDoors)) {
         far = j;
         break;

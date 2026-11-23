@@ -6,6 +6,7 @@ import type { Door, DoorSystem } from '../world/Door';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { HumanoidBody } from './HumanoidBody';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
+import { collidersNear } from '../world/ColliderIndex';
 import {
   blockedAtFiltered,
   distToSegment,
@@ -97,7 +98,7 @@ const FALLBACK_PLAYER_EYE_Y = 1.6;
 
 /** 円(半径 r)が壁/遮蔽物/ドア板に重なるか（歩行高さ帯のみ） */
 export function blockedAt(colliders: readonly Collider[], x: number, z: number, r = BODY_RADIUS, feetY = 0): boolean {
-  for (const c of colliders) {
+  for (const c of collidersNear(colliders, x - r, z - r, x + r, z + r)) {
     const a = c.aabb;
     if (a.max.y <= feetY + STEP_HEIGHT) continue;
     if (a.min.y >= feetY + 1.6) continue;
@@ -359,7 +360,9 @@ const NAV_DOOR_OPEN_TIMEOUT = 2.5;
 const NAV_SKIPPED_DOOR_TTL = 4.0;
 const NAV_REPATH_BASE = 0.9;
 const NAV_REPATH_JITTER = 0.5;
-const NAV_STAIR_PICK_INTERVAL = 1.2;
+const NAV_STAIR_PICK_INTERVAL = 2.5;
+/** 階段選択キャッシュを再利用する目的地のずれ許容（m） */
+const NAV_STAIR_PICK_DEST_SLACK = 4;
 const NAV_STAIR_ARRIVE = 0.85;
 const NAV_STAIR_EXIT_RADIUS = 0.48;
 const NAV_STAIR_STALL_RESET = 2.0;
@@ -412,7 +415,7 @@ export class SuspectNavigator {
   private repathCd = 0;
   private readonly repathInterval: number;
   private activeStair: { id: string; up: boolean } | null = null;
-  private stairPick: { up: boolean; floorY: number; id: string; timer: number } | null = null;
+  private stairPick: { up: boolean; floorY: number; id: string; timer: number; destX: number; destZ: number; destY: number } | null = null;
   private doorWait = 0;
   private doorOpenTimer = 0;
   private doorOpenTargetId: string | null = null;
@@ -444,7 +447,8 @@ export class SuspectNavigator {
     this.pathGoal = null;
     this.repathCd = 0;
     this.activeStair = null;
-    this.stairPick = null;
+    // stairPick は保持する: 階段選択は階段ごとに A* を回す重い処理で、ステート遷移のたびに捨てると
+    // 大型マップで数十〜数百 ms のスパイクになる。階・昇降方向の一致とタイマーで鮮度は担保される。
     this.doorWait = 0;
     this.doorOpenTimer = 0;
     this.doorOpenTargetId = null;
@@ -511,7 +515,14 @@ export class SuspectNavigator {
     if (!stairs || stairs.length === 0 || !bounds) return null;
     const cache = this.stairPick;
     if (cache) cache.timer -= dt;
-    if (cache && cache.up === up && Math.abs(cache.floorY - this.body.footY) <= STAIR_FLOOR_MATCH && cache.timer > 0) {
+    if (
+      cache &&
+      cache.up === up &&
+      cache.timer > 0 &&
+      Math.abs(cache.floorY - this.body.footY) <= STAIR_FLOOR_MATCH &&
+      Math.abs(cache.destY - dest.y) <= STAIR_FLOOR_MATCH &&
+      Math.hypot(cache.destX - dest.x, cache.destZ - dest.z) <= NAV_STAIR_PICK_DEST_SLACK
+    ) {
       const hit = stairs.find((m) => m.id === cache.id);
       if (hit) return hit;
     }
@@ -526,7 +537,15 @@ export class SuspectNavigator {
       dest,
     );
     if (!choice) return null;
-    this.stairPick = { up, floorY: this.body.footY, id: choice.stair.id, timer: NAV_STAIR_PICK_INTERVAL };
+    this.stairPick = {
+      up,
+      floorY: this.body.footY,
+      id: choice.stair.id,
+      timer: NAV_STAIR_PICK_INTERVAL,
+      destX: dest.x,
+      destZ: dest.z,
+      destY: dest.y,
+    };
     return choice.stair;
   }
 
