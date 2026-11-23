@@ -15,6 +15,7 @@ import type {
   WindowDef,
 } from '../../core/types';
 import { DataError } from '../../core/DataError';
+import { missionRoster } from '../../rules/MissionRoster';
 import {
   CirculationRules,
   FRONT_APPROACH_ID,
@@ -112,10 +113,16 @@ const FALLBACK_LAYOUT_SEED = 0x2545f491;
 const FALLBACK_VERIFY_SEED = 0x6c8e9cf5;
 /** 階層プロファイル・敷地変換の抽選に使う派生シードの xor 値（試行ごとの派生シードと系列を分ける） */
 const SELECTION_SEED_XOR = 0x51ed270b;
-/** 隊員（House 生成器と同じ 2 名） */
-const ALLY_SLOTS: readonly { id: string; name: string; side: -1 | 1 }[] = [
-  { id: 'ally_miller', name: 'Miller', side: -1 },
-  { id: 'ally_cole', name: 'Cole', side: 1 },
+/**
+ * SWAT 隊員 NPC。人数は missionRoster（プレイヤー込み合計 − 1）。
+ * side はスポーン左右、back はさらに後方へのずらし（m）。
+ */
+const ALLY_SLOTS: readonly { id: string; name: string; side: number; back: number }[] = [
+  { id: 'ally_miller', name: 'Miller', side: -1, back: 0 },
+  { id: 'ally_cole', name: 'Cole', side: 1, back: 0 },
+  { id: 'ally_reed', name: 'Reed', side: -2, back: 0.4 },
+  { id: 'ally_diaz', name: 'Diaz', side: 2, back: 0.4 },
+  { id: 'ally_park', name: 'Park', side: 0, back: 0.9 },
 ];
 
 /**
@@ -463,16 +470,22 @@ function compileLayout(ctx: CompileContext, rng: Rng, opts: CompileOptions): Mod
   const stairs: StairDef[] = layout.stairCores.flatMap((c) => c.flights.map((f) => ({ ...f.def })));
 
   // ---- 隊員（スポーンの左右・後方。正準系の正面は -Z）。家具より先に決め、周囲を keepOut に登録する（INV-11 / BL-03）
+  // 人数は屋内床面積の共通編成。SWAT モードはプレイヤー + この NPC、容疑者モードはこの合計が敵 SWAT になる。
   const ar = inset(approach.rect, ALLY_EDGE_PAD);
   const clampX = (x: number): number => Math.min(ar.x1, Math.max(ar.x0, x));
   const clampZ = (z: number): number => Math.min(ar.z1, Math.max(ar.z0, z));
-  const allies: AllyDef[] = ALLY_SLOTS.map((a) => ({
-    id: a.id,
-    name: a.name,
-    x: round3(clampX(spawn.x + a.side * tpl.site.allyLateralOffset)),
-    z: round3(clampZ(spawn.z + tpl.site.allyBackOffset)),
-    yaw: 0,
-  }));
+  let indoorSq = 0;
+  for (const r of rooms) if (!r.outdoor) indoorSq += rectArea(r.rect);
+  const allyN = Math.max(0, missionRoster(indoorSq).swat - 1);
+  const allies: AllyDef[] = [];
+  for (const a of ALLY_SLOTS.slice(0, allyN)) {
+    let x = round3(clampX(spawn.x + a.side * tpl.site.allyLateralOffset));
+    let z = round3(clampZ(spawn.z + tpl.site.allyBackOffset + a.back));
+    for (let guard = 0; allies.some((o) => Math.hypot(o.x - x, o.z - z) < 0.7) && guard < 6; guard++) {
+      z = round3(clampZ(z + 0.45));
+    }
+    allies.push({ id: a.id, name: a.name, x, z, yaw: 0 });
+  }
   for (const a of allies) {
     grid.addKeepOut({ x0: a.x - ALLY_KEEPOUT_HALF, z0: a.z - ALLY_KEEPOUT_HALF, x1: a.x + ALLY_KEEPOUT_HALF, z1: a.z + ALLY_KEEPOUT_HALF }, 0);
   }
@@ -631,8 +644,12 @@ function placeEntities(ctx: CompileContext, rng: Rng, grid: PlacementGrid, opts:
   const eligible = (room: PlacedRoom): boolean => !room.outdoor && !room.coreId && room.category !== 'entry';
   const toSpawnRoom = (room: PlacedRoom): SpawnRoom => ({ room, it: inset(room.rect, t / 2 + r + ENTITY_WALL_PAD) });
   const candidates = layout.rooms.filter((x) => eligible(x) && x.spawnWeight > 0).map(toSpawnRoom).filter((c) => c.it.x1 > c.it.x0 && c.it.z1 > c.it.z0);
-  const nSuspects = rng.intInRange(ec.suspects);
-  const nCivilians = rng.intInRange(ec.civilians);
+  // テンプレートの min/max ではなく、完成間取りの屋内面積から両モード共通の人数を取る。
+  let indoorSq = 0;
+  for (const room of layout.rooms) if (!room.outdoor) indoorSq += rectArea(room.rect);
+  const roster = missionRoster(indoorSq);
+  const nSuspects = roster.suspects;
+  const nCivilians = roster.hostages;
 
   const okAt = (x: number, z: number, floorY: number, list: readonly EntityDef[]): boolean =>
     dist3(x, floorY, z) >= ec.minSpawnDistance - EPS && grid.canStand(x, z, r, list, ec.minEntitySeparation, floorY);
@@ -740,8 +757,12 @@ function placeEntities(ctx: CompileContext, rng: Rng, grid: PlacementGrid, opts:
     }
   }
   const countOf = (list: readonly EntityDef[], type: string): number => list.filter((e) => e.type === type).length;
-  if (!opts.bare && countOf(entities, 'suspect') >= ec.suspects.min && countOf(entities, 'civilian') >= ec.civilians.min) return entities;
-  if (!opts.fallback) throw new RetryGeneration(`人物を配置できません (容疑者 ${countOf(entities, 'suspect')}/${ec.suspects.min}, 民間人 ${countOf(entities, 'civilian')}/${ec.civilians.min})`);
+  if (!opts.bare && countOf(entities, 'suspect') >= nSuspects && countOf(entities, 'civilian') >= nCivilians) return entities;
+  if (!opts.fallback) {
+    throw new RetryGeneration(
+      `人物を配置できません (容疑者 ${countOf(entities, 'suspect')}/${nSuspects}, 民間人 ${countOf(entities, 'civilian')}/${nCivilians})`,
+    );
+  }
 
   // ---- 最終試行の決定論的補填（室内格子点を playerSpawn から遠い順に走査し、全員同時に条件を満たす）
   profileCounts.clear();

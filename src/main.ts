@@ -34,8 +34,8 @@ import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { SquadSystem } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
+import { applyMissionRoster } from './rules/MissionRoster';
 import {
-  SUSPECT_MODE,
   SuspectMission,
   parseGameMode,
   prepareSuspectMode,
@@ -108,11 +108,14 @@ class App {
   ) {
     this.mode = mode;
     const suspect = mode === 'suspect';
+    map = applyMissionRoster(map);
     let swatSpawns: { x: number; y: number; z: number }[] = [];
+    let swatCount = 0;
     if (suspect) {
       const setup = prepareSuspectMode(map);
       map = setup.map;
       swatSpawns = setup.swatSpawns;
+      swatCount = setup.swatCount;
     }
     this.mapId = map.id;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -221,7 +224,7 @@ class App {
       this.input.onOrderMenu = undefined;
       this.swatTeam = new SwatTeam({
         spawns: swatSpawns,
-        count: SUSPECT_MODE.swatCount,
+        count: swatCount,
         player: this.player,
         colliders: this.world.colliders,
         bus: this.bus,

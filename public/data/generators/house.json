@@ -507,8 +507,8 @@
   ],
   "fallbackModuleId": "storage",
   "entities": {
-    "suspects": { "min": 5, "max": 7 },
-    "civilians": { "min": 2, "max": 4 },
+    "suspects": { "min": 3, "max": 7 },
+    "civilians": { "min": 3, "max": 8 },
     "suspectProfiles": [
       { "profile": "nervous_robber", "weight": 3, "max": 6 },
       { "profile": "armed_militant", "weight": 2, "max": 3 },
