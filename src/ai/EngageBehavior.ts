@@ -758,6 +758,11 @@ export class EngageBehavior {
     return this.flinch > 0 ? 'flinch' : this.phase;
   }
 
+  /** 残弾。制圧射撃などの外部発砲側が弾切れを判断するために使う */
+  get ammoLeft(): number {
+    return this.ammo;
+  }
+
   /** ENGAGE に入った。弾切れなら遮蔽でリロード、そうでなければ遮蔽へ退避→ピーク。 */
   enter(known: Vec3 | null): void {
     this.lostSightSec = 0;
