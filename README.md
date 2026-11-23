@@ -171,14 +171,14 @@ public/data/
 
 ### 新規ステージの追加方法
 
-コード変更なしで新しいステージを追加できます。
+ステージはすべてランダム生成です（固定マップは廃止）。コード変更なしで新しいステージを追加できます。
 
-1. `public/data/maps/<stage_id>.json` を作成する（既存マップの形式に準拠）。
-2. `public/data/stages.json` の `stages` 配列に `{ "id": "<stage_id>", "name": "...", "description": "..." }` を追記する。
+1. `public/data/generators/<generator_id>.json` に生成テンプレートを作成する（既存テンプレートの形式に準拠）。
+2. `public/data/stages.json` の `stages` 配列に `{ "id": "<stage_id>", "name": "...", "size": "小", "tagline": "...", "description": "...", "generator": "<generator_id>" }` を追記する（`generator` は必須）。
 
 ### ランダム間取りステージ（モジュラー建築生成・多階層・敷地8変換）
 
-`stages.json` のエントリに `"generator": "<generator_id>"` を指定すると、`maps/` の固定 JSON の代わりに `public/data/generators/<generator_id>.json` のテンプレートとシードから決定論的にマップを生成します（生成結果は固定マップと同一の `validateMap`・相互参照検証を通過。従来の `type: "house"` テンプレートとも後方互換を維持）。
+`stages.json` の各エントリの `"generator": "<generator_id>"` で指定した `public/data/generators/<generator_id>.json` のテンプレートとシードから決定論的にマップを生成します（生成結果は `validateMap`・相互参照検証を通過。従来の `type: "house"` テンプレートとも後方互換を維持）。
 
 - **モジュラー空間合成と動線グラフ（`type: "modular"`）**:
   - 玄関・折返し2レーン階段コア・廊下・LDK・ビルトインガレージ・中庭・寝室/スイート・書斎/執務室/会議室・地下倉庫/金庫・2Fルーフテラスなどの建築モジュールを、動線グラフ（全域木＋閉路ループ動線・隣接/禁止ルール・サブ室分割）に沿って格子スナップ単位（`snap`: `0.25m` / `0.5m`）で辺接着パッキングします。
