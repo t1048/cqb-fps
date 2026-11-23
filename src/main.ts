@@ -148,6 +148,7 @@ class App {
       { cfg: perceptionCfg, player: this.player },
       this.textures,
       { doors: this.doors, bounds: map.floor, stairs: this.world.stairs },
+      suspect,
     );
     this.roe.attach(this.entities);
     this.scene.add(this.entities.root);
@@ -233,7 +234,9 @@ class App {
         subtitle: this.subtitle,
         civilians: () => this.entities.civilians.values(),
         textures: this.textures,
+        suspects: () => this.entities.livingSuspectTargets(),
       });
+      this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
       this.scene.add(this.swatTeam.root);
       this.suspectMission = new SuspectMission(
         this.swatTeam,

@@ -1,7 +1,7 @@
 import type { EntityManager } from '../ai/EntityManager';
 import type { GameEventBus } from '../core/events';
 import type { InputManager } from '../core/InputManager';
-import type { MapData, PlayerSpawn, WeaponDef } from '../core/types';
+import type { EntityDef, MapData, PlayerSpawn, RoomDef, WeaponDef } from '../core/types';
 import type { PlayerController } from '../player/PlayerController';
 import type { Interaction } from '../player/Interaction';
 import type { Subtitle } from '../ui/Subtitle';
@@ -25,6 +25,30 @@ export const SUSPECT_MODE = {
   swatCount: 4,
 } as const;
 
+/** 屋内床面積この㎡あたり味方容疑者 NPC を 1 人（四捨五入）。 */
+export const SUSPECT_ALLY_SQ_M = 160;
+/** 大マップでも SWAT 4 名を人数だけで圧倒しない上限。 */
+export const SUSPECT_ALLY_MAX = 6;
+
+/** outdoor を除く部屋の床面積合計（㎡）。重なる階層も足す。 */
+export function indoorFloorArea(rooms: readonly RoomDef[]): number {
+  let area = 0;
+  for (const r of rooms) if (!r.outdoor) area += r.width * r.depth;
+  return area;
+}
+
+/**
+ * 容疑者モードで残す味方 NPC 数。
+ * npc = clamp(round(屋内床面積 / 160), 1, min(6, 配置数 - 1))。
+ * 配置が 1 人以下なら 0（その枠はプレイヤーが使う）。
+ * 例: 事務所 ≈464㎡→3、L字邸宅 ≈486㎡→3、倉庫 ≈657㎡→4、二階建て ≈365㎡→2。
+ */
+export function suspectAllyCount(placedSuspects: number, indoorSqMeters: number): number {
+  if (placedSuspects <= 1) return 0;
+  const scaled = Math.max(1, Math.round(indoorSqMeters / SUSPECT_ALLY_SQ_M));
+  return Math.min(scaled, SUSPECT_ALLY_MAX, placedSuspects - 1);
+}
+
 export interface SuspectModeSetup {
   map: MapData;
   swatSpawns: SwatSpawn[];
@@ -32,7 +56,8 @@ export interface SuspectModeSetup {
 
 /**
  * 通常ステージを容疑者モード用に変換する。
- * - プレイヤーは容疑者の配置位置のいずれかから開始（他の容疑者は排除）
+ * - プレイヤーは容疑者の配置位置のいずれかから開始（突入地点から遠いほど選ばれやすい）
+ * - 残りの容疑者は屋内面積に応じた人数だけ味方 NPC として残す
  * - 本来の突入地点・隊員配置が SWAT の進入地点になる
  * - 民間人はそのまま（人質）。分隊はいない
  */
@@ -45,6 +70,7 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   const entry = map.playerSpawn;
   // 突入地点から遠い容疑者位置ほど選ばれやすい
   let spawn: PlayerSpawn = { ...entry };
+  let playerSuspectId: string | null = null;
   if (suspects.length > 0) {
     const weighted = suspects.map((s) => ({ s, w: 1 + Math.hypot(s.x - entry.x, s.z - entry.z) }));
     const total = weighted.reduce((a, b) => a + b.w, 0);
@@ -57,13 +83,19 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
         break;
       }
     }
+    playerSuspectId = pick.id;
     // 突入地点の方を向く
     const yaw = (Math.atan2(entry.x - pick.x, -(entry.z - pick.z)) * 180) / Math.PI;
     spawn = { x: pick.x, y: pick.y ?? 0, z: pick.z, yaw };
   }
+  const kept = keepSuspectAllies(suspects, playerSuspectId, spawn, suspectAllyCount(suspects.length, indoorFloorArea(map.rooms)));
+  const keptIds = new Set(kept.map((s) => s.id));
   const civilians = map.entities.filter((e) => e.type === 'civilian').length;
+  const allyLine = kept.length > 0 ? `仲間の容疑者 ${kept.length} 名が同じ建物にいる。` : '';
   const summary =
-    'あなたは立てこもり犯だ。まもなく SWAT 4 名が突入してくる。' +
+    'あなたは立てこもり犯だ。' +
+    allyLine +
+    `まもなく SWAT ${SUSPECT_MODE.swatCount} 名が入口から突入してくる。` +
     `突入から ${Math.round(SUSPECT_MODE.holdSec / 60)} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
     '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
     'ドアを施錠（F 長押し）し、人質を盾に連れ回せ（民間人の前で F 長押し）。民間人が射線上にいる間、SWAT は発砲できない。';
@@ -71,7 +103,7 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
     map: {
       ...map,
       playerSpawn: spawn,
-      entities: map.entities.filter((e) => e.type !== 'suspect'),
+      entities: map.entities.filter((e) => e.type !== 'suspect' || keptIds.has(e.id)),
       allies: [],
       briefing: {
         estimatedHostages: { min: civilians, max: civilians },
@@ -81,6 +113,20 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
     },
     swatSpawns,
   };
+}
+
+/** プレイヤー枠を除き、開始位置に近い容疑者から allyN 人を残す。 */
+function keepSuspectAllies(
+  suspects: readonly EntityDef[],
+  playerSuspectId: string | null,
+  spawn: PlayerSpawn,
+  allyN: number,
+): EntityDef[] {
+  if (allyN <= 0) return [];
+  return suspects
+    .filter((s) => s.id !== playerSuspectId)
+    .sort((a, b) => Math.hypot(a.x - spawn.x, a.z - spawn.z) - Math.hypot(b.x - spawn.x, b.z - spawn.z))
+    .slice(0, allyN);
 }
 
 /** 容疑者が使える武器（faction='suspect' の改造拳銃のみ。非致死性装備・SWAT 装備は無し） */

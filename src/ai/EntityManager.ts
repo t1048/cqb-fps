@@ -40,8 +40,11 @@ export class EntityManager {
   private debugVisible = false;
   private readonly perception: Perception | null = null;
   private squad: SquadCoordinator | null = null;
+  private hostileTargets: (() => readonly AllyTarget[]) | null = null;
   private presenceBonusPerAlly = 0.25;
   private disposed = false;
+  /** 容疑者モード: 残した容疑者 NPC はプレイヤーの味方で、SWAT を撃つ */
+  private readonly friendlySuspects: boolean;
 
   constructor(
     defs: readonly EntityDef[],
@@ -54,7 +57,9 @@ export class EntityManager {
     private readonly playerCtx?: { cfg: PerceptionConfig; player: PlayerCombatReceiver },
     textures?: TextureLibrary,
     nav?: { doors: DoorSystem; bounds: { width: number; depth: number }; stairs: readonly StairMark[] },
+    friendlySuspects = false,
   ) {
+    this.friendlySuspects = friendlySuspects;
     this.root.name = 'entities';
     for (const def of defs) {
       if (def.type !== 'suspect' && def.type !== 'civilian') continue;
@@ -70,7 +75,9 @@ export class EntityManager {
                 player: playerCtx.player,
                 colliders,
                 civilians: () => this.civilians.values(),
-                allies: () => this.squad?.getLivingAllies() ?? [],
+                allies: () =>
+                  friendlySuspects ? (this.hostileTargets?.() ?? []) : (this.squad?.getLivingAllies() ?? []),
+                ignorePlayer: friendlySuspects,
                 countCoveringAllies: (pt, maxD) => this.squad?.countAlliesCovering(pt, maxD) ?? 0,
                 playerDamage: (dmg, from, shooter) => {
                   const hp = playerCtx.player.takeDamage(dmg);
@@ -84,6 +91,7 @@ export class EntityManager {
             : null,
           textures,
           warning.cooldown,
+          friendlySuspects,
         );
         this.suspects.set(s.id, s);
         this.root.add(s.body.group);
@@ -100,7 +108,14 @@ export class EntityManager {
       }
     }
     if (playerCtx) {
-      this.perception = new Perception(playerCtx.cfg, () => this.suspects.values(), colliders, playerCtx.player, bus);
+      this.perception = new Perception(
+        playerCtx.cfg,
+        () => this.suspects.values(),
+        colliders,
+        playerCtx.player,
+        bus,
+        friendlySuspects,
+      );
     }
     this.moraleSystem = new MoraleSystem(bus, () => this.suspects.values(), colliders, rooms);
     const onKey = (e: KeyboardEvent): void => {
@@ -133,7 +148,37 @@ export class EntityManager {
   attachSquad(squad: SquadCoordinator, presenceBonusPerAlly: number): void {
     this.squad = squad;
     this.presenceBonusPerAlly = presenceBonusPerAlly;
-    this.perception?.attachAllies(() => squad.getLivingAllies());
+    // 容疑者モードでは知覚対象は SWAT（attachHostileTargets）。通常モードの分隊は上書きしない
+    if (!this.friendlySuspects) this.perception?.attachAllies(() => squad.getLivingAllies());
+  }
+
+  /** 容疑者モード: 味方 NPC が狙う SWAT 隊員を渡す */
+  attachHostileTargets(fn: () => readonly AllyTarget[]): void {
+    this.hostileTargets = fn;
+    this.perception?.attachAllies(fn);
+  }
+
+  /** 生存中の容疑者を、SWAT の射撃対象（AllyTarget）として返す */
+  livingSuspectTargets(): AllyTarget[] {
+    const out: AllyTarget[] = [];
+    for (const s of this.suspects.values()) {
+      if (!s.alive) continue;
+      const b = s.body;
+      out.push({
+        id: s.id,
+        px: b.px,
+        pz: b.pz,
+        footY: b.footY,
+        height: b.height,
+        getEye: () => {
+          const e = b.eye(new THREE.Vector3());
+          return { x: e.x, y: e.y, z: e.z };
+        },
+        getChest: () => b.chestPos(),
+        getAABB: () => b.getAABB(),
+      });
+    }
+    return out;
   }
 
   private resolveShooterPos(shooter: string, fallback: Vec3): Vec3 {
@@ -143,6 +188,8 @@ export class EntityManager {
     }
     const ally = this.squad?.getLivingAllies().find((a) => a.id === shooter);
     if (ally) return { x: ally.px, y: ally.footY, z: ally.pz };
+    const hostile = this.hostileTargets?.().find((a) => a.id === shooter);
+    if (hostile) return { x: hostile.px, y: hostile.footY, z: hostile.pz };
     return fallback;
   }
 

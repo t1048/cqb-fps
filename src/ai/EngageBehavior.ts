@@ -76,6 +76,8 @@ export interface CombatContext {
   stairs?: readonly StairMark[];
   /** 部屋定義（巡回・フランク・人質室防衛・フロア判定用） */
   rooms?: readonly RoomDef[];
+  /** true ならプレイヤーを脅威にしない（容疑者モードの味方 NPC。SWAT モードでは未設定） */
+  ignorePlayer?: boolean;
 }
 
 export interface XZ {
@@ -268,7 +270,7 @@ export function findNearestVisibleThreat(
   let best: CombatThreat | null = null;
   let bestD = range;
 
-  if (ctx.player.alive !== false) {
+  if (!ctx.ignorePlayer && ctx.player.alive !== false) {
     const eye = ctx.player.getEyePosition();
     const pos = ctx.player.position;
     const d = Math.hypot(pos.x - x, pos.z - z);
@@ -1005,7 +1007,7 @@ export class EngageBehavior {
       if (d !== null && d < bestT) bestT = d;
     }
 
-    if (this.ctx.player.alive !== false && this.ctx.player.getBodyBounds) {
+    if (!this.ctx.ignorePlayer && this.ctx.player.alive !== false && this.ctx.player.getBodyBounds) {
       const d = this.rayDist(this.ctx.player.getBodyBounds());
       if (d !== null && d < bestT) {
         bestT = d;

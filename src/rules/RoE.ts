@@ -103,6 +103,7 @@ export class RoE {
     }
     const s = this.entities.suspects.get(targetId);
     if (s) {
+      if (s.friendly) return; // 容疑者モードの味方。SWAT モードの RoE には影響しない
       if (s.state === SuspectState.SURRENDER || s.state === SuspectState.ARRESTED) {
         this.violate('fireOnSurrendered', targetId);
         return;

@@ -85,6 +85,8 @@ export class Suspect implements HitTarget {
     private readonly ctx: CombatContext | null = null,
     textures?: TextureLibrary,
     private readonly warningCooldown = 2,
+    /** 容疑者モードの味方。プレイヤーを撃たず、SWAT と戦う */
+    readonly friendly = false,
   ) {
     this.id = def.id;
     this.morale = new Morale(profile);
@@ -783,6 +785,26 @@ export class Suspect implements HitTarget {
     if (this.hp <= 0) {
       this.setState(SuspectState.DOWN);
       return true;
+    }
+    if (this.friendly) {
+      // プレイヤーの流れ弾では仲間を敵に回さない。SWAT からの被弾だけ交戦に入る。
+      const player = this.ctx?.player.position;
+      const fromPlayer =
+        !!shooterPos &&
+        !!player &&
+        Math.hypot(shooterPos.x - player.x, shooterPos.z - player.z) < 0.75 &&
+        Math.abs(shooterPos.y - player.y) < 1.2;
+      if (!fromPlayer && shooterPos && (this.managed || this.state === SuspectState.NEGOTIATION)) {
+        this.known = { x: shooterPos.x, y: resolveFloorY(shooterPos, this.ctx?.rooms), z: shooterPos.z };
+        this.body.faceToward(shooterPos.x, shooterPos.z);
+        if (this.morale.value < this.profile.thresholds.surrenderBelow) {
+          this.setState(SuspectState.SURRENDER);
+        } else {
+          this.setState(SuspectState.ENGAGE);
+          this.engage?.onHit(this.known);
+        }
+      }
+      return false;
     }
     if (!this.managed && this.state !== SuspectState.NEGOTIATION) return false;
     const at = shooterPos ?? this.ctx?.player.position;
