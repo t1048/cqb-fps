@@ -163,8 +163,8 @@ describe('F7 — Role-Split Pincer Flanking', () => {
       spawns: [
         { x: 0, y: 0, z: 3 },
         { x: 1, y: 0, z: 3 },
-        { x: -3, y: 0, z: -6 },
-        { x: -2, y: 0, z: -6 },
+        { x: -3, y: 0, z: -13 },
+        { x: -2, y: 0, z: -13 },
       ],
       count: 4,
       player: {
@@ -228,8 +228,8 @@ describe('F7 — Role-Split Pincer Flanking', () => {
       spawns: [
         { x: 0, y: 0, z: 3 },
         { x: 1, y: 0, z: 3 },
-        { x: -3, y: 0, z: -6 },
-        { x: -2, y: 0, z: -6 },
+        { x: -3, y: 0, z: -13 },
+        { x: -2, y: 0, z: -13 },
       ],
       count: 4,
       player: {
@@ -278,6 +278,7 @@ describe('F7 — Role-Split Pincer Flanking', () => {
     southDoor.dispose();
     northDoor.dispose();
   });
+
 
   it('skips an enclosed courtyard door and flanks through a reachable side instead', () => {
     const rooms: RoomDef[] = [{ id: 'center', name: 'Center', x: 0, z: 0, width: 8, depth: 8, floorY: 0 }];
@@ -364,5 +365,141 @@ describe('F7 — Role-Split Pincer Flanking', () => {
     southDoor.dispose();
     northDoor.dispose();
     eastDoor.dispose();
+  });
+
+  it('does not send a flanker who just entered an uncleared room to that room\'s far door', () => {
+    const bus = createGameEventBus();
+    const rooms: RoomDef[] = [
+      { id: 'center', name: 'Center', x: 0, z: 0, width: 8, depth: 8, floorY: 0 },
+      { id: 'north', name: 'North', x: 0, z: -8, width: 8, depth: 8, floorY: 0 },
+    ];
+    const southDoor = new Door({ id: 'south_door', x: 0, z: 4, yaw: 0, maxAngle: 90, locked: false }, DOOR_CFG, 2.8, bus);
+    const northDoor = new Door({ id: 'north_door', x: 0, z: -4, yaw: 0, maxAngle: 90, locked: true }, DOOR_CFG, 2.8, bus);
+    const playerPos = new THREE.Vector3(0, 0, 0);
+    const team = new SwatTeam({
+      spawns: [
+        { x: 0, y: 0, z: 3 },
+        { x: 1, y: 0, z: 3 },
+        { x: -3, y: 0, z: -6 },
+        { x: -2, y: 0, z: -6 },
+      ],
+      count: 4,
+      player: {
+        position: playerPos,
+        alive: true,
+        isCrouching: false,
+        yawRad: 0,
+        hp: 100,
+        getEyePosition: (out = new THREE.Vector3()) => out.set(0, 1.6, 0),
+        getBodyBounds: () => ({ min: { x: -0.3, y: 0, z: -0.3 }, max: { x: 0.3, y: 1.75, z: 0.3 } }),
+        takeDamage: vi.fn(() => 100),
+      },
+      colliders: [],
+      bus,
+      weapons: { addTarget: vi.fn(), removeTarget: vi.fn() } as unknown as WeaponSystem,
+      doors: { doors: [southDoor, northDoor] } as unknown as DoorSystem,
+      bounds: { width: 24, depth: 24 },
+      stairs: [],
+      rooms,
+      windows: [],
+      flashbang: { gravity: 9.8, throwFrom: vi.fn() } as unknown as Flashbang,
+      subtitle: { show: vi.fn() } as unknown as Subtitle,
+      civilians: () => [],
+    });
+
+    team.beginAssault();
+    const red2 = team.hunters[1]!;
+    const blue1 = team.hunters[2]!;
+    team.hunters[0]!.setState('engage');
+    team.onContact(team.hunters[0]!, { x: 0, y: 0, z: 0 });
+
+    // 北室に入った直後の Blue は、その部屋の奥ドアへ迂回せず掃討に残る
+    expect(blue1.huntingFlank).toBe(false);
+    expect(blue1.state).toBe('sweep');
+    expect(blue1.huntTarget).toBeNull();
+    // 同じ部屋にいる正面班は、容疑者の位置への追跡を維持する
+    expect(red2.state).toBe('hunt');
+    expect(red2.huntingFlank).toBe(false);
+    expect(red2.huntTarget?.z).toBeCloseTo(0, 2);
+
+    team.dispose();
+    southDoor.dispose();
+    northDoor.dispose();
+  });
+
+  it('sweep inside an uncleared room does not breach the far locked door', () => {
+    const bus = createGameEventBus();
+    const rooms: RoomDef[] = [
+      { id: 'center', name: 'Center', x: 0, z: 0, width: 8, depth: 8, floorY: 0 },
+      { id: 'north', name: 'North', x: 0, z: -8, width: 8, depth: 8, floorY: 0 },
+    ];
+    const northDoor = new Door({ id: 'north_door', x: 0, z: -4, yaw: 0, maxAngle: 90, locked: true }, DOOR_CFG, 2.8, bus);
+    const wall: Collider = {
+      kind: 'wall',
+      aabb: { min: { x: -6, y: 0, z: -4.2 }, max: { x: 6, y: 3, z: -3.8 } },
+    };
+    // 北室の奥への視線だけを遮る。マスの座標自体は壁の中に入れない
+    const closet: Collider = {
+      kind: 'wall',
+      aabb: { min: { x: -3.6, y: 0, z: -8.7 }, max: { x: 3.6, y: 2.4, z: -8.4 } },
+    };
+    const playerPos = new THREE.Vector3(0, 0, 0);
+    const team = new SwatTeam({
+      spawns: [{ x: -1, y: 0, z: -6 }],
+      count: 1,
+      player: {
+        position: playerPos,
+        alive: true,
+        isCrouching: false,
+        yawRad: 0,
+        hp: 100,
+        getEyePosition: (out = new THREE.Vector3()) => out.set(playerPos.x, playerPos.y + 1.6, playerPos.z),
+        getBodyBounds: () => ({
+          min: { x: playerPos.x - 0.3, y: 0, z: playerPos.z - 0.3 },
+          max: { x: playerPos.x + 0.3, y: playerPos.y + 1.75, z: playerPos.z + 0.3 },
+        }),
+        takeDamage: vi.fn(() => 100),
+      },
+      colliders: [wall, closet, ...northDoor.colliders],
+      bus,
+      weapons: { addTarget: vi.fn(), removeTarget: vi.fn() } as unknown as WeaponSystem,
+      doors: { doors: [northDoor] } as unknown as DoorSystem,
+      bounds: { width: 24, depth: 24 },
+      stairs: [],
+      rooms,
+      windows: [],
+      flashbang: { gravity: 9.8, throwFrom: vi.fn() } as unknown as Flashbang,
+      subtitle: { show: vi.fn() } as unknown as Subtitle,
+      civilians: () => [],
+    });
+
+    team.beginAssault();
+    const hunter = team.hunters[0]!;
+    hunter.body.setPosition(-1, -6, 0);
+    hunter.huntTarget = { x: 0, y: 0, z: 0 };
+    hunter.setState('hunt');
+    hunter.huntingFlank = true;
+
+    expect(hunter.tryBeginBreach({ x: -1, y: 0, z: -8 })).toBe(false);
+    expect(hunter.state).not.toBe('breach');
+    expect(team.unclearedIndoorRoom(hunter)?.id).toBe('north');
+    expect(team.nextClearCell(hunter)?.room).toBe('north');
+
+    for (let i = 0; i < 12; i++) {
+      team.update(0.05);
+      expect(hunter.state).not.toBe('breach');
+      if (hunter.goalCell) expect(hunter.goalCell.room).toBe('north');
+    }
+
+    expect(hunter.huntingFlank).toBe(false);
+    expect(hunter.state).toBe('sweep');
+    expect(hunter.body.pz).toBeLessThan(-4);
+
+    hunter.body.setPosition(0, -14, 0);
+    expect(hunter.tryBeginBreach({ x: 0, y: 0, z: -2 }, northDoor.id)).toBe(true);
+    expect(hunter.state).toBe('breach');
+
+    team.dispose();
+    northDoor.dispose();
   });
 });

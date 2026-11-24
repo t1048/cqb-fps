@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
+import { SuspectState } from '../core/events';
 import { disposeObject } from '../core/dispose';
 import type { AIProfile, EntityDef, PerceptionConfig, RoomDef, Vec3, WarningConfig } from '../core/types';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
@@ -7,13 +8,20 @@ import { hasLineOfSight } from '../weapons/Flashbang';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { AllyTarget, CombatTarget } from './EngageBehavior';
 import { Civilian } from './Civilian';
-import { Suspect } from './Suspect';
+import { Suspect, type GasSample } from './Suspect';
 import { Perception, type PerceptionTarget } from './Perception';
 import { MoraleSystem } from './Morale';
 import { AIDebugLabel } from '../ui/AIDebugLabel';
 import type { DoorSystem } from '../world/Door';
 import type { TextureLibrary } from '../world/Materials';
 import type { StairMark } from '../world/Walk';
+import { evaluateC2BlastCone } from './SwatTactics';
+import { SWAT_C2_BLAST_HALF_ANGLE_DEG, SWAT_C2_BLAST_RADIUS, SWAT_C2_MAX_DAMAGE } from './SwatProfile';
+
+/** CS ガス濃度サンプリングの軽量構造型（TearGas が構造的に満たす） */
+export interface GasField {
+  exposureAt(pos: THREE.Vector3): number;
+}
 
 export interface SquadCoordinator {
   getLivingAllies(): readonly AllyTarget[];
@@ -45,6 +53,9 @@ export class EntityManager {
   private disposed = false;
   /** 容疑者モード: 残した容疑者 NPC はプレイヤーの味方で、SWAT を撃つ */
   private readonly friendlySuspects: boolean;
+  private tearGas: GasField | null = null;
+  private readonly gasProbe = new THREE.Vector3();
+  private readonly recentGasClouds: { pos: Vec3; radius: number; remainingSec: number }[] = [];
 
   constructor(
     defs: readonly EntityDef[],
@@ -58,8 +69,10 @@ export class EntityManager {
     textures?: TextureLibrary,
     nav?: { doors: DoorSystem; bounds: { width: number; depth: number }; stairs: readonly StairMark[] },
     friendlySuspects = false,
+    tearGas: GasField | null = null,
   ) {
     this.friendlySuspects = friendlySuspects;
+    this.tearGas = tearGas;
     this.root.name = 'entities';
     for (const def of defs) {
       if (def.type !== 'suspect' && def.type !== 'civilian') continue;
@@ -141,7 +154,15 @@ export class EntityManager {
         const c = this.civilians.get(e.targetId);
         if (c && !e.nonlethal && c.damage(e.damage)) weapons.removeTarget(c);
       }),
+      bus.on('gasDetonated', (e) => {
+        this.recentGasClouds.push({ pos: { x: e.pos.x, y: e.pos.y, z: e.pos.z }, radius: e.radius, remainingSec: 18 });
+      }),
     );
+  }
+
+  /** CS 催涙ガスシステムを接続する（null で解除） */
+  setTearGas(tg: GasField | null): void {
+    this.tearGas = tg;
   }
 
   /** SquadSystem 生成後に呼び出し、敵AIが味方隊員を視認・射撃できるようにする。 */
@@ -156,6 +177,76 @@ export class EntityManager {
   attachHostileTargets(fn: () => readonly AllyTarget[]): void {
     this.hostileTargets = fn;
     this.perception?.attachAllies(fn);
+  }
+
+  /**
+   * C2 爆破ブリーチの指向性ブラストを適用する。
+   * - 爆風コーン内＋LOS のある敵対・籠城容疑者にダメージ・怯み・士気ショックを与える。
+   * - 民間人および投降済み(SURRENDER)・拘束済み(ARRESTED)の容疑者には致死ダメージを与えない（RoE 保護）。
+   */
+  applyC2Blast(
+    doorPos: Vec3,
+    blastDir: Vec3,
+    radius = SWAT_C2_BLAST_RADIUS,
+    halfAngleDeg = SWAT_C2_BLAST_HALF_ANGLE_DEG,
+    maxDamage = SWAT_C2_MAX_DAMAGE,
+    _sourceId = 'c2',
+  ): { damagedIds: string[]; stunnedIds: string[]; killedIds: string[] } {
+    const damagedIds: string[] = [];
+    const stunnedIds: string[] = [];
+    const killedIds: string[] = [];
+    if (
+      !Number.isFinite(radius) ||
+      radius <= 0 ||
+      !Number.isFinite(halfAngleDeg) ||
+      halfAngleDeg <= 0 ||
+      !Number.isFinite(maxDamage) ||
+      maxDamage < 0 ||
+      !Number.isFinite(doorPos.x) ||
+      !Number.isFinite(doorPos.y) ||
+      !Number.isFinite(doorPos.z) ||
+      !Number.isFinite(blastDir.x) ||
+      !Number.isFinite(blastDir.z)
+    ) {
+      return { damagedIds, stunnedIds, killedIds };
+    }
+
+    const dirLen = Math.hypot(blastDir.x, blastDir.z);
+    if (!Number.isFinite(dirLen) || dirLen <= 1e-6) {
+      return { damagedIds, stunnedIds, killedIds };
+    }
+    const normDir: Vec3 = { x: blastDir.x / dirLen, y: 0, z: blastDir.z / dirLen };
+    // ドア面自身のコライダーによる自己遮蔽を避けるため爆風側へ 0.25m オフセット
+    const blastOrigin: Vec3 = {
+      x: doorPos.x + normDir.x * 0.25,
+      y: doorPos.y,
+      z: doorPos.z + normDir.z * 0.25,
+    };
+    const coneCos = Math.cos(halfAngleDeg * (Math.PI / 180));
+
+    for (const s of this.suspects.values()) {
+      if (!s.alive) continue;
+      // 投降済み・拘束済みの容疑者は致死被害から保護する
+      if (s.state === SuspectState.SURRENDER || s.state === SuspectState.ARRESTED) continue;
+      const chest = s.body.chestPos();
+      const blast = evaluateC2BlastCone(blastOrigin, normDir, chest, radius, coneCos, maxDamage);
+      if (!blast.inCone) continue;
+      if (!hasLineOfSight(this.colliders, blastOrigin, chest)) continue;
+      // 士気ショックを先に適用し、生存時に降伏しきい値を下回っていればクリーンに投降させる
+      s.morale.apply('breach', Math.max(0.5, blast.stunScale));
+      s.onFlashed(1.4 * blast.stunScale);
+      stunnedIds.push(s.id);
+      if (blast.damage > 0) {
+        const died = s.takeHit(blast.damage, blastOrigin);
+        damagedIds.push(s.id);
+        if (died) {
+          this.weapons.removeTarget(s);
+          killedIds.push(s.id);
+        }
+      }
+    }
+    // 民間人には一切ダメージを与えない（RoE 保証）
+    return { damagedIds, stunnedIds, killedIds };
   }
 
   /** 生存中の容疑者を、SWAT の射撃対象（AllyTarget）として返す */
@@ -193,13 +284,55 @@ export class EntityManager {
     return fallback;
   }
 
+  private sampleGasAt(pos: Vec3): GasSample | undefined {
+    const tg = this.tearGas;
+    if (!tg) return undefined;
+    const density = tg.exposureAt(this.gasProbe.set(pos.x, pos.y, pos.z));
+    if (density <= 0) return { density: 0, origin: null };
+
+    // 有限差分勾配で高濃度方向（ガス雲中心側）を推定
+    const h = 0.75;
+    const gx =
+      tg.exposureAt(this.gasProbe.set(pos.x + h, pos.y, pos.z)) -
+      tg.exposureAt(this.gasProbe.set(pos.x - h, pos.y, pos.z));
+    const gz =
+      tg.exposureAt(this.gasProbe.set(pos.x, pos.y, pos.z + h)) -
+      tg.exposureAt(this.gasProbe.set(pos.x, pos.y, pos.z - h));
+    const gLen = Math.hypot(gx, gz);
+    if (gLen > 1e-4) {
+      return {
+        density,
+        origin: { x: pos.x + (gx / gLen) * 2.5, y: pos.y, z: pos.z + (gz / gLen) * 2.5 },
+      };
+    }
+
+    // 雲中心付近など勾配が平坦な場合は直近の gasDetonated 座標へフォールバック
+    let bestOrigin: Vec3 | null = null;
+    let bestDist = Infinity;
+    for (const c of this.recentGasClouds) {
+      if (Math.abs(pos.y - c.pos.y) > 2.6) continue;
+      const d = Math.hypot(pos.x - c.pos.x, pos.z - c.pos.z);
+      if (d <= c.radius + 1.5 && d < bestDist) {
+        bestDist = d;
+        bestOrigin = c.pos;
+      }
+    }
+    return { density, origin: bestOrigin };
+  }
+
   /** 士気回復・FSM 更新・デバッグ表示更新（F3 で表示切替）。 */
   update(rawDt: number): void {
     const dt = Math.min(rawDt, 0.05);
+    for (let i = this.recentGasClouds.length - 1; i >= 0; i--) {
+      const c = this.recentGasClouds[i]!;
+      c.remainingSec -= dt;
+      if (c.remainingSec <= 0) this.recentGasClouds.splice(i, 1);
+    }
     this.perception?.update(dt);
     for (const c of this.civilians.values()) c.update(dt);
     for (const s of this.suspects.values()) {
-      s.update(dt);
+      const gas = this.tearGas ? this.sampleGasAt(s.body.chestPos()) : undefined;
+      s.update(dt, gas);
       const label = this.labels.get(s.id);
       if (!label) continue;
       label.sprite.visible = this.debugVisible;
