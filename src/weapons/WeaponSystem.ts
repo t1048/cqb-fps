@@ -325,7 +325,7 @@ export class WeaponSystem {
   /** 数字キー: 同スロットに複数あれば順番に切替。リロード中は不可。 */
   private handleSlotSwitch(): void {
     if (this.reloadLeft > 0) return;
-    for (let slot = 1; slot <= 4; slot++) {
+    for (let slot = 1; slot <= 3; slot++) {
       if (!this.input.wasPressed(`slot${slot}`)) continue;
       const list = this.weapons.filter((x) => x.slot === slot && x.category !== 'throwable');
       if (list.length === 0) return;

@@ -15,7 +15,6 @@ export type Action =
   | 'slot1'
   | 'slot2'
   | 'slot3'
-  | 'slot4'
   | 'orderMenu'
   | 'quickOrder'
   | 'regroup'
@@ -41,7 +40,6 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   slot1: ['Digit1'],
   slot2: ['Digit2'],
   slot3: ['Digit3'],
-  slot4: ['Digit4'],
   orderMenu: ['Tab'],
   quickOrder: ['KeyZ'],
   regroup: ['KeyX'],

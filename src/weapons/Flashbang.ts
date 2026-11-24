@@ -155,10 +155,10 @@ export class Flashbang {
     const dt = Math.min(rawDt, MAX_DT);
     this.cooldown = Math.max(0, this.cooldown - dt);
 
-    // 構え切替: 4 でトグル、1〜3 で通常武器へ戻る（指揮メニュー展開中は抑止）
+    // 構え切替: 3 でトグル、1〜2 で通常武器へ戻る（指揮メニュー展開中は抑止）
     if (!this.input.isOrderMenuOpen) {
-      if (this.input.wasPressed('slot4')) this.setEquipped(!this.isEquipped && this.count > 0);
-      else if (this.input.wasPressed('slot1') || this.input.wasPressed('slot2') || this.input.wasPressed('slot3')) {
+      if (this.input.wasPressed('slot3')) this.setEquipped(!this.isEquipped && this.count > 0);
+      else if (this.input.wasPressed('slot1') || this.input.wasPressed('slot2')) {
         this.setEquipped(false);
       }
     }
