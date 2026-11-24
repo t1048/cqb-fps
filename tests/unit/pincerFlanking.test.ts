@@ -11,10 +11,15 @@ import {
   type PinningCellInfo,
 } from '../../src/modes/SwatTeam';
 import { Door, type DoorConfig, type DoorSystem } from '../../src/world/Door';
+import type { Collider } from '../../src/world/WorldBuilder';
 import type { StairMark } from '../../src/world/Walk';
 import type { Flashbang } from '../../src/weapons/Flashbang';
 import type { WeaponSystem } from '../../src/weapons/WeaponSystem';
 import type { Subtitle } from '../../src/ui/Subtitle';
+
+function makeWall(minX: number, maxX: number, minZ: number, maxZ: number): Collider {
+  return { kind: 'wall', aabb: { min: { x: minX, y: 0, z: minZ }, max: { x: maxX, y: 3, z: maxZ } } };
+}
 
 const DOOR_CFG: DoorConfig = {
   thickness: 0.05,
@@ -272,5 +277,92 @@ describe('F7 — Role-Split Pincer Flanking', () => {
     team.dispose();
     southDoor.dispose();
     northDoor.dispose();
+  });
+
+  it('skips an enclosed courtyard door and flanks through a reachable side instead', () => {
+    const rooms: RoomDef[] = [{ id: 'center', name: 'Center', x: 0, z: 0, width: 8, depth: 8, floorY: 0 }];
+    const doors: FlankDoorSample[] = [
+      { id: 'south_door', centerX: 0, centerZ: 4, normalX: 0, normalZ: 1, sillY: 0, locked: false },
+      { id: 'north_door', centerX: 0, centerZ: -4, normalX: 0, normalZ: 1, sillY: 0, locked: false },
+      { id: 'east_door', centerX: 4, centerZ: 0, normalX: 1, normalZ: 0, sillY: 0, locked: false },
+    ];
+    // 北ドアの屋外接近点 (0, -4.75) を閉じた中庭にする
+    const colliders: Collider[] = [
+      makeWall(-1.5, 1.5, -5.5, -5.2),
+      makeWall(-1.5, 1.5, -4.4, -4.1),
+      makeWall(-1.6, -1.3, -5.5, -4.1),
+      makeWall(1.3, 1.6, -5.5, -4.1),
+    ];
+    const goal = planPincerFlankGoal({
+      playerPos: { x: 0, y: 0, z: 0 },
+      frontalPos: { x: 0, y: 0, z: 6 },
+      flankerPos: { x: 7, y: 0, z: 0 },
+      rooms,
+      doors,
+      stairs: [],
+      colliders,
+      bounds: { width: 40, depth: 40 },
+    });
+    expect(goal?.kind).toBe('altDoor');
+    expect(goal?.doorId).toBe('east_door');
+    expect(goal!.target.z).toBeGreaterThan(-3);
+  });
+
+  it('SwatTeam does not send the flanking cell outside an unreachable courtyard', () => {
+    const bus = createGameEventBus();
+    const rooms: RoomDef[] = [{ id: 'center', name: 'Center', x: 0, z: 0, width: 8, depth: 8, floorY: 0 }];
+    const southDoor = new Door({ id: 'south_door', x: 0, z: 4, yaw: 0, maxAngle: 90, locked: false }, DOOR_CFG, 2.8, bus);
+    const northDoor = new Door({ id: 'north_door', x: 0, z: -4, yaw: 0, maxAngle: 90, locked: false }, DOOR_CFG, 2.8, bus);
+    const eastDoor = new Door({ id: 'east_door', x: 4, z: 0, yaw: 90, maxAngle: 90, locked: false }, DOOR_CFG, 2.8, bus);
+    const colliders: Collider[] = [
+      makeWall(-1.5, 1.5, -5.5, -5.2),
+      makeWall(-1.5, 1.5, -4.4, -4.1),
+      makeWall(-1.6, -1.3, -5.5, -4.1),
+      makeWall(1.3, 1.6, -5.5, -4.1),
+    ];
+    const team = new SwatTeam({
+      spawns: [
+        { x: 0, y: 0, z: 2 },
+        { x: 1, y: 0, z: 2 },
+        { x: 7, y: 0, z: 0 },
+        { x: 7.4, y: 0, z: 0.4 },
+      ],
+      count: 4,
+      player: {
+        position: new THREE.Vector3(0, 0, 0),
+        alive: true,
+        isCrouching: false,
+        yawRad: 0,
+        hp: 100,
+        getEyePosition: (out = new THREE.Vector3()) => out.set(0, 1.6, 0),
+        getBodyBounds: () => ({ min: { x: -0.3, y: 0, z: -0.3 }, max: { x: 0.3, y: 1.75, z: 0.3 } }),
+        takeDamage: vi.fn(() => 100),
+      },
+      colliders,
+      bus,
+      weapons: { addTarget: vi.fn(), removeTarget: vi.fn() } as unknown as WeaponSystem,
+      doors: { doors: [southDoor, northDoor, eastDoor] } as unknown as DoorSystem,
+      bounds: { width: 40, depth: 40 },
+      stairs: [],
+      rooms,
+      windows: [],
+      flashbang: { gravity: 9.8, throwFrom: vi.fn() } as unknown as Flashbang,
+      subtitle: { show: vi.fn() } as unknown as Subtitle,
+      civilians: () => [],
+    });
+
+    team.beginAssault();
+    const red1 = team.hunters[0]!;
+    const blue1 = team.hunters[2]!;
+    red1.setState('engage');
+    team.onContact(red1, { x: 0, y: 0, z: 0 });
+
+    expect(blue1.state).toBe('hunt');
+    expect(blue1.huntTarget!.z).toBeGreaterThan(-3);
+
+    team.dispose();
+    southDoor.dispose();
+    northDoor.dispose();
+    eastDoor.dispose();
   });
 });

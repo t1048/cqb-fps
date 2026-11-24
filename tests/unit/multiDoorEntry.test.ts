@@ -267,4 +267,75 @@ describe('F6 — Multi-Door Simultaneous Entry', () => {
     doorFront.dispose();
     doorBack.dispose();
   });
+
+  it('attack routing ignores an assigned back door and a walled-off courtyard', () => {
+    const rooms: RoomDef[] = [{ id: 'r1', name: 'Main', x: 0, z: 0, width: 10, depth: 10, floorY: 0 }];
+    const front = makePortal('front', 0, 7, 0, 4);
+    const back = makePortal('back', 0, -8, 0, -4);
+    const court = makePortal('court', 2, 0, 0, 0);
+    const from = { x: 8, y: 0, z: 0 };
+    const goal = { x: 0, y: 0, z: 0 };
+    // 直線距離では中庭の屋外側が近い
+    expect(entryRouteDest(rooms, [front, court], from, goal).entryId).toBe('court');
+
+    const reachable = [
+      { id: 'front', length: 4 },
+      { id: 'back', length: 26 },
+    ];
+    const attack = entryRouteDest(rooms, [front, back, court], from, goal, 'back', { mode: 'attack', reachable });
+    expect(attack.entryId).toBe('front');
+    expect(attack.phase).toBe('approach');
+
+    const hold = entryRouteDest(rooms, [front, back], from, goal, 'back', { mode: 'hold', reachable });
+    expect(hold.entryId).toBe('back');
+  });
+
+  it('SwatTeam.routeFrom walks to the front door instead of an enclosed courtyard', () => {
+    const bus = createGameEventBus();
+    const rooms: RoomDef[] = [{ id: 'r1', name: 'Main', x: 0, z: 0, width: 10, depth: 10, floorY: 0 }];
+    const doorFront = new Door({ id: 'door_front', x: 0, z: 5, yaw: 0, maxAngle: 90, locked: false }, DOOR_CFG, 2.8, bus);
+    const doorCourt = new Door({ id: 'door_court', x: 5, z: 0, yaw: 90, maxAngle: 90, locked: false }, DOOR_CFG, 2.8, bus);
+    // 東ドアの屋外側 (約 5.8, 0) を壁で囲み、正面 (0, 5.8) だけ歩けるようにする
+    const colliders: Collider[] = [
+      makeWall(4.9, 6.9, -1.3, -1.0),
+      makeWall(4.9, 6.9, 1.0, 1.3),
+      makeWall(4.9, 5.2, -1.3, 1.3),
+      makeWall(6.6, 6.9, -1.3, 1.3),
+    ];
+    const team = new SwatTeam({
+      spawns: [{ x: 8, y: 0, z: 0 }],
+      count: 1,
+      player: {
+        position: new THREE.Vector3(0, 0, 0),
+        alive: true,
+        isCrouching: false,
+        yawRad: 0,
+        hp: 100,
+        getEyePosition: (out = new THREE.Vector3()) => out.set(0, 1.6, 0),
+        getBodyBounds: () => ({ min: { x: -0.3, y: 0, z: -0.3 }, max: { x: 0.3, y: 1.75, z: 0.3 } }),
+        takeDamage: vi.fn(() => 100),
+      },
+      colliders,
+      bus,
+      weapons: { addTarget: vi.fn(), removeTarget: vi.fn() } as unknown as WeaponSystem,
+      doors: { doors: [doorFront, doorCourt] } as unknown as DoorSystem,
+      bounds: { width: 40, depth: 40 },
+      stairs: [],
+      rooms,
+      windows: [],
+      flashbang: { gravity: 9.8, throwFrom: vi.fn() } as unknown as Flashbang,
+      subtitle: { show: vi.fn() } as unknown as Subtitle,
+      civilians: () => [],
+    });
+
+    const attack = team.routeFrom(8, 0, 0, { x: 0, y: 0, z: 0 }, 'door_court', 'attack');
+    expect(attack.entryId).toBe('door_front');
+    expect(attack.phase).toBe('approach');
+    const hold = team.routeFrom(8, 0, 0, { x: 0, y: 0, z: 0 }, 'door_court', 'hold');
+    expect(hold.entryId).toBe('door_front');
+
+    team.dispose();
+    doorFront.dispose();
+    doorCourt.dispose();
+  });
 });
