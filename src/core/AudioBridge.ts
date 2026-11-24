@@ -12,6 +12,11 @@ export type AudioBridgeSink = Pick<
   | 'playBreach'
   | 'playGunshot'
   | 'playFlashbang'
+  | 'playC2Beep'
+  | 'playC2Blast'
+  | 'playSwatFootstep'
+  | 'playGasHiss'
+  | 'playCough'
   | 'playWarningCall'
   | 'playRadioReport'
   | 'playAllyRadio'
@@ -115,6 +120,53 @@ export class AudioBridge {
         if (intensity <= 0) return;
         const durationSec = Math.max(MIN_EAR_RINGING_SEC, blindSec * intensity);
         this.audio.triggerEarRinging(intensity, durationSec);
+      }),
+    );
+
+    this.unsubs.push(
+      bus.on('c2Beep', ({ pos, urgent }) => {
+        if (this.disposed || !isFiniteVec3(pos)) return;
+        this.audio.playC2Beep(pos, urgent);
+      }),
+      bus.on('c2Detonated', ({ pos, dir, radius }) => {
+        if (this.disposed) return;
+        if (!isFiniteVec3(pos) || !Number.isFinite(radius) || radius <= 0) return;
+        this.audio.playC2Blast(pos, Math.max(radius * 6, 35));
+
+        this.player.getEyePosition(this.eye);
+        if (!isFiniteVec3(this.eye)) return;
+        const maxDist = radius * 1.4;
+        const d = Math.hypot(pos.x - this.eye.x, pos.y - this.eye.y, pos.z - this.eye.z);
+        if (!Number.isFinite(d) || d > maxDist) return;
+
+        const dx = this.eye.x - pos.x;
+        const dz = this.eye.z - pos.z;
+        const horiz = Math.hypot(dx, dz);
+        const dot = horiz > 0.35 ? (dx * dir.x + dz * dir.z) / horiz : 1;
+        if (dot < 0.15) return;
+
+        // Offset LOS origin into blastDir so the closed door leaf collider doesn't self-occlude on detonation frame.
+        this.flashTarget.x = pos.x + dir.x * 0.25;
+        this.flashTarget.y = pos.y;
+        this.flashTarget.z = pos.z + dir.z * 0.25;
+        if (!hasLineOfSight(this.colliders, this.flashTarget, this.eye)) return;
+
+        const intensity = Math.max(0, Math.min(1, (1 - 0.7 * (d / maxDist)) * 0.9));
+        if (intensity <= 0) return;
+        const durationSec = Math.max(0.8, 3.0 * intensity);
+        this.audio.triggerEarRinging(intensity, durationSec);
+      }),
+      bus.on('swatFootstep', ({ pos, heavy }) => {
+        if (this.disposed || !isFiniteVec3(pos)) return;
+        this.audio.playSwatFootstep(pos, Boolean(heavy));
+      }),
+      bus.on('gasDetonated', ({ pos, radius }) => {
+        if (this.disposed || !isFiniteVec3(pos) || !Number.isFinite(radius) || radius <= 0) return;
+        this.audio.playGasHiss(pos, radius);
+      }),
+      bus.on('playerCough', ({ pos }) => {
+        if (this.disposed || !isFiniteVec3(pos)) return;
+        this.audio.playCough(pos);
       }),
     );
 

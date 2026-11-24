@@ -16,6 +16,10 @@ export function parseGameMode(v: string | null | undefined): GameMode {
   return v === 'suspect' ? 'suspect' : 'swat';
 }
 
+export function parseReinforcements(v: string | null | undefined): boolean {
+  return v === '1' || v === 'true';
+}
+
 /** 容疑者モードのルール定数。人数は MissionRoster（両モード共通）が決める。 */
 export const SUSPECT_MODE = {
   /** SWAT 突入までの準備時間（秒）。交渉で増減する */
@@ -316,9 +320,14 @@ export class SuspectMission {
     }
     this.flushGauge();
 
+    if (this.team.hasStarted && this.player.alive) {
+      this.team.checkReinforcements(this.holdLeft);
+    }
+
     if (!this.player.alive) this.conclude('killed', 1.4);
-    else if (this.team.hasStarted && this.team.aliveCount === 0) this.conclude('repelled', 2.0);
-    else if (this.team.hasStarted && this.holdLeft <= 0) {
+    else if (this.team.hasStarted && this.team.aliveCount === 0 && !this.team.hasPendingReinforcements) {
+      this.conclude('repelled', 2.0);
+    } else if (this.team.hasStarted && this.holdLeft <= 0) {
       this.subtitle.show('SWAT「撤退だ！包囲を維持しろ！」', 2.0);
       this.conclude('survived', 2.0);
     }
@@ -342,7 +351,13 @@ export class SuspectMission {
     } else if (!this.team.hasStarted) {
       text = `SWAT 突入まで ${fmt(this.assaultAt - this.elapsed)}　|　F 長押しでドア施錠 / Space で準備完了`;
     } else {
-      text = `籠城 残り ${fmt(this.holdLeft)}　|　SWAT 残り ${this.team.aliveCount}/${this.team.total}`;
+      const waveSuffix =
+        this.team.reinforcementWavesSpawned > 0
+          ? `　|　増援 第${this.team.reinforcementWavesSpawned}波`
+          : this.team.hasPendingReinforcements
+            ? '　|　増援あり'
+            : '';
+      text = `籠城 残り ${fmt(this.holdLeft)}　|　SWAT 残り ${this.team.aliveCount}/${this.team.total}${waveSuffix}`;
     }
     if (text !== this.lastHud) {
       this.lastHud = text;

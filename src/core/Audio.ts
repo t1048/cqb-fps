@@ -43,6 +43,47 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+const CELL_VOICE_PROFILES: readonly { pitch: number; rate: number; baseHz: number }[] = [
+  { pitch: 0.86, rate: 1.14, baseHz: 126 }, // Red
+  { pitch: 1.04, rate: 1.2, baseHz: 158 }, // Blue
+  { pitch: 0.94, rate: 1.16, baseHz: 142 }, // Gold
+  { pitch: 0.78, rate: 1.12, baseHz: 118 }, // Green
+];
+
+/**
+ * 隊員 ID またはセル名（Red/Blue/Gold/Green, swat_N）から無線ボイスの音高・話速・基本周波数を決定する。
+ */
+export function radioVoiceProfile(allyId: string): { pitch: number; rate: number; baseHz: number } {
+  if (allyId === 'ally_miller') return { pitch: 0.85, rate: 1.15, baseHz: 128 };
+  if (allyId === 'ally_cole') return { pitch: 1.05, rate: 1.2, baseHz: 162 };
+
+  const cellMatch = /(?:^|[_-\s])(red|blue|gold|green)(?:$|[_-\s0-9])/i.exec(allyId);
+  if (cellMatch) {
+    const map: Record<string, number> = { red: 0, blue: 1, gold: 2, green: 3 };
+    const idx = map[cellMatch[1]!.toLowerCase()] ?? 0;
+    return { ...CELL_VOICE_PROFILES[idx]! };
+  }
+
+  const swatMatch = /^swat_(\d+)$/i.exec(allyId);
+  if (swatMatch) {
+    const n = Math.max(0, parseInt(swatMatch[1]!, 10) - 1);
+    const base = CELL_VOICE_PROFILES[Math.floor(n / 2) % CELL_VOICE_PROFILES.length]!;
+    const member = n % 2;
+    return {
+      pitch: clamp(Number((base.pitch + member * 0.04).toFixed(3)), 0.75, 1.3),
+      rate: clamp(Number((base.rate + member * 0.02).toFixed(3)), 0.95, 1.35),
+      baseHz: base.baseHz + member * 8,
+    };
+  }
+
+  let hash = 0;
+  for (let i = 0; i < allyId.length; i++) {
+    hash = (hash * 31 + allyId.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % CELL_VOICE_PROFILES.length;
+  return { ...CELL_VOICE_PROFILES[idx]! };
+}
+
 function isFiniteVec3(v: Vec3): boolean {
   return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
 }
@@ -587,6 +628,328 @@ export class AudioEngine {
   }
 
   /**
+   * Procedural C2 charge arming beep (high-pitched tactical electronic pulse).
+   * `urgent = true` shifts pitch upward and sharpens attack for imminent detonation.
+   */
+  public playC2Beep(pos: Vec3, urgent: boolean): void {
+    if (!isFiniteVec3(pos)) return;
+    const ready = this.getReadyContext();
+    if (!ready) return;
+
+    const { ctx } = ready;
+    const now = ctx.currentTime;
+    const panner = this.createPanner(ctx, pos, 18);
+
+    const dur = urgent ? 0.045 : 0.055;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(urgent ? 2650 : 1850, now);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(EPSILON, now);
+    gain.gain.linearRampToValueAtTime(urgent ? 0.3 : 0.22, now + 0.003);
+    gain.gain.exponentialRampToValueAtTime(EPSILON, now + dur);
+
+    osc.connect(gain);
+    gain.connect(panner);
+
+    this.registerVoice([osc], [osc, gain, panner]);
+
+    osc.start(now);
+    osc.stop(now + dur + 0.01);
+  }
+
+  /**
+   * Procedural C2 breaching blast: deep sub-bass shockwave + concussive lowpass boom + wood/frame debris crack.
+   */
+  public playC2Blast(pos: Vec3, radius: number): void {
+    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    const ready = this.getReadyContext();
+    if (!ready) return;
+
+    const { ctx, noiseBuffer } = ready;
+    const now = ctx.currentTime;
+    const panner = this.createPanner(ctx, pos, Math.max(radius, 35));
+
+    // Sub-bass shockwave
+    const subDur = 0.45;
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(140, now);
+    sub.frequency.exponentialRampToValueAtTime(24, now + subDur);
+
+    const subGain = ctx.createGain();
+    subGain.gain.setValueAtTime(EPSILON, now);
+    subGain.gain.linearRampToValueAtTime(0.85, now + 0.003);
+    subGain.gain.exponentialRampToValueAtTime(EPSILON, now + subDur);
+
+    sub.connect(subGain);
+    subGain.connect(panner);
+
+    // Concussive blast body
+    const boomDur = 0.72;
+    const boom = this.createNoiseSource(ctx, noiseBuffer);
+
+    const boomFilter = ctx.createBiquadFilter();
+    boomFilter.type = 'lowpass';
+    boomFilter.frequency.setValueAtTime(3000, now);
+    boomFilter.frequency.exponentialRampToValueAtTime(140, now + boomDur);
+
+    const boomGain = ctx.createGain();
+    boomGain.gain.setValueAtTime(EPSILON, now);
+    boomGain.gain.linearRampToValueAtTime(0.78, now + 0.004);
+    boomGain.gain.exponentialRampToValueAtTime(EPSILON, now + boomDur);
+
+    boom.connect(boomFilter);
+    boomFilter.connect(boomGain);
+    boomGain.connect(panner);
+
+    // Door frame / wood debris crack
+    const crackDur = 0.18;
+    const crack = this.createNoiseSource(ctx, noiseBuffer);
+
+    const crackFilter = ctx.createBiquadFilter();
+    crackFilter.type = 'highpass';
+    crackFilter.frequency.setValueAtTime(1300, now);
+
+    const crackGain = ctx.createGain();
+    crackGain.gain.setValueAtTime(EPSILON, now);
+    crackGain.gain.linearRampToValueAtTime(0.52, now + 0.002);
+    crackGain.gain.exponentialRampToValueAtTime(EPSILON, now + crackDur);
+
+    crack.connect(crackFilter);
+    crackFilter.connect(crackGain);
+    crackGain.connect(panner);
+
+    this.registerVoice(
+      [sub, boom, crack],
+      [sub, subGain, boom, boomFilter, boomGain, crack, crackFilter, crackGain, panner],
+    );
+
+    sub.start(now);
+    sub.stop(now + subDur + 0.01);
+    boom.start(now, this.randomNoiseOffset(boomDur), boomDur + 0.01);
+    crack.start(now, this.randomNoiseOffset(crackDur), crackDur + 0.01);
+  }
+
+  /**
+   * Procedural heavy tactical SWAT boot footstep:
+   * - Deeper low-end boot impact + sole scuff + optional heavy gear rattle.
+   */
+  public playSwatFootstep(pos: Vec3, heavy: boolean): void {
+    if (!isFiniteVec3(pos)) return;
+    const ready = this.getReadyContext();
+    if (!ready) return;
+
+    const { ctx, noiseBuffer } = ready;
+    const now = ctx.currentTime;
+    const panner = this.createPanner(ctx, pos, heavy ? 16 : 12);
+
+    const thumpDur = heavy ? 0.095 : 0.075;
+    const thump = ctx.createOscillator();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(heavy ? 78 : 86, now);
+    thump.frequency.exponentialRampToValueAtTime(heavy ? 30 : 36, now + thumpDur);
+
+    const thumpGain = ctx.createGain();
+    thumpGain.gain.setValueAtTime(EPSILON, now);
+    thumpGain.gain.linearRampToValueAtTime(heavy ? 0.3 : 0.22, now + 0.006);
+    thumpGain.gain.exponentialRampToValueAtTime(EPSILON, now + thumpDur);
+
+    thump.connect(thumpGain);
+    thumpGain.connect(panner);
+
+    const scuffDur = 0.065;
+    const scuff = this.createNoiseSource(ctx, noiseBuffer);
+    const scuffFilter = ctx.createBiquadFilter();
+    scuffFilter.type = 'bandpass';
+    scuffFilter.frequency.setValueAtTime(680, now);
+    scuffFilter.Q.setValueAtTime(1.1, now);
+
+    const scuffGain = ctx.createGain();
+    scuffGain.gain.setValueAtTime(EPSILON, now);
+    scuffGain.gain.linearRampToValueAtTime(heavy ? 0.18 : 0.13, now + 0.005);
+    scuffGain.gain.exponentialRampToValueAtTime(EPSILON, now + scuffDur);
+
+    scuff.connect(scuffFilter);
+    scuffFilter.connect(scuffGain);
+    scuffGain.connect(panner);
+
+    const sources: AudioScheduledSourceNode[] = [thump, scuff];
+    const nodes: AudioNode[] = [thump, thumpGain, scuff, scuffFilter, scuffGain, panner];
+
+    if (heavy) {
+      const gearStart = now + 0.024;
+      const gearDur = 0.035;
+      const gear = this.createNoiseSource(ctx, noiseBuffer);
+      const gearFilter = ctx.createBiquadFilter();
+      gearFilter.type = 'bandpass';
+      gearFilter.frequency.setValueAtTime(2300, gearStart);
+      gearFilter.Q.setValueAtTime(3.0, gearStart);
+
+      const gearGain = ctx.createGain();
+      gearGain.gain.setValueAtTime(EPSILON, gearStart);
+      gearGain.gain.linearRampToValueAtTime(0.048, gearStart + 0.004);
+      gearGain.gain.exponentialRampToValueAtTime(EPSILON, gearStart + gearDur);
+
+      gear.connect(gearFilter);
+      gearFilter.connect(gearGain);
+      gearGain.connect(panner);
+
+      sources.push(gear);
+      nodes.push(gear, gearFilter, gearGain);
+      gear.start(gearStart, this.randomNoiseOffset(gearDur), gearDur + 0.01);
+    }
+
+    this.registerVoice(sources, nodes);
+
+    thump.start(now);
+    thump.stop(now + thumpDur + 0.01);
+    scuff.start(now, this.randomNoiseOffset(scuffDur), scuffDur + 0.01);
+  }
+
+  /**
+   * Procedural CS tear gas canister pop + sustained pressurized gas hiss.
+   */
+  public playGasHiss(pos: Vec3, radius: number): void {
+    if (!isFiniteVec3(pos) || !Number.isFinite(radius) || radius <= 0) return;
+    const ready = this.getReadyContext();
+    if (!ready) return;
+
+    const { ctx, noiseBuffer } = ready;
+    const now = ctx.currentTime;
+    const panner = this.createPanner(ctx, pos, Math.max(radius * 3, 18));
+
+    // Canister valve pop
+    const popDur = 0.06;
+    const pop = ctx.createOscillator();
+    pop.type = 'sine';
+    pop.frequency.setValueAtTime(220, now);
+    pop.frequency.exponentialRampToValueAtTime(85, now + popDur);
+
+    const popGain = ctx.createGain();
+    popGain.gain.setValueAtTime(EPSILON, now);
+    popGain.gain.linearRampToValueAtTime(0.26, now + 0.004);
+    popGain.gain.exponentialRampToValueAtTime(EPSILON, now + popDur);
+
+    pop.connect(popGain);
+    popGain.connect(panner);
+
+    // Valve burst
+    const burstDur = 0.055;
+    const burst = this.createNoiseSource(ctx, noiseBuffer);
+    const burstFilter = ctx.createBiquadFilter();
+    burstFilter.type = 'bandpass';
+    burstFilter.frequency.setValueAtTime(1400, now);
+    burstFilter.Q.setValueAtTime(1.4, now);
+
+    const burstGain = ctx.createGain();
+    burstGain.gain.setValueAtTime(EPSILON, now);
+    burstGain.gain.linearRampToValueAtTime(0.22, now + 0.005);
+    burstGain.gain.exponentialRampToValueAtTime(EPSILON, now + burstDur);
+
+    burst.connect(burstFilter);
+    burstFilter.connect(burstGain);
+    burstGain.connect(panner);
+
+    // Sustained pressurized gas hiss
+    const hissDur = 2.1;
+    const hiss = this.createNoiseSource(ctx, noiseBuffer);
+    const hissFilter = ctx.createBiquadFilter();
+    hissFilter.type = 'bandpass';
+    hissFilter.frequency.setValueAtTime(2600, now);
+    hissFilter.frequency.exponentialRampToValueAtTime(1700, now + hissDur);
+    hissFilter.Q.setValueAtTime(1.2, now);
+
+    const hissGain = ctx.createGain();
+    hissGain.gain.setValueAtTime(EPSILON, now);
+    hissGain.gain.linearRampToValueAtTime(0.24, now + 0.04);
+    hissGain.gain.exponentialRampToValueAtTime(EPSILON, now + hissDur);
+
+    hiss.connect(hissFilter);
+    hissFilter.connect(hissGain);
+    hissGain.connect(panner);
+
+    this.registerVoice(
+      [pop, burst, hiss],
+      [pop, popGain, burst, burstFilter, burstGain, hiss, hissFilter, hissGain, panner],
+    );
+
+    pop.start(now);
+    pop.stop(now + popDur + 0.01);
+    burst.start(now, this.randomNoiseOffset(burstDur), burstDur + 0.01);
+    hiss.start(now, this.randomNoiseOffset(hissDur), hissDur + 0.01);
+  }
+
+  /**
+   * Procedural two-burst dry cough (CS gas / pepper exposure).
+   */
+  public playCough(pos: Vec3): void {
+    if (!isFiniteVec3(pos)) return;
+    const ready = this.getReadyContext();
+    if (!ready) return;
+
+    const { ctx, noiseBuffer } = ready;
+    const now = ctx.currentTime;
+    const panner = this.createPanner(ctx, pos, 14);
+
+    const sources: AudioScheduledSourceNode[] = [];
+    const nodes: AudioNode[] = [panner];
+    const bursts: [number, number, number][] = [
+      [0, 0.22, 0.14],
+      [0.145, 0.18, 0.11],
+    ];
+
+    for (const [offset, airPeak, glottalPeak] of bursts) {
+      const t0 = now + offset;
+      const dur = 0.11;
+
+      const air = this.createNoiseSource(ctx, noiseBuffer);
+      const airFilter = ctx.createBiquadFilter();
+      airFilter.type = 'bandpass';
+      airFilter.frequency.setValueAtTime(950, t0);
+      airFilter.Q.setValueAtTime(2.2, t0);
+
+      const airGain = ctx.createGain();
+      airGain.gain.setValueAtTime(EPSILON, t0);
+      airGain.gain.linearRampToValueAtTime(airPeak, t0 + 0.015);
+      airGain.gain.exponentialRampToValueAtTime(EPSILON, t0 + dur);
+
+      air.connect(airFilter);
+      airFilter.connect(airGain);
+      airGain.connect(panner);
+
+      const glottal = ctx.createOscillator();
+      glottal.type = 'sawtooth';
+      glottal.frequency.setValueAtTime(145, t0);
+      glottal.frequency.exponentialRampToValueAtTime(92, t0 + dur);
+
+      const glottalFilter = ctx.createBiquadFilter();
+      glottalFilter.type = 'bandpass';
+      glottalFilter.frequency.setValueAtTime(640, t0);
+      glottalFilter.Q.setValueAtTime(3.5, t0);
+
+      const glottalGain = ctx.createGain();
+      glottalGain.gain.setValueAtTime(EPSILON, t0);
+      glottalGain.gain.linearRampToValueAtTime(glottalPeak, t0 + 0.012);
+      glottalGain.gain.exponentialRampToValueAtTime(EPSILON, t0 + dur);
+
+      glottal.connect(glottalFilter);
+      glottalFilter.connect(glottalGain);
+      glottalGain.connect(panner);
+
+      sources.push(air, glottal);
+      nodes.push(air, airFilter, airGain, glottal, glottalFilter, glottalGain);
+
+      air.start(t0, this.randomNoiseOffset(dur), dur + 0.01);
+      glottal.start(t0);
+      glottal.stop(t0 + dur + 0.01);
+    }
+
+    this.registerVoice(sources, nodes);
+  }
+
+  /**
    * Procedural tactical warning shout / radio-squelch burst:
    * brief radio squelch click + formant-filtered two-syllable command cadence + tail click.
    */
@@ -748,13 +1111,11 @@ export class AudioEngine {
     const ready = this.getReadyContext();
     if (!ready) return;
 
-    const pitch = allyId === 'ally_miller' ? 0.85 : allyId === 'ally_cole' ? 1.05 : 0.95;
-    const rate = allyId === 'ally_miller' ? 1.15 : allyId === 'ally_cole' ? 1.2 : 1.18;
+    const { pitch, rate, baseHz } = radioVoiceProfile(allyId);
     if (this.speakEnglishRadio(ready, text, pitch, rate, 0.65)) return;
 
     const syllables = clamp(Math.round(text.split(/\s+/).length), 3, 5);
-    const pitchBase = allyId === 'ally_miller' ? 128 : allyId === 'ally_cole' ? 162 : 145;
-    this.playRadioTransmission(ready, syllables, pitchBase, 0.14 * syllables + 0.16);
+    this.playRadioTransmission(ready, syllables, baseHz, 0.14 * syllables + 0.16);
   }
 
   /**

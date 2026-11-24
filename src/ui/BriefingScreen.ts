@@ -27,6 +27,11 @@ const CSS = `
 .bfs-seed input{width:110px;padding:6px 8px;font:13px monospace;color:#e6eef8;background:#0b1118;border:1px solid #354a63;border-radius:5px}
 .bfs-seed button{padding:6px 10px;font:13px sans-serif;color:#d6e4f0;background:#192534;border:1px solid #354a63;border-radius:5px;cursor:pointer}
 .bfs-start{padding:15px 36px;font:bold 19px sans-serif;color:#0a121a;border:none;border-radius:8px;cursor:pointer;letter-spacing:.04em}
+.bfs-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;padding:10px 12px;border-radius:8px;background:#192534;border:2px solid #34495f;color:#dce6f2;cursor:pointer;font:14px/1.4 sans-serif;transition:background .12s,border-color .12s}
+.bfs-toggle:hover,.bfs-toggle:focus-visible{background:#213248;border-color:#ff9d9d;outline:none}
+.bfs-toggle[aria-pressed="true"]{border-color:#ff7b7b;background:#ff7b7b22;box-shadow:0 0 0 1px #ff7b7b55 inset}
+.bfs-toggle-badge{white-space:nowrap;font:bold 12px monospace;padding:2px 8px;border-radius:999px;background:#263649;color:#9fb2c6}
+.bfs-toggle[aria-pressed="true"] .bfs-toggle-badge{background:#ff7b7b;color:#0a121a}
 @media (max-width:760px){.bfs-setup{grid-template-columns:1fr}.bfs-card{padding:16px}.bfs-check{font-size:0;padding:2px 6px}.bfs-check::first-letter{font-size:12px}}
 `;
 
@@ -47,6 +52,10 @@ export interface BriefingScreenOptions {
   mode?: GameMode;
   /** モード切替（指定時はモード選択ボタンを表示） */
   onSelectMode?: (mode: GameMode) => void;
+  /** 容疑者モード: 増援ウェーブを有効にするか（既定 false） */
+  reinforcements?: boolean;
+  /** 容疑者モード: 増援ウェーブ切替コールバック */
+  onToggleReinforcements?: (enabled: boolean) => void;
 }
 
 function formatRange(range: BriefingRange | undefined): string {
@@ -67,6 +76,7 @@ export class BriefingScreen {
   readonly stageSlot = document.createElement('div');
   /** ランダム生成ステージのシード表示・再生成 UI */
   private readonly seedRow = document.createElement('div');
+  private modeSlot: HTMLElement | null = null;
   private readonly stageBtnCleanups: (() => void)[] = [];
   private visible = false;
   private disposed = false;
@@ -91,7 +101,20 @@ export class BriefingScreen {
     // 上段: ミッション設定（① モード ② マップの広さ）
     const setup = document.createElement('div');
     setup.className = 'bfs-setup';
-    if (options.onSelectMode) setup.appendChild(this.buildModeStep(options.mode ?? 'swat', options.onSelectMode));
+    if (options.onSelectMode) {
+      this.modeSlot = this.buildModeStep(
+        options.mode ?? 'swat',
+        options.onSelectMode,
+        Boolean(options.reinforcements),
+        options.onToggleReinforcements,
+      );
+      setup.appendChild(this.modeSlot);
+    } else if (suspectMode && options.onToggleReinforcements) {
+      const optStep = document.createElement('div');
+      optStep.className = 'bfs-step';
+      optStep.appendChild(this.buildReinforcementsToggle(Boolean(options.reinforcements), options.onToggleReinforcements));
+      setup.appendChild(optStep);
+    }
 
     this.stageSlot.className = 'bfs-step';
     if (options.stages && options.stages.length > 0 && options.onSelectStage) {
@@ -385,7 +408,12 @@ export class BriefingScreen {
     this.stageSlot.appendChild(grid);
   }
 
-  private buildModeStep(mode: GameMode, onSelectMode: (mode: GameMode) => void): HTMLElement {
+  private buildModeStep(
+    mode: GameMode,
+    onSelectMode: (mode: GameMode) => void,
+    reinforcements: boolean,
+    onToggleReinforcements?: (enabled: boolean) => void,
+  ): HTMLElement {
     const step = document.createElement('div');
     step.className = 'bfs-step';
     step.appendChild(this.stepTitle(1, 'モード'));
@@ -417,7 +445,43 @@ export class BriefingScreen {
       );
     }
     step.appendChild(grid);
+    if (mode === 'suspect' && onToggleReinforcements) {
+      step.appendChild(this.buildReinforcementsToggle(reinforcements, onToggleReinforcements));
+    }
     return step;
+  }
+
+  private buildReinforcementsToggle(
+    reinforcements: boolean,
+    onToggleReinforcements: (enabled: boolean) => void,
+  ): HTMLElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'bfs-toggle';
+    btn.dataset.option = 'reinforcements';
+    btn.setAttribute('aria-pressed', reinforcements ? 'true' : 'false');
+
+    const copy = document.createElement('div');
+    const head = document.createElement('div');
+    head.style.cssText = 'font:bold 14px sans-serif;color:#f4f8fc';
+    head.textContent = '増援ウェーブ';
+    const desc = document.createElement('div');
+    desc.className = 'bfs-choice-desc';
+    desc.textContent = 'SWAT を倒しても残り時間があれば外周から 2 人組（盾持ち＋ライフル）が追加突入';
+    copy.append(head, desc);
+
+    const badge = document.createElement('span');
+    badge.className = 'bfs-toggle-badge';
+    badge.textContent = reinforcements ? 'ON' : 'OFF';
+
+    btn.append(copy, badge);
+    const onClick = (): void => {
+      if (this.disposed) return;
+      onToggleReinforcements(!reinforcements);
+    };
+    btn.addEventListener('click', onClick);
+    this.stageBtnCleanups.push(() => btn.removeEventListener('click', onClick));
+    return btn;
   }
 
   private buildSeedRow(seed: number, onRegenerate: (seed?: number) => void): HTMLElement {
@@ -506,7 +570,14 @@ export class BriefingScreen {
   private onKeyDown = (e: KeyboardEvent): void => {
     if (this.disposed || !this.visible || e.repeat) return;
     if (e.code === 'Enter') {
-      if (e.target instanceof Node && (this.stageSlot.contains(e.target) || this.seedRow.contains(e.target))) return;
+      if (
+        e.target instanceof Node &&
+        (this.stageSlot.contains(e.target) ||
+          this.seedRow.contains(e.target) ||
+          Boolean(this.modeSlot?.contains(e.target)))
+      ) {
+        return;
+      }
       e.preventDefault();
       this.handleStart();
     }

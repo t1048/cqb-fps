@@ -411,6 +411,8 @@ export class Flashbang {
     const blind = c.blindMaxSec * distF * facingF;
     if (blind <= BLIND_EPS) return 0;
     this.overlay.trigger(blind, c.afterglowSec * (blind / c.blindMaxSec), c.afterglowOpacity);
+    const p = this.player.position;
+    this.bus.emit('playerBlinded', { duration: blind, pos: { x: p.x, y: p.y, z: p.z } });
     return blind;
   }
 

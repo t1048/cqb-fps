@@ -14,6 +14,7 @@ import { PlayerController } from './player/PlayerController';
 import { Interaction } from './player/Interaction';
 import { WeaponSystem } from './weapons/WeaponSystem';
 import { Flashbang, hasLineOfSight } from './weapons/Flashbang';
+import { TearGas } from './weapons/TearGas';
 import { FlashOverlay } from './ui/FlashOverlay';
 import { Subtitle } from './ui/Subtitle';
 import { Arrest } from './player/Arrest';
@@ -29,6 +30,7 @@ import { buildSuspectNegotiation, buildSwatNegotiation } from './modes/PreAssaul
 import { HostageGrab } from './modes/HostageGrab';
 import { Fortify } from './modes/Fortify';
 import { PepperEffect } from './player/PepperEffect';
+import { TearGasEffect } from './player/TearGasEffect';
 import { ResultScreen, ScoreHud } from './ui/ResultScreen';
 import { RoE } from './rules/RoE';
 import { Mission } from './rules/Mission';
@@ -44,6 +46,7 @@ import { applyMissionRoster } from './rules/MissionRoster';
 import {
   SuspectMission,
   parseGameMode,
+  parseReinforcements,
   prepareSuspectMode,
   suspectWeapons,
   swatWeapons,
@@ -89,6 +92,8 @@ class App {
   private readonly hostageGrab: HostageGrab | null = null;
   private readonly fortify: Fortify | null = null;
   private readonly pepper: PepperEffect | null = null;
+  private readonly tearGas: TearGas | null = null;
+  private readonly tearGasEffect: TearGasEffect | null = null;
   private readonly roe: RoE;
   private readonly mission: Mission | null = null;
   private readonly scoreHud: ScoreHud | null = null;
@@ -119,6 +124,8 @@ class App {
     onRegenerate: (seed?: number) => void,
     mode: GameMode,
     onSelectMode: (mode: GameMode) => void,
+    reinforcements: boolean,
+    onToggleReinforcements: (enabled: boolean) => void,
   ) {
     this.mode = mode;
     const suspect = mode === 'suspect';
@@ -261,6 +268,8 @@ class App {
       // 容疑者モード: 部隊指揮メニュー（Tab / 右クリック）を無効化
       this.input.orderMenuEnabled = false;
       this.input.onOrderMenu = undefined;
+      this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight);
+      this.scene.add(this.tearGas.root);
       this.swatTeam = new SwatTeam({
         spawns: swatSpawns,
         count: swatCount,
@@ -272,7 +281,10 @@ class App {
         bounds: map.floor,
         stairs: this.world.stairs,
         rooms: map.rooms,
+        windows: map.windows,
         flashbang: this.flashbang,
+        tearGas: this.tearGas,
+        flashOverlay: this.flashOverlay,
         subtitle: this.subtitle,
         civilians: () => this.entities.civilians.values(),
         textures: this.textures,
@@ -282,6 +294,7 @@ class App {
           if (target === 'hostage' && this.hostageGrab?.holding) this.hostageGrab.onHostagePeppered();
           else this.pepper?.hit();
         },
+        reinforcements,
       });
       this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
       this.scene.add(this.swatTeam.root);
@@ -309,6 +322,7 @@ class App {
         this.bus,
       );
       this.pepper = new PepperEffect(this.player, this.weapons, this.subtitle, this.renderer.domElement);
+      this.tearGasEffect = new TearGasEffect(this.player, this.weapons, this.tearGas, this.subtitle, this.bus);
       this.fortify = new Fortify({
         windows: map.windows,
         colliders: this.world.colliders as Collider[],
@@ -330,6 +344,7 @@ class App {
       });
       sm.attachFortify(this.fortify);
       this.swatTeam.attachTraps(this.fortify);
+      this.swatTeam.attachBarricades(this.fortify);
       this.fortify.attachReceiver(this.swatTeam);
       const team = this.swatTeam;
       this.negotiationPhase = new NegotiationPhase(
@@ -409,6 +424,8 @@ class App {
       onRegenerate,
       mode,
       onSelectMode,
+      reinforcements,
+      onToggleReinforcements,
     });
     this.briefingScreen.show();
     if (isFirstRun('negotiation')) this.negotiationPhase.showFirstTimeTip(() => markSeen('negotiation'));
@@ -518,12 +535,14 @@ class App {
     this.doors.update(dt);
     this.world.update(dt, this.camera.position);
     this.flashbang.update(dt);
+    this.tearGas?.update(dt);
     this.weapons.update(dt);
     this.entities.update(dt);
     if (this.swatTeam) this.swatTeam.update(dt);
     else this.squad.update(dt);
     this.hostageGrab?.update(dt);
     this.pepper?.update(dt);
+    this.tearGasEffect?.update(dt);
     this.fortify?.update(dt);
     const viewStyle = this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
@@ -639,6 +658,8 @@ class App {
     this.hostageGrab?.dispose();
     this.fortify?.dispose();
     this.pepper?.dispose();
+    this.tearGasEffect?.dispose();
+    this.tearGas?.dispose();
     this.negotiationPhase.dispose();
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.hud.dispose();
@@ -675,6 +696,7 @@ let startToken = 0;
 let currentMapId: string | null = null;
 let currentSeed: number | undefined;
 let currentMode: GameMode = 'swat';
+let currentReinforcements = false;
 let stagesPromise: Promise<StageEntry[]> | null = null;
 
 function ensureStages(): Promise<StageEntry[]> {
@@ -696,9 +718,11 @@ function showError(err: unknown): void {
   document.body.appendChild(errorEl);
 }
 
-function start(mapId?: string, seed?: number, mode?: GameMode): void {
+function start(mapId?: string, seed?: number, mode?: GameMode, reinforcements?: boolean): void {
   if (mode !== undefined) currentMode = mode;
+  if (reinforcements !== undefined) currentReinforcements = reinforcements;
   const runMode = currentMode;
+  const runReinforcements = currentReinforcements;
   app?.destroy();
   app = null;
   errorEl?.remove();
@@ -749,6 +773,14 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
           window.history.replaceState(null, '', url);
           start(targetId, useSeed, nextMode);
         },
+        runReinforcements,
+        (nextWaves) => {
+          const url = new URL(window.location.href);
+          if (nextWaves) url.searchParams.set('waves', '1');
+          else url.searchParams.delete('waves');
+          window.history.replaceState(null, '', url);
+          start(targetId, useSeed, runMode, nextWaves);
+        },
       );
     } catch (err: unknown) {
       console.error(err);
@@ -757,18 +789,23 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
   })();
 }
 
-// URL から再現: ?stage=random_house&seed=12345
+// URL から再現: ?stage=random_house&seed=12345&mode=suspect&waves=1
 {
   const params = new URLSearchParams(window.location.search);
   const qStage = params.get('stage') ?? undefined;
   const qSeedRaw = params.get('seed');
   const qSeed = qSeedRaw !== null && /^\d+$/.test(qSeedRaw) ? Number(qSeedRaw) : undefined;
-  start(qStage, qSeed, parseGameMode(params.get('mode')));
+  const qWaves = parseReinforcements(params.get('waves'));
+  start(qStage, qSeed, parseGameMode(params.get('mode')), qWaves);
 }
 
 // リトライ・ステージ切替検証用: コンソールから `__cqbRetry()` / `__cqbRetry('random_small')` / `__cqbRetry('random_house', 12345)` で destroy→再生成。HMR 時は破棄のみ。
-(window as unknown as { __cqbRetry: (mapId?: string, seed?: number, mode?: GameMode) => void }).__cqbRetry = (mapId?: string, seed?: number, mode?: GameMode) =>
-  start(mapId, seed, mode);
+(window as unknown as { __cqbRetry: (mapId?: string, seed?: number, mode?: GameMode, reinforcements?: boolean) => void }).__cqbRetry = (
+  mapId?: string,
+  seed?: number,
+  mode?: GameMode,
+  reinforcements?: boolean,
+) => start(mapId, seed, mode, reinforcements);
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {

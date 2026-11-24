@@ -34,7 +34,23 @@ const DISABLED_Y = -1000;
 /** バリケードの耐久（改造拳銃 19 で約 9 発、SWAT 12 で約 14 発） */
 const BARRICADE_HP = 170;
 
+/** SWAT が窓バリケードを認識・破壊するための読み取り専用スナップショット */
+export interface BarricadeInfo {
+  id: string;
+  center: Vec3;
+  normal: Vec3;
+  floorY: number;
+  hp: number;
+  boarded: boolean;
+}
+
+/** SwatTeam に渡すバリケード問い合わせフック */
+export interface BarricadeHooks {
+  listBoarded(): BarricadeInfo[];
+}
+
 interface Barricade {
+  id: string;
   def: WindowDef;
   collider: Collider;
   /** 有効時の AABB */
@@ -48,6 +64,8 @@ interface Barricade {
   cx: number;
   cy: number;
   cz: number;
+  /** 窓面の法線（水平単位ベクトル） */
+  normal: Vec3;
   /** 開口の向き（窓の面に沿う方向） */
   alongX: boolean;
 }
@@ -121,7 +139,7 @@ export class Fortify {
     this.root.add(this.blastLight);
     this.woodMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x9a7a52, roughness: 0.85 });
     this.backMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x6e5236, roughness: 0.9 });
-    for (const w of d.windows) this.barricades.push(this.makeBarricade(w));
+    for (let i = 0; i < d.windows.length; i++) this.barricades.push(this.makeBarricade(d.windows[i]!, i));
     // 仲間の準備: 武器改造 → トラップ部材（窓のバリケードは自分で張る。自動では張らない）
     this.tasks.push({ kind: 'upgrade' });
     this.tasks.push({ kind: 'trap' });
@@ -189,16 +207,31 @@ export class Fortify {
     return this.traps.keys();
   }
 
+  /** 現在板張りされている窓バリケードの一覧を返す（SwatTeam の積極破壊用） */
+  listBoarded(): BarricadeInfo[] {
+    return this.barricades
+      .filter((b) => b.boarded)
+      .map((b) => ({
+        id: b.id,
+        center: { x: b.cx, y: b.cy, z: b.cz },
+        normal: { ...b.normal },
+        floorY: b.floorY,
+        hp: b.hp,
+        boarded: b.boarded,
+      }));
+  }
+
   setVisible(v: boolean): void {
     this.el.style.display = v ? 'block' : 'none';
   }
 
   // ---------- 窓 ----------
 
-  private makeBarricade(def: WindowDef): Barricade {
+  private makeBarricade(def: WindowDef, idx: number): Barricade {
     const floorY = def.y ?? 0;
     const cy = floorY + def.sill + def.height / 2;
     const alongX = Math.abs(Math.cos(def.yaw * DEG)) > 0.5;
+    const normal: Vec3 = { x: -Math.sin(def.yaw * DEG), y: 0, z: Math.cos(def.yaw * DEG) };
     const hw = def.width / 2 + 0.06;
     const hd = 0.13;
     const hh = def.height / 2 + 0.06;
@@ -242,7 +275,7 @@ export class Fortify {
     }
     mesh.visible = false;
     this.root.add(mesh);
-    return { def, collider, on, mesh, boarded: false, hp: 0, planks: plankMeshes, floorY, cx: def.x, cy, cz: def.z, alongX };
+    return { id: `barricade_${idx}`, def, collider, on, mesh, boarded: false, hp: 0, planks: plankMeshes, floorY, cx: def.x, cy, cz: def.z, normal, alongX };
   }
 
   private setBoarded(b: Barricade, v: boolean): void {

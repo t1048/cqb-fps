@@ -91,7 +91,7 @@ export class Door {
   private speedMul = 1;
   /** SWAT がこのドアを蹴った回数。必要回数に達した蹴りだけ解錠して全開にする。 */
   private swatKicks = 0;
-  private lastSwatKickAt = -1e9;
+  private swatKickCooldown = 0;
   /** 失敗蹴り: out = 少し開く、back = 元の角度へ戻す */
   private kickRecoil: 'out' | 'back' | null = null;
   private kickRecoilReturn = 0;
@@ -483,11 +483,12 @@ export class Door {
     const sinA = Math.sin(a);
     const th2 = this.cfg.thickness / 2;
 
-    // 左（単開き）リーフ: d = +u cos a + s n sin a
+    // 左（単開き）リーフ: d = +u cos a + s n sin a（隣接セグメント間に浮動小数点の隙間が出ないよう微小に重ねる）
+    const segPad = this.segHalf + 1e-4;
     const ldx = this.u.x * cosA + this.swingSign * this.n.x * sinA;
     const ldz = this.u.y * cosA + this.swingSign * this.n.y * sinA;
-    const lhx = this.segHalf * Math.abs(ldx) + th2 * Math.abs(ldz);
-    const lhz = this.segHalf * Math.abs(ldz) + th2 * Math.abs(ldx);
+    const lhx = segPad * Math.abs(ldx) + th2 * Math.abs(ldz);
+    const lhz = segPad * Math.abs(ldz) + th2 * Math.abs(ldx);
     for (let i = 0; i < this.leafSegCount; i++) {
       const t = (i + 0.5) * this.segHalf * 2;
       const cx = this.hinge.x + ldx * t;
@@ -505,8 +506,8 @@ export class Door {
     if (this.double) {
       const rdx = -this.u.x * cosA + this.swingSign * this.n.x * sinA;
       const rdz = -this.u.y * cosA + this.swingSign * this.n.y * sinA;
-      const rhx = this.segHalf * Math.abs(rdx) + th2 * Math.abs(rdz);
-      const rhz = this.segHalf * Math.abs(rdz) + th2 * Math.abs(rdx);
+      const rhx = segPad * Math.abs(rdx) + th2 * Math.abs(rdz);
+      const rhz = segPad * Math.abs(rdz) + th2 * Math.abs(rdx);
       for (let i = 0; i < this.leafSegCount; i++) {
         const t = (i + 0.5) * this.segHalf * 2;
         const cx = this.rightHinge.x + rdx * t;
@@ -556,12 +557,12 @@ export class Door {
    * faction 'suspect' は 1 回で開く（容疑者の施錠・開閉は command / locked 代入のまま）。
    * 成功時だけ解錠して全開し、doorBreached を発行する。noise(kind:'breach') は毎蹴り。
    */
-  breach(playerX: number, playerZ: number, faction: 'swat' | 'suspect' = 'swat', nowSec = performance.now() / 1000): boolean {
+  breach(playerX: number, playerZ: number, faction: 'swat' | 'suspect' = 'swat'): boolean {
     if (this.disposed) return false;
     if (this.stage === 'open' && !this.isMoving) return false;
     if (faction === 'swat') {
-      if (nowSec - this.lastSwatKickAt < SWAT_KICK_GAP_SEC) return false;
-      this.lastSwatKickAt = nowSec;
+      if (this.swatKickCooldown > 0) return false;
+      this.swatKickCooldown = SWAT_KICK_GAP_SEC;
       this.swatKicks += 1;
       this.emitBreachNoise();
       if (this.swatKicks < swatBreachKicks(this.id)) {
@@ -570,6 +571,17 @@ export class Door {
       }
     }
     return this.finishBreach(playerX, playerZ, faction !== 'swat');
+  }
+
+  /**
+   * C2 爆破ブリーチ: 蹴り回数を無視して即座に解錠・高速全開（speedMultiplier >= 8）し、doorBreached を発行する。
+   * 既に全開・停止済み、または破棄済みの場合は false。
+   */
+  breachExplosive(fromX: number, fromZ: number): boolean {
+    if (this.disposed) return false;
+    if (this.stage === 'open' && !this.isMoving) return false;
+    if (!this.locked && this.targetAngle >= this.maxAngle - 1) return false;
+    return this.finishBreach(fromX, fromZ, false, Math.max(8, this.cfg.breach.speedMultiplier));
   }
 
   private emitBreachNoise(): { x: number; y: number; z: number } {
@@ -590,17 +602,23 @@ export class Door {
     this.speedMul = this.cfg.breach.speedMultiplier;
   }
 
-  /** 必要回数に達した蹴り。施錠を外して全開にする。 */
-  private finishBreach(playerX: number, playerZ: number, emitNoise: boolean): boolean {
+  /** 必要回数に達した蹴りまたは C2 爆破。施錠を外して全開にする。 */
+  private finishBreach(
+    playerX: number,
+    playerZ: number,
+    emitNoise: boolean,
+    speedMul = this.cfg.breach.speedMultiplier,
+  ): boolean {
     if (this.angle < EPS) {
       this.swingSign = -this.sideOf(playerX, playerZ);
       this.applyMesh();
     }
     this.kickRecoil = null;
     this.swatKicks = 0;
+    this.swatKickCooldown = 0;
     this.locked = false;
     this.targetAngle = this.maxAngle;
-    this.speedMul = this.cfg.breach.speedMultiplier;
+    this.speedMul = speedMul;
     const pos = emitNoise ? this.emitBreachNoise() : { x: this.cx, y: this.sillY + 1, z: this.cz };
     const dir = { x: this.n.x * this.swingSign, y: 0, z: this.n.y * this.swingSign };
     this.bus.emit('doorBreached', { doorId: this.id, pos, radius: this.cfg.breach.effectRadius, dir });
@@ -629,6 +647,8 @@ export class Door {
    */
   update(rawDt: number, playerX: number, playerZ: number, playerRadius: number, playerY = 0): void {
     if (this.disposed) return;
+    const dt = Math.min(rawDt, MAX_DT);
+    if (this.swatKickCooldown > 0) this.swatKickCooldown = Math.max(0, this.swatKickCooldown - dt);
     if (this.kickRecoil === 'out' && !this.isMoving) {
       this.kickRecoil = 'back';
       this.targetAngle = this.kickRecoilReturn;
@@ -638,7 +658,6 @@ export class Door {
       this.speedMul = 1;
     }
     if (!this.isMoving) return;
-    const dt = Math.min(rawDt, MAX_DT);
     const step = this.cfg.swingSpeed * this.speedMul * dt;
     const diff = this.targetAngle - this.angle;
     const next = Math.abs(diff) <= step ? this.targetAngle : this.angle + Math.sign(diff) * step;

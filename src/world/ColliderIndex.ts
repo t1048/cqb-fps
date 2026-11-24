@@ -1,4 +1,5 @@
-import type { Collider } from './WorldBuilder';
+import type { Vec3 } from '../core/types';
+import type { AABB, Collider } from './WorldBuilder';
 
 /**
  * コライダ配列の XZ 一様グリッド空間索引。
@@ -228,4 +229,165 @@ export function someColliderAlongSegment(
   if (visit(ex, ez)) return true;
   for (const d of idx.dynamic) if (test(d)) return true;
   return false;
+}
+
+/**
+ * 3D レイ（origin + t * dir, 0 <= t <= maxT）と AABB の最近交点距離 t を返す。
+ * 交差しない場合は Infinity。始点が箱内部にある場合は 0 を返す。
+ */
+function rayHitAABB(
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  maxT: number,
+  box: AABB,
+): number {
+  let t0 = 0;
+  let t1 = maxT;
+
+  if (Math.abs(dx) < 1e-9) {
+    if (ox < box.min.x || ox > box.max.x) return Infinity;
+  } else {
+    const inv = 1 / dx;
+    let ta = (box.min.x - ox) * inv;
+    let tb = (box.max.x - ox) * inv;
+    if (ta > tb) {
+      const tmp = ta;
+      ta = tb;
+      tb = tmp;
+    }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return Infinity;
+  }
+
+  if (Math.abs(dy) < 1e-9) {
+    if (oy < box.min.y || oy > box.max.y) return Infinity;
+  } else {
+    const inv = 1 / dy;
+    let ta = (box.min.y - oy) * inv;
+    let tb = (box.max.y - oy) * inv;
+    if (ta > tb) {
+      const tmp = ta;
+      ta = tb;
+      tb = tmp;
+    }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return Infinity;
+  }
+
+  if (Math.abs(dz) < 1e-9) {
+    if (oz < box.min.z || oz > box.max.z) return Infinity;
+  } else {
+    const inv = 1 / dz;
+    let ta = (box.min.z - oz) * inv;
+    let tb = (box.max.z - oz) * inv;
+    if (ta > tb) {
+      const tmp = ta;
+      ta = tb;
+      tb = tmp;
+    }
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return Infinity;
+  }
+
+  return t0;
+}
+
+/**
+ * 空間索引（XZ グリッド DDA）を用いて、レイ origin + t * normalize(dir) が
+ * colliders に最初に当たる距離 t（[0, maxDist]）を返す。非衝突時は maxDist。
+ * 動的ドア（sweep または dynamic）や軸平行・垂直レイにも対応する。
+ */
+export function raycastColliders(
+  colliders: readonly Collider[],
+  origin: Vec3,
+  dir: Vec3,
+  maxDist: number,
+): number {
+  if (!Number.isFinite(maxDist) || maxDist <= 0) return 0;
+  const ox = origin.x;
+  const oy = origin.y;
+  const oz = origin.z;
+  if (
+    !Number.isFinite(ox) ||
+    !Number.isFinite(oy) ||
+    !Number.isFinite(oz) ||
+    !Number.isFinite(dir.x) ||
+    !Number.isFinite(dir.y) ||
+    !Number.isFinite(dir.z)
+  ) {
+    return maxDist;
+  }
+  const len = Math.hypot(dir.x, dir.y, dir.z);
+  if (len < 1e-9) return maxDist;
+  const dx = dir.x / len;
+  const dy = dir.y / len;
+  const dz = dir.z / len;
+
+  if (colliders.length < MIN_INDEXED) {
+    let best = maxDist;
+    for (let i = 0; i < colliders.length; i++) {
+      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, colliders[i]!.aabb);
+      if (t < best) best = t;
+    }
+    return best;
+  }
+
+  const idx = indexOf(colliders);
+  let best = maxDist;
+  for (let i = 0; i < idx.dynamic.length; i++) {
+    const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, idx.dynamic[i]!.aabb);
+    if (t < best) best = t;
+  }
+  if (best <= 0) return 0;
+
+  const epoch = nextEpoch(idx);
+  const { stamp, cells, cols, rows } = idx;
+  const visit = (cx: number, cz: number): void => {
+    if (cx < 0 || cx >= cols || cz < 0 || cz >= rows) return;
+    const cell: Uint32Array = cells[cz * cols + cx]!;
+    for (let k = 0; k < cell.length; k++) {
+      const i = cell[k]!;
+      if (stamp[i] === epoch) continue;
+      stamp[i] = epoch;
+      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, colliders[i]!.aabb);
+      if (t < best) best = t;
+    }
+  };
+
+  let gx = Math.floor((ox - idx.minX) / CELL);
+  let gz = Math.floor((oz - idx.minZ) / CELL);
+  const ex = Math.floor((ox + dx * best - idx.minX) / CELL);
+  const ez = Math.floor((oz + dz * best - idx.minZ) / CELL);
+  const sx = Math.abs(dx) >= 1e-9 ? (dx > 0 ? 1 : -1) : 0;
+  const sz = Math.abs(dz) >= 1e-9 ? (dz > 0 ? 1 : -1) : 0;
+  const tDeltaX = sx !== 0 ? CELL / Math.abs(dx) : Infinity;
+  const tDeltaZ = sz !== 0 ? CELL / Math.abs(dz) : Infinity;
+  let tMaxX = sx !== 0 ? (idx.minX + (sx > 0 ? gx + 1 : gx) * CELL - ox) / dx : Infinity;
+  let tMaxZ = sz !== 0 ? (idx.minZ + (sz > 0 ? gz + 1 : gz) * CELL - oz) / dz : Infinity;
+
+  visit(gx, gz);
+  let steps = Math.abs(ex - gx) + Math.abs(ez - gz);
+  while (steps-- > 0) {
+    const tNext = Math.min(tMaxX, tMaxZ);
+    if (tNext >= best) break;
+    if (tMaxX < tMaxZ) {
+      gx += sx;
+      tMaxX += tDeltaX;
+    } else {
+      gz += sz;
+      tMaxZ += tDeltaZ;
+    }
+    visit(gx, gz);
+  }
+  if (Math.min(tMaxX, tMaxZ) < best) {
+    visit(ex, ez);
+  }
+  return best;
 }

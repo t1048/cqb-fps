@@ -2,6 +2,7 @@ import { sampleGround } from '../world/Walk';
 import type { Collider } from '../world/WorldBuilder';
 import * as THREE from 'three';
 import type { AABB } from '../world/WorldBuilder';
+import type { Vec3 } from '../core/types';
 import type { TextureLibrary } from '../world/Materials';
 
 export type Pose = 'stand' | 'crouch' | 'kneel' | 'down';
@@ -430,8 +431,41 @@ export class HumanoidBody {
     return this.headPivot.getWorldDirection(out).negate();
   }
 
+  private readonly muzzleOriginTmp = new THREE.Vector3();
+  private readonly muzzleDirTmp = new THREE.Vector3();
+
   eye(out: THREE.Vector3): THREE.Vector3 {
     return this.headPivot.localToWorld(out.set(0,0.125,-0.1));
+  }
+
+  /**
+   * 銃口のワールド座標と単位前方ベクトル（ローカル -Z）を書き出す。
+   * 非武装・ダウン・降伏・銃非表示時は false。
+   */
+  getMuzzlePose(outOrigin: Vec3, outDir: Vec3): boolean {
+    if (
+      !this.gun ||
+      !this.gunShown ||
+      !this.gun.visible ||
+      this.pose === 'down' ||
+      this.pose === 'kneel' ||
+      this.gun.parent !== this.rig
+    ) {
+      return false;
+    }
+    this.muzzle.updateWorldMatrix(true, false);
+    this.muzzle.getWorldPosition(this.muzzleOriginTmp);
+    this.muzzle.getWorldDirection(this.muzzleDirTmp).negate();
+    const len = this.muzzleDirTmp.length();
+    if (len < 1e-6) return false;
+    this.muzzleDirTmp.divideScalar(len);
+    outOrigin.x = this.muzzleOriginTmp.x;
+    outOrigin.y = this.muzzleOriginTmp.y;
+    outOrigin.z = this.muzzleOriginTmp.z;
+    outDir.x = this.muzzleDirTmp.x;
+    outDir.y = this.muzzleDirTmp.y;
+    outDir.z = this.muzzleDirTmp.z;
+    return true;
   }
 
   setReadyPose(mode: 'low' | 'high'): void {

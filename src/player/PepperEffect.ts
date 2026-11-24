@@ -46,8 +46,8 @@ export class PepperEffect {
     if (!this.player.alive) this.level = 0;
     this.level = Math.max(0, this.level - DECAY_PER_SEC * dt);
     const k = this.level / 100;
-    this.weapons.extraSpread = k * 6;
     if (k > 0) {
+      this.weapons.extraSpread += k * 6;
       this.player.speedMultiplier *= 1 - 0.5 * k;
       this.player.addViewKick((Math.random() - 0.5) * 0.01 * k, (Math.random() - 0.5) * 0.016 * k);
       this.coughCd -= dt;

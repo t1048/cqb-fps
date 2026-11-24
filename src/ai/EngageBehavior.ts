@@ -391,7 +391,7 @@ export function resolveFloorY(pos: Vec3, rooms?: readonly RoomDef[], kind?: stri
     }
     if (bestY !== null) return bestY;
   }
-  if (kind === 'gunshot' || kind === 'door' || kind === 'breach' || kind === 'voice') {
+  if (kind === 'gunshot' || kind === 'door' || kind === 'breach' || kind === 'voice' || kind === 'reload') {
     return pos.y - 1.0;
   }
   return pos.y;
@@ -721,6 +721,15 @@ export class SuspectNavigator {
   }
 }
 
+export interface EngageOptions {
+  /** true なら enter() 時に遮蔽へ退避せず、視認・射程内ならまず数発撃ち込んでから遮蔽を取る（容疑者モード SWAT 用） */
+  immediateFireOnEnter?: boolean;
+  /** immediateFireOnEnter で遮蔽へ移る前に撃つ発数（既定: 3） */
+  immediateFireShots?: number;
+  /** true を返すときは onHit() で beginRetreat() せず現在のフェーズ/前進を維持する */
+  skipRetreatOnHit?: () => boolean;
+}
+
 /** ENGAGE 中の行動: 遮蔽物へ退避 → 待機/リロード → ピーク位置へ → 発砲 → 退避 …を基本とし、視認喪失時は追撃・回り込み再配置を行う。 */
 export class EngageBehavior {
   private phase: Phase = 'cover';
@@ -733,6 +742,7 @@ export class EngageBehavior {
   private lostSightSec = 0;
   private repositionGoal: Vec3 | null = null;
   private repositionTimer = 0;
+  private burstLimit: number | null = null;
   private spot: CoverSpot | null = null;
   private peekTarget: XZ | null = null;
   private readonly ray = new THREE.Ray();
@@ -752,6 +762,7 @@ export class EngageBehavior {
     private readonly hasWarned: () => boolean,
     private readonly mobility: MobilityParams | null = null,
     private readonly nav: SuspectNavigator | null = null,
+    private readonly opts: EngageOptions = {},
   ) {
     this.ammo = p.magazineSize;
   }
@@ -770,7 +781,32 @@ export class EngageBehavior {
     this.lostSightSec = 0;
     this.repositionGoal = null;
     this.repositionTimer = 0;
+    this.burstLimit = null;
     this.nav?.reset();
+    if (this.opts.immediateFireOnEnter && known && this.ammo > 0 && this.inRange(known)) {
+      const selfPos = { x: this.body.px, z: this.body.pz };
+      const chestY = this.body.footY + STAND_CHEST;
+      const visible =
+        this.seesFrom(selfPos, known, chestY) ||
+        hasLineOfSight(
+          this.ctx.colliders,
+          { x: known.x, y: known.y + CROUCH_CHEST, z: known.z },
+          { x: this.body.px, y: chestY, z: this.body.pz },
+        );
+      if (visible) {
+        this.spot = null;
+        this.peekTarget = null;
+        this.body.setPose('stand');
+        this.body.faceToward(known.x, known.z);
+        this.phase = 'peek';
+        const want = Math.max(1, this.opts.immediateFireShots ?? 3);
+        this.burstLimit = Math.min(want, this.p.shotsPerPeek);
+        this.timer = Math.min(this.p.peekSecMax, this.p.fireInterval * (this.burstLimit + 1));
+        this.shots = 0;
+        this.fireCd = 0;
+        return;
+      }
+    }
     this.beginRetreat(known);
   }
 
@@ -781,14 +817,19 @@ export class EngageBehavior {
     this.lostSightSec = 0;
     this.repositionGoal = null;
     this.repositionTimer = 0;
+    this.burstLimit = null;
     this.nav?.reset();
   }
 
-  /** 被弾: 怯んで遮蔽物へ退避する。 */
+  /** 被弾: 怯んで遮蔽物へ退避する（skipRetreatOnHit が true のときは現在の行動を維持）。 */
   onHit(known: Vec3 | null): void {
     this.flinch = this.p.flinchSec;
-    this.body.setFlash(true);
+    if (this.flinch > 0) this.body.setFlash(true);
     this.lostSightSec = 0;
+    if (this.opts.skipRetreatOnHit?.()) {
+      return;
+    }
+    this.burstLimit = null;
     this.repositionGoal = null;
     this.nav?.reset();
     this.beginRetreat(known);
@@ -806,6 +847,7 @@ export class EngageBehavior {
       // 追撃・回り込み中に脅威を再視認したら即座に射撃姿勢へ
       if (this.phase === 'advance' || this.phase === 'flank') {
         this.repositionGoal = null;
+        this.burstLimit = null;
         this.nav?.reset();
         if (this.ammo > 0 && this.inRange(known)) {
           this.phase = 'peek';
@@ -866,12 +908,22 @@ export class EngageBehavior {
           this.fireCd = this.p.fireInterval * FIRE_DELAY_FACTOR;
         }
         break;
-      case 'peek':
+      case 'peek': {
         this.timer -= dt;
         this.fireCd -= dt;
+        if (this.burstLimit !== null && !sees) {
+          this.burstLimit = null;
+          this.beginRetreat(known);
+          break;
+        }
         if (sees && this.fireCd <= 0 && this.ammo > 0 && this.inRange(known)) this.fire(threat, known);
-        if (this.shots >= this.p.shotsPerPeek || this.ammo <= 0 || this.timer <= 0) this.beginRetreat(known);
+        const maxShots = this.burstLimit ?? this.p.shotsPerPeek;
+        if (this.shots >= maxShots || this.ammo <= 0 || this.timer <= 0) {
+          this.burstLimit = null;
+          this.beginRetreat(known);
+        }
         break;
+      }
       case 'advance':
       case 'flank':
         this.updateReposition(dt, known);
@@ -1087,6 +1139,7 @@ export class EngageBehavior {
   }
 
   private beginRetreat(known: Vec3 | null): void {
+    this.burstLimit = null;
     this.spot = known ? this.findCover(known) : null;
     this.moveTime = 0;
     if (this.spot) {
@@ -1104,6 +1157,7 @@ export class EngageBehavior {
   }
 
   private beginPeek(known: Vec3 | null): void {
+    this.burstLimit = null;
     this.body.setPose('stand');
     this.peekTarget = this.choosePeek(known);
     this.moveTime = 0;

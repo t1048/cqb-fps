@@ -1,7 +1,7 @@
 import { EventBus } from './EventBus';
 import type { Vec3 } from './types';
 
-export type NoiseKind = 'footstep' | 'gunshot' | 'door' | 'breach' | 'flash' | 'voice';
+export type NoiseKind = 'footstep' | 'gunshot' | 'door' | 'breach' | 'flash' | 'voice' | 'reload';
 export type NoiseSource = 'player' | 'ally' | 'suspect';
 
 /** 発生源の識別子。'player' または entity id */
@@ -86,8 +86,20 @@ export interface GameEvents {
   roeViolation: { kind: RoeViolationKind; targetId?: string; points: number };
   /** プレイヤー被弾（敵弾ヒット） */
   playerHit: { shooter: ActorId; damage: number; from: Vec3; hp: number };
+  /** プレイヤーがフラッシュバンで白飛びした（duration = 白飛び秒数、pos = プレイヤー足元座標） */
+  playerBlinded: { duration: number; pos: Vec3 };
   /** 隊員の無線コール・状態報告 */
   allyRadio: { allyId: string; name: string; text: string; voiceText?: string };
+  /** C2 爆薬の起爆カウントダウン電子音（urgent=true は起爆直前の高音・高速ビープ） */
+  c2Beep: { pos: Vec3; urgent: boolean };
+  /** C2 爆破ブリーチの起爆（dir = 爆風方向・水平単位ベクトル、radius = 爆風半径） */
+  c2Detonated: { doorId: string; pos: Vec3; dir: Vec3; radius: number };
+  /** CS 催涙ガス弾の起爆（ガス雲発生） */
+  gasDetonated: { pos: Vec3; radius: number };
+  /** プレイヤーが催涙ガスやペッパーで咳き込んだ */
+  playerCough: { pos: Vec3 };
+  /** SWAT 隊員の重い戦術ブーツ足音（AI の onNoise 自己反応を避けるため独立イベント） */
+  swatFootstep: { pos: Vec3; heavy: boolean };
 }
 
 export type GameEventBus = EventBus<GameEvents>;

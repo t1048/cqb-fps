@@ -128,6 +128,13 @@ export class WeaponSystem {
     this.reloadLeft = w.reloadTime;
     this.reloadTotal = w.reloadTime;
     this.reloadEmpty = this.ammoInMagazine === 0;
+    const p = this.player.position;
+    this.bus.emit('noise', {
+      pos: { x: p.x, y: p.y + 1.0, z: p.z },
+      radius: 12,
+      kind: 'reload',
+      source: 'player',
+    });
   }
   get ammoInMagazine(): number {
     return this.ammo.get(this.current.id) ?? 0;
@@ -154,6 +161,7 @@ export class WeaponSystem {
     if (this.disposed) return;
     if (!this.player.alive) {
       this.player.speedMultiplier = 1;
+      this.extraSpread = 0;
       return;
     }
     const dt = Math.min(rawDt, MAX_DT);
@@ -194,6 +202,8 @@ export class WeaponSystem {
     }
 
     this.recoverRecoil(dt);
+    // PepperEffect / TearGasEffect が次フレーム向けに += 加算できるようフレーム末でリセット
+    this.extraSpread = 0;
   }
 
   /** 1発発射（視点方向 + 拡散）。テストや外部からも呼べる。 */
@@ -329,6 +339,7 @@ export class WeaponSystem {
   dispose(): void {
     this.disposed = true;
     this.player.speedMultiplier = 1;
+    this.extraSpread = 0;
     this.targets.clear();
     this.ammo.clear();
   }
