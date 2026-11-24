@@ -21,7 +21,7 @@ export function addMotifDecals(
   textures: TextureLibrary,
   keep: (material: THREE.Material) => void,
 ): void {
-  if (!map.motif || map.seed === undefined) return;
+  if (!map.motif || map.motif === 'residence' || map.seed === undefined) return;
   const motif = motifById(map.motif);
   const rng = new Rng((map.seed ^ 0x51edec01) >>> 0);
   const floorMats = new Map<DecalKind, THREE.MeshStandardMaterial>();

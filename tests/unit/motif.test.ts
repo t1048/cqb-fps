@@ -69,6 +69,9 @@ describe('map motifs', () => {
     expect(roleOf('garage_1F_0')).toBe('service');
     expect(roleOf('ldk_1F_0')).toBe('social');
     expect(roleOf('genkan_1F_0')).toBe('circ');
+    expect(roleOf('security_room_1F_0')).toBe('work');
+    expect(roleOf('ambassador_office_1F_0')).toBe('work');
+    expect(roleOf('archive_cellar_B1_0')).toBe('secure');
   });
 
   it('biases module weights without changing furniture dimensions', () => {
@@ -108,14 +111,14 @@ describe('map motifs', () => {
     expect([...matsA].sort().join(',')).not.toBe([...matsB].sort().join(','));
   });
 
-  it('keeps the house as its own motif with tatami, wood and domestic room names', () => {
+  it('keeps the japanese_house as its own motif with tatami, wood and domestic room names', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators/house_compact.json'), 'utf8')) as unknown;
     const tpl = validateGeneratorTemplate(raw, 'house_compact.json');
-    const seed = [...Array(400).keys()].find((s) => motifFromSeed(s).id === 'house');
+    const seed = [...Array(400).keys()].find((s) => motifFromSeed(s).id === 'japanese_house');
     expect(seed).toBeTypeOf('number');
     const map = generateMap(tpl, seed!, 'random_small', 2.18);
-    expect(map.motif).toBe('house');
-    expect(map.name.startsWith('民家')).toBe(true);
+    expect(map.motif).toBe('japanese_house');
+    expect(map.name.startsWith('和風民家')).toBe(true);
     const names = map.rooms.map((r) => r.name).join(',');
     expect(names).toMatch(/座敷|寝室/);
     expect(names).toMatch(/浴室|縁側|台所|廊下/);
@@ -130,14 +133,30 @@ describe('map motifs', () => {
     expect(map.walls.some((w) => w.material === 'siding')).toBe(true);
   });
 
-  it('draws the pre-motif plaster map without renaming rooms or adding theme props', () => {
+  it('dresses embassy motif with diplomatic room names and formal stone/carpet materials', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators/house_compact.json'), 'utf8')) as unknown;
     const tpl = validateGeneratorTemplate(raw, 'house_compact.json');
-    const seed = [...Array(400).keys()].find((s) => motifFromSeed(s).id === 'plain');
+    const seed = [...Array(400).keys()].find((s) => motifFromSeed(s).id === 'embassy');
     expect(seed).toBeTypeOf('number');
     const map = generateMap(tpl, seed!, 'random_small', 2.18);
-    expect(map.motif).toBe('plain');
-    expect(map.name.startsWith('簡素')).toBe(true);
+    expect(map.motif).toBe('embassy');
+    expect(map.name.startsWith('大使館')).toBe(true);
+    const names = map.rooms.map((r) => r.name).join(',');
+    expect(names).toMatch(/レセプションホール|館内大廊下|大使執務室|外交会議室|正面ロータリー/);
+    expect(map.walls.some((w) => w.material === 'panel')).toBe(true);
+    expect(map.walls.some((w) => w.material === 'brick')).toBe(true);
+    const floors = new Set(map.floors?.map((f) => f.material));
+    expect(floors.has('marble') || floors.has('carpet') || floors.has('wood')).toBe(true);
+  });
+
+  it('draws the residence plaster map without renaming rooms or adding theme props', () => {
+    const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators/house_compact.json'), 'utf8')) as unknown;
+    const tpl = validateGeneratorTemplate(raw, 'house_compact.json');
+    const seed = [...Array(400).keys()].find((s) => motifFromSeed(s).id === 'residence');
+    expect(seed).toBeTypeOf('number');
+    const map = generateMap(tpl, seed!, 'random_small', 2.18);
+    expect(map.motif).toBe('residence');
+    expect(map.name.startsWith('民家')).toBe(true);
     const names = map.rooms.map((r) => r.name).join(',');
     expect(names).toMatch(/玄関|寝室|リビング|浴室|廊下/);
     expect(names).not.toMatch(/病室|病棟|座敷|窓口|荷捌き/);

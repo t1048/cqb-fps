@@ -87,7 +87,7 @@ export class TextureLibrary {
     tex.wrapT = THREE.RepeatWrapping;
     tex.anisotropy = TEX_ANISO;
     tex.userData.shared = true;
-    // themed 時も実写 webp の肌理を multiply で重ねる（plain の落ち着いた質感を全モチーフへ）。
+    // themed 時も実写 webp の肌理を multiply で重ねる（民家の落ち着いた質感を全モチーフへ）。
     // ロード前は手続き塗りが表示されるため破綻しない。
     const webp = themed ? themedWebpName(name, this.palette) : null;
     if (webp) {
@@ -121,7 +121,7 @@ export class TextureLibrary {
 
   /** 壁・床に貼るデカール。クランプ。モチーフごとに 1 枚を共有する。 */
   getDecal(kind: DecalKind): THREE.CanvasTexture {
-    const id = this.palette?.id ?? 'plain';
+    const id = this.palette?.id ?? 'residence';
     const key = `decal:${id}:${kind}`;
     const hit = this.textures.get(key);
     if (hit) return hit;
@@ -795,6 +795,15 @@ function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h
   ctx.fillText(sign, w / 2, h * 0.48);
   ctx.font = '16px sans-serif';
   ctx.fillStyle = '#444';
-  const sub = pal?.id === 'hospital' ? 'EMERGENCY' : pal?.id === 'bank' ? 'RESTRICTED' : pal?.id === 'house' ? '' : 'AUTHORIZED';
+  const sub =
+    pal?.id === 'hospital'
+      ? 'EMERGENCY'
+      : pal?.id === 'bank'
+        ? 'RESTRICTED'
+        : pal?.id === 'embassy'
+          ? 'DIPLOMATIC'
+          : pal?.id === 'japanese_house' || pal?.id === 'residence'
+            ? ''
+            : 'AUTHORIZED';
   if (sub) ctx.fillText(sub, w / 2, h * 0.68);
 }

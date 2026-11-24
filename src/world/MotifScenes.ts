@@ -1,7 +1,7 @@
-import type { BoxDef, DoorDef, GeneratedMapRaw, MotifId, RoomDef } from '../core/types';
+import type { BoxDef, DoorDef, GeneratedMapRaw, MotifId, RoomDef, StairDef } from '../core/types';
 import { normalizeSeed, Rng } from './generator/Rng';
 import type { Rect } from './generator/Layout';
-import { inset, rectsOverlap, round3, subtractRects } from './generator/Layout';
+import { inset, rectsOverlap, round3, sharedEdge, subtractRects } from './generator/Layout';
 import { motifById, roleOf, type RoomRole } from './Motif';
 
 /**
@@ -33,8 +33,9 @@ const HALL_NAME: Record<MotifId, string> = {
   bank: '窓口ホール',
   office: 'ロビー',
   warehouse: '荷捌きホール',
-  house: '座敷',
-  plain: '座敷',
+  embassy: 'レセプションホール',
+  residence: 'リビング',
+  japanese_house: '座敷',
 };
 
 const TOILET_NAME: Record<MotifId, string> = {
@@ -43,8 +44,9 @@ const TOILET_NAME: Record<MotifId, string> = {
   bank: '化粧室',
   office: 'トイレ',
   warehouse: 'トイレ',
-  house: 'トイレ',
-  plain: 'トイレ',
+  embassy: '化粧室',
+  residence: 'トイレ',
+  japanese_house: 'トイレ',
 };
 
 const HALL_FLOOR: Record<MotifId, string> = {
@@ -53,8 +55,9 @@ const HALL_FLOOR: Record<MotifId, string> = {
   bank: 'marble',
   office: 'carpet',
   warehouse: 'concrete',
-  house: 'tatami',
-  plain: 'wood',
+  embassy: 'marble',
+  residence: 'wood',
+  japanese_house: 'tatami',
 };
 
 const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
@@ -117,14 +120,40 @@ const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
     ],
     work: [{ prop: 'shelf', width: 1.6, depth: 0.48, height: 1.85, place: 'wall' }],
   },
-  house: {
+  embassy: {
+    social: [
+      { prop: 'banquet_table', width: 2.2, depth: 0.95, height: 0.78, place: 'center' },
+      { prop: 'bench', width: 1.5, depth: 0.52, height: 0.82, place: 'wall' },
+    ],
+    work: [
+      { prop: 'desk', width: 1.55, depth: 0.75, height: 0.76, place: 'wall' },
+      { prop: 'chair', width: 0.5, depth: 0.5, height: 0.9, place: 'center' },
+    ],
+    secure: [
+      { prop: 'vault', width: 1.35, depth: 0.38, height: 2.05, place: 'wall' },
+      { prop: 'shelf', width: 1.5, depth: 0.45, height: 1.85, place: 'wall' },
+    ],
+    private: [
+      { prop: 'sofa', width: 1.95, depth: 0.85, height: 0.84, place: 'wall' },
+      { prop: 'desk', width: 1.45, depth: 0.7, height: 0.76, place: 'wall' },
+    ],
+    circ: [
+      { prop: 'bench', width: 1.45, depth: 0.5, height: 0.82, place: 'wall' },
+      { prop: 'planter', width: 0.75, depth: 0.75, height: 0.65, place: 'wall' },
+    ],
+    outdoor: [
+      { prop: 'planter', width: 0.85, depth: 0.85, height: 0.75, place: 'wall' },
+      { prop: 'bench', width: 1.5, depth: 0.55, height: 0.82, place: 'wall' },
+    ],
+  },
+  residence: {},
+  japanese_house: {
     social: [{ prop: 'low_table', width: 1.2, depth: 0.72, height: 0.35, place: 'center' }],
     outdoor: [
       { prop: 'engawa', width: 2.2, depth: 0.72, height: 0.32, place: 'wall' },
       { prop: 'planter', width: 0.7, depth: 0.7, height: 0.55, place: 'wall' },
     ],
   },
-  plain: {},
 };
 
 function rectOf(r: RoomDef): Rect {
@@ -149,6 +178,81 @@ function sameFloor(a: number, b: number): boolean {
   return Math.abs(a - b) < 0.6;
 }
 
+interface FloorRect {
+  y: number;
+  rect: Rect;
+}
+
+const openingKeepOutsCache = new WeakMap<GeneratedMapRaw, FloorRect[]>();
+
+/** 隣接部屋の共有辺で壁に覆われていない幅 0.8m 以上の区間（アーチ・連絡口）の前後を禁止矩形にする。 */
+function buildOpeningKeepOuts(map: GeneratedMapRaw): FloorRect[] {
+  const cached = openingKeepOutsCache.get(map);
+  if (cached) return cached;
+  const out: FloorRect[] = [];
+  const rooms = map.rooms;
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i]!;
+      const b = rooms[j]!;
+      const y = a.floorY ?? 0;
+      if (!sameFloor(y, b.floorY ?? 0)) continue;
+      const edge = sharedEdge(rectOf(a), rectOf(b));
+      if (!edge) continue;
+      const covered: [number, number][] = [];
+      for (const w of map.walls) {
+        // 床面から立つ壁（腰壁を含む）だけが通行を塞ぐ。垂れ壁（lintel）は開口として扱わない。
+        if (!sameFloor(w.y ?? 0, y)) continue;
+        const wr = xzOf(w);
+        if (edge.axis === 'x') {
+          if (wr.z0 - 0.06 <= edge.c && edge.c <= wr.z1 + 0.06) {
+            const lo = Math.max(edge.lo, wr.x0);
+            const hi = Math.min(edge.hi, wr.x1);
+            if (hi > lo) covered.push([lo, hi]);
+          }
+        } else if (wr.x0 - 0.06 <= edge.c && edge.c <= wr.x1 + 0.06) {
+          const lo = Math.max(edge.lo, wr.z0);
+          const hi = Math.min(edge.hi, wr.z1);
+          if (hi > lo) covered.push([lo, hi]);
+        }
+      }
+      // 扉の開口は doorKeepRect で別途保護するので、アーチ検出からは除く。
+      for (const d of map.doors) {
+        if (!sameFloor(d.y ?? 0, y)) continue;
+        const along = edge.axis === 'x' ? d.x : d.z;
+        const perp = edge.axis === 'x' ? d.z : d.x;
+        if (Math.abs(perp - edge.c) < 0.7 && along > edge.lo && along < edge.hi) {
+          const half = (d.width ?? 1.2) / 2;
+          covered.push([along - half, along + half]);
+        }
+      }
+      const free = subtractIntervals([[edge.lo, edge.hi]], covered);
+      for (const [f0, f1] of free) {
+        if (f1 - f0 < 0.8) continue;
+        out.push({
+          y,
+          rect: edge.axis === 'x'
+            ? { x0: f0 - 0.25, z0: edge.c - 1.25, x1: f1 + 0.25, z1: edge.c + 1.25 }
+            : { x0: edge.c - 1.25, z0: f0 - 0.25, x1: edge.c + 1.25, z1: f1 + 0.25 },
+        });
+      }
+    }
+  }
+  openingKeepOutsCache.set(map, out);
+  return out;
+}
+
+/** 階段フットプリントを進行方向前後 +1.1m・幅方向 +0.35m 広げた乗降口保護矩形。 */
+function stairKeepRect(st: StairDef): Rect {
+  const base = xzOf({ x: st.x, z: st.z, y: st.y ?? 0, width: st.width, depth: st.steps * st.run, height: 1, yaw: st.yaw });
+  const yawRad = ((st.yaw ?? 0) * Math.PI) / 180;
+  const runX = Math.abs(Math.sin(yawRad));
+  const runZ = Math.abs(Math.cos(yawRad));
+  const ex = 1.1 * runX + 0.35 * runZ;
+  const ez = 1.1 * runZ + 0.35 * runX;
+  return { x0: base.x0 - ex, z0: base.z0 - ez, x1: base.x1 + ex, z1: base.z1 + ez };
+}
+
 function blocked(covers: readonly BoxDef[], box: BoxDef, map: GeneratedMapRaw, gap: number): boolean {
   const r = xzOf(box);
   const y = box.y ?? 0;
@@ -157,10 +261,18 @@ function blocked(covers: readonly BoxDef[], box: BoxDef, map: GeneratedMapRaw, g
     if (!sameFloor(c.y ?? 0, y)) continue;
     if (rectsOverlap(padded, xzOf(c))) return true;
   }
-  const doorR = Math.max(box.width, box.depth) < 0.9 ? 0.8 : 1.1;
   for (const d of map.doors) {
     if (!sameFloor(d.y ?? 0, y)) continue;
-    if (Math.hypot(d.x - box.x, d.z - box.z) < doorR) return true;
+    if (rectsOverlap(r, doorKeepRect(d))) return true;
+  }
+  for (const k of buildOpeningKeepOuts(map)) {
+    if (!sameFloor(k.y, y)) continue;
+    if (rectsOverlap(r, k.rect)) return true;
+  }
+  for (const st of map.stairs ?? []) {
+    const baseY = st.y ?? 0;
+    if (!sameFloor(baseY, y) && !sameFloor(baseY + st.steps * st.rise, y)) continue;
+    if (rectsOverlap(r, stairKeepRect(st))) return true;
   }
   const spawn = map.playerSpawn;
   if (sameFloor(spawn.y, y) && Math.hypot(spawn.x - box.x, spawn.z - box.z) < 1.7) return true;
@@ -178,7 +290,7 @@ function inside(room: Rect, box: BoxDef, margin: number): boolean {
   return r.x0 >= room.x0 + margin && r.x1 <= room.x1 - margin && r.z0 >= room.z0 + margin && r.z1 <= room.z1 - margin;
 }
 
-function pushProp(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, spec: Spec, x: number, z: number, yaw = 0): boolean {
+function pushProp(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, spec: Spec, x: number, z: number, yaw = 0, gap = 0.65): boolean {
   const box: BoxDef = {
     x: round3(x),
     z: round3(z),
@@ -191,7 +303,7 @@ function pushProp(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, spec: S
   };
   if ((room.floorY ?? 0) === 0) delete box.y;
   if (!inside(rectOf(room), box, 0.04)) return false;
-  if (blocked(covers, box, map, 0.18)) return false;
+  if (blocked(covers, box, map, gap)) return false;
   covers.push(box);
   return true;
 }
@@ -200,14 +312,32 @@ function pushProp(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, spec: S
  * 壁際へ置く。正面（ローカル +Z）が部屋の内側を向く。
  * 幅は壁に沿う長さ、奥行は壁から部屋へ出る厚み。
  */
+/** 候補の背面（部屋の辺）に実際に床面から立つ壁があり、その壁片が候補中心を覆うか。 */
+function hasBackingWall(map: GeneratedMapRaw, room: RoomDef, box: BoxDef, side: 's' | 'n' | 'w' | 'e'): boolean {
+  const rect = rectOf(room);
+  const y = box.y ?? 0;
+  for (const w of map.walls) {
+    if (!sameFloor(w.y ?? 0, y)) continue;
+    const wr = xzOf(w);
+    if (side === 's' || side === 'n') {
+      const c = side === 's' ? rect.z0 : rect.z1;
+      if (wr.z0 - 0.25 <= c && c <= wr.z1 + 0.25 && wr.x0 - 0.05 <= box.x && box.x <= wr.x1 + 0.05) return true;
+    } else {
+      const c = side === 'w' ? rect.x0 : rect.x1;
+      if (wr.x0 - 0.25 <= c && c <= wr.x1 + 0.25 && wr.z0 - 0.05 <= box.z && box.z <= wr.z1 + 0.05) return true;
+    }
+  }
+  return false;
+}
+
 function placeAgainstWall(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, spec: Spec, rng: Rng): boolean {
   const rect = rectOf(room);
   const gap = 0.1;
-  const options: { yaw: number; x: number; z: number; axis: 'x' | 'z' }[] = [
-    { yaw: 0, x: 0, z: rect.z0 + spec.depth / 2 + gap, axis: 'x' },
-    { yaw: 180, x: 0, z: rect.z1 - spec.depth / 2 - gap, axis: 'x' },
-    { yaw: 90, x: rect.x0 + spec.depth / 2 + gap, z: 0, axis: 'z' },
-    { yaw: 270, x: rect.x1 - spec.depth / 2 - gap, z: 0, axis: 'z' },
+  const options: { yaw: number; x: number; z: number; axis: 'x' | 'z'; side: 's' | 'n' | 'w' | 'e' }[] = [
+    { yaw: 0, x: 0, z: rect.z0 + spec.depth / 2 + gap, axis: 'x', side: 's' },
+    { yaw: 180, x: 0, z: rect.z1 - spec.depth / 2 - gap, axis: 'x', side: 'n' },
+    { yaw: 90, x: rect.x0 + spec.depth / 2 + gap, z: 0, axis: 'z', side: 'w' },
+    { yaw: 270, x: rect.x1 - spec.depth / 2 - gap, z: 0, axis: 'z', side: 'e' },
   ];
   for (let i = options.length - 1; i > 0; i--) {
     const j = rng.int(0, i);
@@ -221,6 +351,8 @@ function placeAgainstWall(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef,
     const along = (o.axis === 'x' ? rect.x0 : rect.z0) + spec.width / 2 + 0.25 + rng.next() * span;
     const x = o.axis === 'x' ? along : o.x;
     const z = o.axis === 'z' ? along : o.z;
+    const candidate: BoxDef = { x, z, y: room.floorY ?? 0, width: spec.width, depth: spec.depth, height: spec.height, yaw: o.yaw, prop: spec.prop };
+    if (!hasBackingWall(map, room, candidate, o.side)) continue;
     if (pushProp(covers, map, room, spec, x, z, o.yaw)) return true;
   }
   return false;
@@ -305,7 +437,8 @@ function placeToiletFixtures(covers: BoxDef[], map: GeneratedMapRaw, room: RoomD
         const stall: Spec = { prop: 'stall', width: 0.06, depth: 1.15, height: 1.85, place: 'wall' };
         const sx = alongX ? room.x + t + 0.48 : far + sign * 0.7;
         const sz = alongX ? far + sign * 0.7 : room.z + t + 0.48;
-        pushProp(covers, map, room, stall, sx, sz, alongX ? 0 : 90);
+        // stall は便器に隣接させる設計のため、家具間ギャップだけ例外で 0.05 を許可する（扉・開口・階段の保護は不変）。
+        pushProp(covers, map, room, stall, sx, sz, alongX ? 0 : 90, 0.05);
       }
     }
   } else {
@@ -628,9 +761,10 @@ function overlap(a: Rect, b: Rect): Rect | null {
 }
 
 export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
-  // 簡素は生成器の部屋名と家具のまま。階段・壁・扉のコリジョンは生成器側が既に持つ。
-  if (!map.motif || map.motif === 'plain' || map.seed === undefined) return map;
+  // 民家は生成器の自然な部屋名と家具のまま。階段・壁・扉のコリジョンは生成器側が既に持つ。
+  if (!map.motif || map.motif === 'residence' || map.seed === undefined) return map;
   const motif = motifById(map.motif);
+  buildOpeningKeepOuts(map);
   const rng = new Rng((normalizeSeed(map.seed) ^ 0x51e11e) >>> 0);
   const covers = map.covers.map((c) => ({ ...c }));
   const rooms = map.rooms.map((r) => ({ ...r }));
@@ -640,20 +774,20 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
   if (hall) {
     hall.name = HALL_NAME[motif.id];
     if (floors) retile(floors, hall, HALL_FLOOR[motif.id]);
-    placeColumns(covers, map, hall, motif.id === 'house' ? 'post' : 'column');
+    placeColumns(covers, map, hall, motif.id === 'japanese_house' ? 'post' : 'column');
     placeHallDress(covers, hall);
   }
-  const toilet = motif.id === 'house' ? pickHouseToilet(rooms, hall) : pickToilet(rooms, hall);
+  const toilet = motif.id === 'japanese_house' ? pickHouseToilet(rooms, hall) : pickToilet(rooms, hall);
   if (toilet) {
     toilet.name = TOILET_NAME[motif.id];
     if (floors) retile(floors, toilet, 'tile');
     placeToiletFixtures(covers, map, toilet);
   }
 
-  const limit: Record<string, number> = { bed: 3, hbed: 3, piano: 1, bar: 1, sofa: 2, teller: 1, vault: 1, stretcher: 1, medcab: 1, container: 2, shelf: 2, desk: 3, chair: 4, partition: 2, low_table: 3, engawa: 2, planter: 2 };
+  const limit: Record<string, number> = { bed: 3, hbed: 3, piano: 1, bar: 1, sofa: 2, teller: 1, vault: 1, stretcher: 1, medcab: 1, container: 2, shelf: 2, desk: 3, chair: 4, partition: 2, low_table: 3, engawa: 2, planter: 2, banquet_table: 2, bench: 3 };
   for (const room of rooms) {
     if (room.id.includes('stair') || room === toilet) continue;
-    if (room.outdoor && motif.id !== 'house') continue;
+    if (room.outdoor && motif.id !== 'japanese_house' && motif.id !== 'embassy') continue;
     const role = roleOf(room.id);
     const specs = ROOM_PROPS[motif.id][role] ?? [];
     for (const spec of specs) placeSpec(covers, map, room, spec, rng, limit[spec.prop] ?? 2);
@@ -673,10 +807,13 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
   if (hall && motif.id === 'office') {
     placeSpec(covers, map, hall, { prop: 'partition', width: 1.8, depth: 0.08, height: 1.45, place: 'center' }, rng, 2);
   }
-  if (hall && motif.id === 'house') {
+  if (hall && motif.id === 'embassy') {
+    for (const spec of ROOM_PROPS.embassy.social ?? []) placeSpec(covers, map, hall, spec, rng, limit[spec.prop] ?? 2);
+  }
+  if (hall && motif.id === 'japanese_house') {
     placeSpec(covers, map, hall, { prop: 'low_table', width: 1.2, depth: 0.72, height: 0.35, place: 'center' }, rng, 2);
   }
-  if (motif.id === 'house' && floors) {
+  if (motif.id === 'japanese_house' && floors) {
     for (const room of rooms) if (room.outdoor) retile(floors, room, 'wood');
   }
 
@@ -688,7 +825,11 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
     const room = hall ?? rooms.find((r) => !r.outdoor && Math.min(r.width, r.depth) >= 3);
     if (room) placeSpec(covers, map, room, { prop: 'piano', width: 1.45, depth: 0.7, height: 1.28, place: 'wall' }, rng, 1);
   }
-  if (motif.id === 'house' && !covers.some((c) => c.prop === 'bed')) {
+  if (motif.id === 'embassy' && !covers.some((c) => c.prop === 'banquet_table')) {
+    const room = hall ?? rooms.find((r) => !r.outdoor && r !== toilet && Math.min(r.width, r.depth) >= 3);
+    if (room) placeSpec(covers, map, room, { prop: 'banquet_table', width: 2.2, depth: 0.95, height: 0.78, place: 'center' }, rng, 1);
+  }
+  if (motif.id === 'japanese_house' && !covers.some((c) => c.prop === 'bed')) {
     const room = rooms.find((r) => !r.outdoor && r !== toilet && /bedroom|private/.test(r.id))
       ?? rooms.find((r) => !r.outdoor && r !== toilet && Math.min(r.width, r.depth) >= 2.4);
     if (room) placeSpec(covers, map, room, { prop: 'bed', width: 2.0, depth: 1.4, height: 0.6, place: 'wall' }, rng, 1);

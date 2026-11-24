@@ -155,7 +155,7 @@ class App {
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
     // モチーフがあれば空・霧・露出を施設ごとに変える。未設定は従来の夕暮れ。
     const motif = map.motif ? motifById(map.motif) : null;
-    const visual = motif?.id === 'plain' ? null : motif;
+    const visual = motif?.id === 'residence' ? null : motif;
     const atm = visual?.atmosphere;
     this.scene.background = new THREE.Color(atm?.background ?? 0x3a4656);
     this.scene.fog = new THREE.Fog(atm?.fog ?? 0x3a4656, atm?.fogNear ?? 30, atm?.fogFar ?? 100);

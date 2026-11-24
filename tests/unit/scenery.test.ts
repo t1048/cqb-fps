@@ -55,11 +55,12 @@ describe('motif scenery', () => {
       bank: 'teller',
       office: 'desk',
       warehouse: 'shelf',
-      house: 'bed',
+      embassy: 'banquet_table',
+      japanese_house: 'bed',
     };
     for (const id of MOTIF_IDS) {
       const map = mapFor(id);
-      if (id === 'plain') {
+      if (id === 'residence') {
         expect(map.rooms.some((r) => /玄関|寝室|リビング|浴室/.test(r.name)), id).toBe(true);
         expect(map.covers.some((c) => c.prop === 'hbed' || c.prop === 'piano' || c.prop === 'lamp'), id).toBe(false);
       } else {
@@ -81,7 +82,7 @@ describe('motif scenery', () => {
     let found = false;
     for (let seed = 0; seed < 120 && !found; seed++) {
       const map = generateMap(tpl, seed, 'random_small', 2.18);
-      if (map.motif === 'plain') continue;
+      if (map.motif === 'residence') continue;
       const upper = map.rooms.some((r) => !r.outdoor && (r.floorY ?? 0) > 2);
       if (!upper) continue;
       found = true;

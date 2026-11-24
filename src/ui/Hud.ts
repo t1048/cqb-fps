@@ -183,7 +183,7 @@ export class Hud {
     if (motif) {
       const chip = document.createElement('div');
       chip.className = 'panel motif-chip';
-      chip.textContent = motif.label === '民家' || motif.label === '簡素' ? motif.label : `施設 ${motif.label}`;
+      chip.textContent = motif.label === '民家' || motif.label === '和風民家' ? motif.label : `施設 ${motif.label}`;
       chip.style.color = motif.color;
       chip.style.borderColor = motif.color;
       this.topRightSlot.appendChild(chip);
@@ -205,7 +205,7 @@ export class Hud {
     this.radioEl.className = 'radio';
     this.promptEl.className = 'panel prompt';
     this.promptEl.textContent =
-      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4装備';
+      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-3装備';
     this.interactEl.className = 'panel interact';
     this.quickOrderEl.className = 'panel quick-order';
     this.missionHintEl.className = 'panel mission-hint';

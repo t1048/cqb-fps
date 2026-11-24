@@ -462,6 +462,66 @@
         { "id": "crates", "width": 1.0, "depth": 0.8, "height": 1.0, "place": "corner", "chance": 0.9, "count": { "min": 1, "max": 2 } },
         { "id": "safe", "width": 0.9, "depth": 0.8, "height": 1.5, "place": "wall", "chance": 0.85, "count": { "min": 1, "max": 1 } }
       ]
+    },
+    {
+      "id": "classic_kitchen",
+      "name": "キッチン",
+      "category": "living_hub",
+      "allowedLevels": [0],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 2.4,
+      "width": { "min": 5.25, "max": 7.5 },
+      "depth": { "min": 6.5, "max": 9.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 2.2,
+      "floorMaterial": "tile",
+      "furniture": [
+        { "id": "counter", "width": 2.2, "depth": 0.7, "height": 0.9, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "fridge", "width": 0.8, "depth": 0.75, "height": 1.9, "place": "corner", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "dining_table", "width": 1.8, "depth": 1.0, "height": 0.76, "place": "center", "chance": 1, "count": { "min": 1, "max": 1 } }
+      ]
+    },
+    {
+      "id": "dining_hall",
+      "name": "大ダイニング",
+      "category": "living_hub",
+      "allowedLevels": [0],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 2.2,
+      "width": { "min": 8.25, "max": 10.5 },
+      "depth": { "min": 7.5, "max": 9.75 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 3.0,
+      "floorMaterial": "wood",
+      "furniture": [
+        { "id": "dining_table", "width": 2.6, "depth": 1.2, "height": 0.78, "place": "center", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "counter", "width": 1.6, "depth": 0.5, "height": 0.9, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "bench", "width": 1.6, "depth": 0.55, "height": 0.8, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } }
+      ]
+    },
+    {
+      "id": "long_corridor",
+      "name": "中央廊下",
+      "category": "corridor",
+      "allowedLevels": [0, 1],
+      "minCount": 0,
+      "maxCount": 2,
+      "weight": 2.4,
+      "width": { "min": 2.75, "max": 3.5 },
+      "depth": { "min": 10.5, "max": 14.5 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 0.4,
+      "furniture": [
+        { "id": "bench", "width": 1.4, "depth": 0.45, "height": 0.8, "place": "wall", "chance": 0.4, "count": { "min": 1, "max": 1 } }
+      ]
     }
   ],
   "fallbackModuleId": "storage",

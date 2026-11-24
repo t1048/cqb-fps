@@ -610,6 +610,46 @@
         { "id": "file_cabinet", "width": 1.4, "depth": 0.55, "height": 1.85, "place": "wall", "chance": 0.9, "count": { "min": 1, "max": 2 } },
         { "id": "safe", "width": 1.0, "depth": 0.85, "height": 1.6, "place": "corner", "chance": 0.85, "count": { "min": 1, "max": 1 } }
       ]
+    },
+    {
+      "id": "grand_hall_floor",
+      "name": "大フロア広間",
+      "category": "living_hub",
+      "allowedLevels": [0],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 2.4,
+      "width": { "min": 12.0, "max": 16.0 },
+      "depth": { "min": 11.0, "max": 14.5 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0.25,
+      "spawnWeight": 4.0,
+      "floorMaterial": "wood",
+      "furniture": [
+        { "id": "conf_table", "width": 2.4, "depth": 5.0, "height": 0.8, "place": "center", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "bench", "width": 2.0, "depth": 0.6, "height": 0.8, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } },
+        { "id": "shelf", "width": 1.8, "depth": 0.5, "height": 1.9, "place": "wall", "chance": 0.7, "count": { "min": 1, "max": 1 } }
+      ]
+    },
+    {
+      "id": "central_corridor",
+      "name": "中央長廊下",
+      "category": "corridor",
+      "allowedLevels": [0, 1],
+      "minCount": 0,
+      "maxCount": 2,
+      "weight": 2.6,
+      "width": { "min": 3.25, "max": 4.25 },
+      "depth": { "min": 14.0, "max": 18.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 0.4,
+      "floorMaterial": "tile",
+      "furniture": [
+        { "id": "bench", "width": 1.6, "depth": 0.5, "height": 0.8, "place": "wall", "chance": 0.4, "count": { "min": 1, "max": 1 } }
+      ]
     }
   ],
   "fallbackModuleId": "storage",

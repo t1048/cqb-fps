@@ -12,7 +12,7 @@ export const SCENERY_PROPS: ReadonlySet<string> = new Set([
   'bed', 'hbed', 'piano', 'stretcher', 'ivstand', 'curtain', 'medcab', 'bar', 'sofa', 'table', 'low_table',
   'teller', 'vault', 'bench', 'column', 'desk', 'chair', 'partition', 'shelf', 'metal_rack', 'tool_shelf',
   'pallet', 'container', 'crates', 'toilet', 'sink', 'stall', 'rail', 'wardrobe', 'fridge', 'bathtub',
-  'counter', 'tv_board', 'beam', 'lamp', 'engawa', 'post', 'planter', 'island', 'banquet_table',
+  'counter', 'tv_board', 'beam', 'lamp', 'engawa', 'post', 'planter', 'island', 'banquet_table', 'dining_table', 'conf_table',
 ]);
 
 type Builder = (g: THREE.Group, def: BoxDef, mat: SceneMat) => void;
@@ -447,7 +447,7 @@ const BUILDERS: Record<string, Builder> = {
   bed, hbed, piano, stretcher, ivstand, curtain, medcab, bar, sofa, table, low_table: table, teller, vault, bench,
   column, desk, chair, partition, shelf, metal_rack: shelf, tool_shelf: shelf, pallet, container, crates: container,
   toilet, sink, stall, rail, wardrobe, fridge, bathtub, counter, tv_board: desk, beam, lamp, engawa, post,
-  planter, island: counter, banquet_table: table,
+  planter, island: counter, banquet_table: table, dining_table: table, conf_table: table,
 };
 
 /** 小道具メッシュ。未知の prop は null（呼び出し側が箱のまま描く）。原点は足元中心。 */

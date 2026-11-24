@@ -155,13 +155,13 @@ export interface BriefingDef {
 }
 
 /** ランダム生成マップの施設モチーフ。シードから一意に決まり、見た目と部屋の出方を変える。 */
-export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse', 'house', 'plain'] as const;
+export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse', 'embassy', 'residence', 'japanese_house'] as const;
 export type MotifId = (typeof MOTIF_IDS)[number];
 
 export interface MapData {
   id: string;
   name: string;
-  /** 施設モチーフ（ランダム生成時）。plain と省略時は従来の漆喰・木のパレット */
+  /** 施設モチーフ（ランダム生成時）。residence と省略時は漆喰・木の民家パレット */
   motif?: MotifId;
   /** 突入前ブリーフィング情報（任意） */
   briefing?: BriefingDef;
@@ -648,7 +648,7 @@ export interface WeaponDef {
   id: string;
   name: string;
   category: WeaponCategory;
-  /** 装備スロット (1〜4) */
+  /** 装備スロット (1〜3) */
   slot: number;
   /** 1発のダメージ（非致死は 0 も可） */
   damage: number;
