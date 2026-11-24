@@ -155,13 +155,13 @@ export interface BriefingDef {
 }
 
 /** ランダム生成マップの施設モチーフ。シードから一意に決まり、見た目と部屋の出方を変える。 */
-export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse'] as const;
+export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse', 'house', 'plain'] as const;
 export type MotifId = (typeof MOTIF_IDS)[number];
 
 export interface MapData {
   id: string;
   name: string;
-  /** 施設モチーフ（ランダム生成時）。省略時は従来の住宅パレット */
+  /** 施設モチーフ（ランダム生成時）。plain と省略時は従来の漆喰・木のパレット */
   motif?: MotifId;
   /** 突入前ブリーフィング情報（任意） */
   briefing?: BriefingDef;

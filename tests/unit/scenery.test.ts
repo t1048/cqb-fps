@@ -18,7 +18,7 @@ function template() {
 }
 
 function mapFor(id: MotifId) {
-  const seed = [...Array(80).keys()].find((s) => motifFromSeed(s).id === id);
+  const seed = [...Array(400).keys()].find((s) => motifFromSeed(s).id === id);
   if (seed === undefined) throw new Error(id);
   return generateMap(template(), seed, 'random_small', 2.18);
 }
@@ -49,17 +49,23 @@ describe('motif scenery', () => {
   });
 
   it('places a signature prop for every motif without covering the spawn', () => {
-    const want: Record<MotifId, string> = {
+    const want: Partial<Record<MotifId, string>> = {
       hospital: 'hbed',
       clubhouse: 'piano',
       bank: 'teller',
       office: 'desk',
       warehouse: 'shelf',
+      house: 'bed',
     };
     for (const id of MOTIF_IDS) {
       const map = mapFor(id);
-      expect(map.covers.some((c) => c.prop === want[id]), id).toBe(true);
-      expect(map.covers.some((c) => c.prop === 'toilet'), id).toBe(true);
+      if (id === 'plain') {
+        expect(map.rooms.some((r) => /玄関|寝室|リビング|浴室/.test(r.name)), id).toBe(true);
+        expect(map.covers.some((c) => c.prop === 'hbed' || c.prop === 'piano' || c.prop === 'lamp'), id).toBe(false);
+      } else {
+        expect(map.covers.some((c) => c.prop === want[id]), id).toBe(true);
+        expect(map.covers.some((c) => c.prop === 'toilet'), id).toBe(true);
+      }
       for (const c of map.covers) {
         const dx = c.x - map.playerSpawn.x;
         const dz = c.z - map.playerSpawn.z;
@@ -73,15 +79,16 @@ describe('motif scenery', () => {
   it('opens an upper-floor void with rails when the building has two stories', () => {
     const tpl = template();
     let found = false;
-    for (let seed = 0; seed < 60 && !found; seed++) {
+    for (let seed = 0; seed < 120 && !found; seed++) {
       const map = generateMap(tpl, seed, 'random_small', 2.18);
+      if (map.motif === 'plain') continue;
       const upper = map.rooms.some((r) => !r.outdoor && (r.floorY ?? 0) > 2);
       if (!upper) continue;
       found = true;
       const rails = map.covers.filter((c) => c.prop === 'rail');
       expect(rails.length).toBeGreaterThan(0);
       expect(map.stairs?.length ?? 0).toBeGreaterThan(0);
-      const hall = map.rooms.find((r) => /ホール|ラウンジ|ロビー/.test(r.name));
+      const hall = map.rooms.find((r) => /ホール|ラウンジ|ロビー|座敷/.test(r.name));
       expect(hall).toBeTruthy();
     }
     expect(found).toBe(true);

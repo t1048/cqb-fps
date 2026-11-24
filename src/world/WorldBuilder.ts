@@ -110,7 +110,7 @@ export class WorldBuilder {
     private readonly map: MapData,
     private readonly textures: TextureLibrary,
   ) {
-    this.motif = map.motif ? motifById(map.motif) : null;
+    this.motif = map.motif && map.motif !== 'plain' ? motifById(map.motif) : null;
     this.root.name = `world:${map.id}`;
     this.buildFloorAndCeiling();
     this.buildBoxes(map.walls, 'wall', this.motif?.interiorTex ?? 'plaster', 0xc8c0b0);
@@ -365,7 +365,7 @@ export class WorldBuilder {
     for (const def of defs) {
       const names: readonly TextureName[] = [
         'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
-        'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+        'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
       ];
       const safe = names.find((n) => n === def.material) ?? fallback;
       const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);

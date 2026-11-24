@@ -23,15 +23,16 @@ export type TextureName =
   | 'siding'
   | 'corrugated'
   | 'ceiling'
-  | 'linen';
+  | 'linen'
+  | 'tatami';
 
 /** モチーフで塗り分ける建築用テクスチャ。武器・制服の wood / metal / fabric は含めない。 */
 const THEMED: ReadonlySet<TextureName> = new Set([
   'plaster', 'concrete', 'tile', 'carpet', 'brick', 'doorWood', 'doorFrame', 'frostedGlass', 'glass',
-  'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+  'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
 ]);
 
-const EXTRA: ReadonlySet<TextureName> = new Set(['marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen']);
+const EXTRA: ReadonlySet<TextureName> = new Set(['marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami']);
 
 export function hexCss(n: number): string {
   return `#${(n >>> 0).toString(16).padStart(6, '0')}`;
@@ -121,7 +122,7 @@ export class TextureLibrary {
   byMaterial(name: string | undefined, fallback: TextureName): THREE.CanvasTexture {
     const known: TextureName[] = [
       'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
-      'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+      'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
     ];
     const key = known.find((n) => n === name) ?? fallback;
     return this.get(key);
@@ -379,6 +380,7 @@ function paintThemed(name: TextureName, ctx: CanvasRenderingContext2D, w: number
   if (name === 'tile') return paintTilePalette(ctx, w, h, pal.tileA, pal.tileB, pal.grout), true;
   if (name === 'linoleum') return paintLinoleum(ctx, w, h, pal), true;
   if (name === 'carpet') return paintCarpet(ctx, w, h, pal), true;
+  if (name === 'tatami') return paintTatami(ctx, w, h), true;
   if (name === 'marble') return paintMarble(ctx, w, h, pal), true;
   if (name === 'brick') return paintBrickPalette(ctx, w, h, pal), true;
   if (name === 'siding') return paintSiding(ctx, w, h, pal), true;
@@ -499,6 +501,30 @@ function paintCarpet(ctx: CanvasRenderingContext2D, w: number, h: number, pal: S
   ctx.lineWidth = 8;
   ctx.strokeRect(10, 10, w - 20, h - 20);
   speckle(ctx, w, h, 50, pal.linenA, 0.12);
+}
+
+/** い草の目と布縁。民家の座敷・寝室用。 */
+function paintTatami(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  ctx.fillStyle = '#6f934c';
+  ctx.fillRect(0, 0, w, h);
+  for (let x = 0; x < w; x += 3) {
+    ctx.fillStyle = x % 6 === 0 ? 'rgba(40,62,24,0.28)' : 'rgba(210,230,160,0.16)';
+    ctx.fillRect(x, 0, 1, h);
+  }
+  for (let y = 0; y < h; y += 28) {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(0, y, w, 1);
+  }
+  ctx.fillStyle = '#2c2418';
+  ctx.fillRect(0, 0, w, 14);
+  ctx.fillRect(0, h - 14, w, 14);
+  ctx.fillRect(0, 0, 14, h);
+  ctx.fillRect(w - 14, 0, 14, h);
+  ctx.fillStyle = '#c4a574';
+  ctx.fillRect(10, 10, w - 20, 4);
+  ctx.fillRect(10, h - 14, w - 20, 4);
+  ctx.fillRect(10, 10, 4, h - 20);
+  ctx.fillRect(w - 14, 10, 4, h - 20);
 }
 
 function paintMarble(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
@@ -749,5 +775,6 @@ function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h
   ctx.fillText(sign, w / 2, h * 0.48);
   ctx.font = '16px sans-serif';
   ctx.fillStyle = '#444';
-  ctx.fillText(pal?.id === 'hospital' ? 'EMERGENCY' : pal?.id === 'bank' ? 'RESTRICTED' : 'AUTHORIZED', w / 2, h * 0.68);
+  const sub = pal?.id === 'hospital' ? 'EMERGENCY' : pal?.id === 'bank' ? 'RESTRICTED' : pal?.id === 'house' ? '' : 'AUTHORIZED';
+  if (sub) ctx.fillText(sub, w / 2, h * 0.68);
 }
