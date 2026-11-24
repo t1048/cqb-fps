@@ -2053,7 +2053,7 @@ export class SwatTeam {
     return false;
   }
 
-  /** F11: 生存中 SWAT の銃口レーザー・着弾点・フラッシュライト光芒を更新する */
+  /** F11: 生存中 SWAT の銃口レーザー・着弾点を更新する（フラッシュライト光芒は非表示） */
   private updateOptics(): void {
     for (const h of this.hunters) {
       if (
