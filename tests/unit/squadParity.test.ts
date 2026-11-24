@@ -796,7 +796,7 @@ describe('SquadSystem M3 SWAT Parity', () => {
     }
   });
 
-  it('F10: splits ALPHA and BRAVO across distinct doors on GOLD clear of a two-door room', () => {
+  it('F10: keeps ALPHA and BRAVO on the ordered door on GOLD clear of a two-door room (no automatic split entry)', () => {
     const bus = createGameEventBus();
     const doorSouth = new Door(
       { id: 'd_south', x: 0, z: 4, yaw: 0, locked: false, maxAngle: 95 },
@@ -838,8 +838,8 @@ describe('SquadSystem M3 SWAT Parity', () => {
       const alphaPortals = new Set(internalAllies.filter((a) => a.elementKey === 'alpha').map((a) => a.entryPortal?.id));
       const bravoPortals = new Set(internalAllies.filter((a) => a.elementKey === 'bravo').map((a) => a.entryPortal?.id));
 
-      expect(alphaPortals.has('d_south')).toBe(true);
-      expect(bravoPortals.has('d_north')).toBe(true);
+      expect(alphaPortals).toEqual(new Set(['d_south']));
+      expect(bravoPortals).toEqual(new Set(['d_south']));
     } finally {
       h.cleanup();
     }

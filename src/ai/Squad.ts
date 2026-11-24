@@ -101,7 +101,6 @@ import { TacticalOptics } from './TacticalOptics';
 import {
   computeBallisticVelocity,
   computeC2Standoff,
-  findRoomDoors,
   planFlashThrow,
   planPincerFlankGoal,
   selectPinningCell,
@@ -969,26 +968,6 @@ export class SquadSystem {
     return sorted[0]!;
   }
 
-  private buildPortalForRoomDoor(door: Door, room: RoomDef): EntryPortal {
-    const ax = door.centerX + door.normalX * 0.75;
-    const az = door.centerZ + door.normalZ * 0.75;
-    const aIn =
-      Math.abs(ax - room.x) <= room.width / 2 && Math.abs(az - room.z) <= room.depth / 2;
-    const sign = aIn ? 1 : -1;
-    return {
-      id: door.id,
-      centerX: door.centerX,
-      centerZ: door.centerZ,
-      sillY: door.sillY,
-      intoX: door.normalX * sign,
-      intoZ: door.normalZ * sign,
-      axisX: door.axisX,
-      axisZ: door.axisZ,
-      width: door.width,
-      door,
-    };
-  }
-
   private executeOrder(order: SquadOrder, ctx: OrderContext): void {
     const targets = this.activeTargets(ctx.element);
     if (targets.length === 0) {
@@ -1046,49 +1025,6 @@ export class SquadSystem {
     }
 
     if (isDoorOrder && portal) {
-      // GOLD 全員での部屋突入かつ 2 扉以上ある部屋では、ALPHA/BRAVO を別扉へ分割して多方向同時突入（F10）
-      const alphaGroup = targets.filter((u) => u.elementKey === 'alpha');
-      const bravoGroup = targets.filter((u) => u.elementKey === 'bravo');
-      const canSplitMultiDoor =
-        ctx.element === 'gold' &&
-        order !== 'stack' &&
-        order !== 'pieDoor' &&
-        targetRoom !== null &&
-        alphaGroup.length > 0 &&
-        bravoGroup.length > 0;
-
-      let splitAltPortal: EntryPortal | null = null;
-      if (canSplitMultiDoor && targetRoom) {
-        const roomDoors = findRoomDoors(targetRoom, this.flankDoorSamples());
-        let bestAlt: Door | null = null;
-        let bestDist = -1;
-        for (const rd of roomDoors) {
-          if (rd.id === portal.door?.id) continue;
-          const doorObj = this.doors.doors.find((d) => d.id === rd.id);
-          if (!doorObj) continue;
-          if (doorObj.locked && order !== 'breachClear' && order !== 'c2Clear') continue;
-          const dist = Math.hypot(doorObj.centerX - portal.centerX, doorObj.centerZ - portal.centerZ);
-          if (dist > bestDist) {
-            bestDist = dist;
-            bestAlt = doorObj;
-          }
-        }
-        if (bestAlt) {
-          splitAltPortal = this.buildPortalForRoomDoor(bestAlt, targetRoom);
-        }
-      }
-
-      if (splitAltPortal) {
-        const alphaLead = this.assignPortalGroup(alphaGroup, portal, targetRoom, order);
-        this.assignPortalGroup(bravoGroup, splitAltPortal, targetRoom, order);
-        this.emitRadio(
-          alphaLead,
-          'ALPHA・BRAVO、二方向同時突入でクリアする！',
-          'Alpha and Bravo, split entry — breach on mark!',
-        );
-        return;
-      }
-
       const lead = this.assignPortalGroup(targets, portal, targetRoom, order);
       const alreadyOpen = !portal.door || portal.door.angle >= this.cfg.doorOpenAngle;
       const radioMap: Record<string, [string, string]> = {
