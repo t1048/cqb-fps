@@ -71,6 +71,7 @@ export class PlacementGrid {
         height: f.height,
       };
       if (floorY !== 0) box.y = round3(floorY);
+      if (f.id) box.prop = f.id;
       this.covers.push(box);
       return true;
     }

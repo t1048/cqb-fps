@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { DecalKind, SurfacePalette } from './Motif';
 
 export type TextureName =
   | 'camo'
@@ -15,7 +16,33 @@ export type TextureName =
   | 'brick'
   | 'faceA' | 'faceB' | 'ally' | 'suspect' | 'civilian'
   | 'skin'
-  | 'glass';
+  | 'glass'
+  | 'marble'
+  | 'linoleum'
+  | 'panel'
+  | 'siding'
+  | 'corrugated'
+  | 'ceiling'
+  | 'linen';
+
+/** モチーフで塗り分ける建築用テクスチャ。武器・制服の wood / metal / fabric は含めない。 */
+const THEMED: ReadonlySet<TextureName> = new Set([
+  'plaster', 'concrete', 'tile', 'carpet', 'brick', 'doorWood', 'doorFrame', 'frostedGlass', 'glass',
+  'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+]);
+
+const EXTRA: ReadonlySet<TextureName> = new Set(['marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen']);
+
+export function hexCss(n: number): string {
+  return `#${(n >>> 0).toString(16).padStart(6, '0')}`;
+}
+
+function rgba(n: number, a: number): string {
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r},${g},${b},${a})`;
+}
 
 /**
  * Canvas で作る共有テクスチャ。userData.shared を立て、disposeObject では解放しない。
@@ -24,9 +51,23 @@ export type TextureName =
 export class TextureLibrary {
   private readonly textures = new Map<string, THREE.CanvasTexture>();
   private disposed = false;
+  /** 建築面の塗り。武器・制服テクスチャには影響しない。 */
+  palette: SurfacePalette | null = null;
+  /** 扉の框・鏡板・枠の乗算色。未設定なら Door 側の既定色。 */
+  doorTint?: { stile: number; panel: number; frame: number };
+
+  /** マップ生成後、最初の get より前に呼ぶ。 */
+  bindPalette(palette: SurfacePalette | null): void {
+    this.palette = palette;
+    this.doorTint = palette
+      ? { stile: palette.doorA, panel: palette.doorB, frame: palette.frame }
+      : undefined;
+  }
 
   get(name: TextureName): THREE.CanvasTexture {
-    const hit = this.textures.get(name);
+    const themed = this.palette !== null && THEMED.has(name);
+    const key = themed ? `${this.palette!.id}:${name}` : name;
+    const hit = this.textures.get(key);
     if (hit) return hit;
     const canvas = document.createElement('canvas');
     const garment = name === 'ally' || name === 'suspect' || name === 'civilian';
@@ -34,14 +75,14 @@ export class TextureLibrary {
     canvas.height = garment ? 384 : 256;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context を取得できません');
-    paint(name, ctx, canvas.width, canvas.height);
+    paint(name, ctx, canvas.width, canvas.height, themed ? this.palette : null);
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.anisotropy = 4;
     tex.userData.shared = true;
-    if (garment || ['faceA', 'faceB', 'fabric', 'concrete', 'wood', 'plaster'].includes(name)) {
+    if (!themed && (garment || ['faceA', 'faceB', 'fabric', 'concrete', 'wood', 'plaster'].includes(name))) {
       const image = new Image();
       image.onload = () => {
         if (this.disposed) return;
@@ -50,13 +91,38 @@ export class TextureLibrary {
       };
       image.src = import.meta.env.BASE_URL + 'textures/' + name + '.webp';
     }
-    this.textures.set(name, tex);
+    this.textures.set(key, tex);
+    return tex;
+  }
+
+  /** 壁・床に貼るデカール。クランプ。モチーフごとに 1 枚を共有する。 */
+  getDecal(kind: DecalKind): THREE.CanvasTexture {
+    const id = this.palette?.id ?? 'plain';
+    const key = `decal:${id}:${kind}`;
+    const hit = this.textures.get(key);
+    if (hit) return hit;
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2D canvas context を取得できません');
+    paintDecal(kind, ctx, canvas.width, canvas.height, this.palette);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.anisotropy = 4;
+    tex.userData.shared = true;
+    this.textures.set(key, tex);
     return tex;
   }
 
   /** マップ名からテクスチャ。未知の名前は plaster。 */
   byMaterial(name: string | undefined, fallback: TextureName): THREE.CanvasTexture {
-    const known: TextureName[] = ['camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass'];
+    const known: TextureName[] = [
+      'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
+      'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+    ];
     const key = known.find((n) => n === name) ?? fallback;
     return this.get(key);
   }
@@ -69,7 +135,12 @@ export class TextureLibrary {
   }
 }
 
-function paint(name: TextureName, ctx: CanvasRenderingContext2D, w: number, h: number): void {
+function paint(name: TextureName, ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette | null): void {
+  if (pal && paintThemed(name, ctx, w, h, pal)) return;
+  if (!pal && EXTRA.has(name)) {
+    paintThemed(name, ctx, w, h, NEUTRAL_PALETTE);
+    return;
+  }
   if (name === 'camo') return paintCamo(ctx, w, h);
   if (name === 'fabric') return paintFabric(ctx, w, h, '#3d4a38', '#2a3328');
   if (name === 'metal') return paintMetal(ctx, w, h);
@@ -280,4 +351,403 @@ function paintFrostedGlass(ctx: CanvasRenderingContext2D, w: number, h: number):
   ctx.moveTo(w * 0.15, h);
   ctx.lineTo(w * 0.55, 0);
   ctx.stroke();
+}
+
+const NEUTRAL_PALETTE: SurfacePalette = {
+  id: 'neutral',
+  wall: 0xd5d0c6, wallAlt: 0xc4bfb4, grout: 0xa8a298,
+  tileA: 0xe6e1d4, tileB: 0xc9c3b4, carpetA: 0x6a3a3a, carpetB: 0x4a2828,
+  woodA: 0x8d6238, woodB: 0x5c3b20, metalA: 0xb0b6bb, metalB: 0x5c6368,
+  marbleA: 0xe8e4dc, marbleVein: 0xb0a898, brickA: 0xa35242, brickB: 0x8a4034, mortar: 0x6d5a52,
+  ceiling: 0xd5d0c6, ceilingLine: 0xb8b2a6, linenA: 0xd8d2c4, linenB: 0xb8b0a0,
+  accent: 0x8a7048, concrete: 0x6a6e72, doorA: 0x7c5536, doorB: 0x69462b, frame: 0x3d2a1c,
+  wallStyle: 'plaster', ceilingStyle: 'acoustic', signText: 'SITE',
+};
+
+function speckle(ctx: CanvasRenderingContext2D, w: number, h: number, n: number, color: number, alpha: number): void {
+  for (let i = 0; i < n; i++) {
+    ctx.fillStyle = rgba(i % 2 === 0 ? color : 0x000000, alpha * (0.35 + (i % 5) * 0.12));
+    ctx.fillRect((i * 17) % w, (i * 29) % h, 1 + (i % 3), 1 + (i % 2));
+  }
+}
+
+/** モチーフ色で建築テクスチャを塗る。対象外の名前は false。 */
+function paintThemed(name: TextureName, ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): boolean {
+  if (name === 'panel') return paintPanel(ctx, w, h, pal), true;
+  if (name === 'plaster') return fillMottle(ctx, w, h, pal.wall, pal.wallAlt), true;
+  if (name === 'concrete') return paintConcrete(ctx, w, h, pal), true;
+  if (name === 'tile') return paintTilePalette(ctx, w, h, pal.tileA, pal.tileB, pal.grout), true;
+  if (name === 'linoleum') return paintLinoleum(ctx, w, h, pal), true;
+  if (name === 'carpet') return paintCarpet(ctx, w, h, pal), true;
+  if (name === 'marble') return paintMarble(ctx, w, h, pal), true;
+  if (name === 'brick') return paintBrickPalette(ctx, w, h, pal), true;
+  if (name === 'siding') return paintSiding(ctx, w, h, pal), true;
+  if (name === 'corrugated') return paintCorrugated(ctx, w, h, pal), true;
+  if (name === 'ceiling') return paintCeiling(ctx, w, h, pal), true;
+  if (name === 'linen') return paintLinen(ctx, w, h, pal), true;
+  if (name === 'doorWood' || name === 'doorFrame') return paintDoorGray(ctx, w, h), true;
+  if (name === 'glass' || name === 'frostedGlass') return paintGlassPalette(ctx, w, h, pal, name === 'frostedGlass'), true;
+  return false;
+}
+
+function fillMottle(ctx: CanvasRenderingContext2D, w: number, h: number, base: number, alt: number): void {
+  ctx.fillStyle = hexCss(base);
+  ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 90; i++) {
+    ctx.fillStyle = rgba(i % 3 === 0 ? alt : base, 0.18);
+    ctx.fillRect((i * 13) % w, (i * 19) % h, 4 + (i % 6), 3);
+  }
+  speckle(ctx, w, h, 40, alt, 0.15);
+}
+
+function paintPanel(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  if (pal.wallStyle === 'clinical') {
+    ctx.fillStyle = hexCss(pal.wall);
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = rgba(pal.grout, 0.55);
+    ctx.lineWidth = 2;
+    for (let y = 0; y <= h; y += 64) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    for (let x = 0; x <= w; x += 86) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+    ctx.fillStyle = hexCss(pal.accent);
+    ctx.fillRect(0, h - 22, w, 10);
+    ctx.fillStyle = hexCss(pal.wallAlt);
+    ctx.fillRect(0, h - 12, w, 12);
+    speckle(ctx, w, h, 30, pal.accent, 0.08);
+    return;
+  }
+  if (pal.wallStyle === 'wood') {
+    ctx.fillStyle = hexCss(pal.woodB);
+    ctx.fillRect(0, 0, w, h);
+    const boards = 7;
+    const bw = w / boards;
+    for (let i = 0; i < boards; i++) {
+      ctx.fillStyle = hexCss(i % 2 === 0 ? pal.woodA : pal.woodB);
+      ctx.fillRect(i * bw + 1, 0, bw - 2, h);
+      ctx.fillStyle = rgba(0x000000, 0.12);
+      ctx.fillRect(i * bw, 0, 2, h);
+    }
+    ctx.fillStyle = hexCss(pal.accent);
+    ctx.fillRect(0, h * 0.62, w, 6);
+    return;
+  }
+  if (pal.wallStyle === 'stone') {
+    paintBrickPalette(ctx, w, h, { ...pal, brickA: pal.marbleA, brickB: pal.wallAlt, mortar: pal.grout });
+    return;
+  }
+  if (pal.wallStyle === 'metal') {
+    paintCorrugated(ctx, w, h, pal);
+    return;
+  }
+  fillMottle(ctx, w, h, pal.wall, pal.wallAlt);
+  ctx.fillStyle = hexCss(pal.wallAlt);
+  ctx.fillRect(0, h - 18, w, 18);
+  ctx.fillStyle = rgba(pal.accent, 0.85);
+  ctx.fillRect(0, h - 20, w, 3);
+}
+
+function paintTilePalette(ctx: CanvasRenderingContext2D, w: number, h: number, a: number, b: number, grout: number): void {
+  ctx.fillStyle = hexCss(grout);
+  ctx.fillRect(0, 0, w, h);
+  const n = 4;
+  const tw = w / n;
+  const th = h / n;
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const stain = (x * 3 + y * 5) % 7 === 0;
+      ctx.fillStyle = hexCss(stain ? b : (x + y) % 2 === 0 ? a : b);
+      ctx.fillRect(x * tw + 2, y * th + 2, tw - 4, th - 4);
+      if (stain) {
+        ctx.fillStyle = rgba(0x000000, 0.08);
+        ctx.beginPath();
+        ctx.ellipse(x * tw + tw * 0.5, y * th + th * 0.55, tw * 0.22, th * 0.12, 0.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function paintLinoleum(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.tileA);
+  ctx.fillRect(0, 0, w, h);
+  speckle(ctx, w, h, 180, pal.tileB, 0.22);
+  ctx.strokeStyle = rgba(pal.grout, 0.35);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, h * 0.5);
+  ctx.lineTo(w, h * 0.5);
+  ctx.moveTo(w * 0.5, 0);
+  ctx.lineTo(w * 0.5, h);
+  ctx.stroke();
+  ctx.fillStyle = rgba(pal.accent, 0.55);
+  ctx.fillRect(0, h - 8, w, 8);
+}
+
+function paintCarpet(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.carpetA);
+  ctx.fillRect(0, 0, w, h);
+  for (let y = 0; y < h; y += 2) {
+    ctx.fillStyle = y % 4 === 0 ? hexCss(pal.carpetB) : hexCss(pal.carpetA);
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(0, y, w, 1);
+    ctx.globalAlpha = 1;
+  }
+  ctx.strokeStyle = rgba(pal.accent, 0.7);
+  ctx.lineWidth = 8;
+  ctx.strokeRect(10, 10, w - 20, h - 20);
+  speckle(ctx, w, h, 50, pal.linenA, 0.12);
+}
+
+function paintMarble(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.marbleA);
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = rgba(pal.marbleVein, 0.55);
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    ctx.moveTo((i * 40) % w, 0);
+    ctx.bezierCurveTo(w * 0.3, h * (0.2 + i * 0.08), w * 0.7, h * (0.5 - i * 0.05), w, (h * (0.15 * i)) % h);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = rgba(0xffffff, 0.25);
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+  speckle(ctx, w, h, 20, pal.marbleVein, 0.08);
+}
+
+function paintBrickPalette(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.mortar);
+  ctx.fillRect(0, 0, w, h);
+  const bh = 18;
+  const bw = 40;
+  for (let y = 0; y < h; y += bh) {
+    const off = Math.round(y / bh) % 2 === 0 ? 0 : bw / 2;
+    for (let x = -bw; x < w; x += bw) {
+      ctx.fillStyle = hexCss((x + y) % 80 === 0 ? pal.brickB : pal.brickA);
+      ctx.fillRect(x + off + 1, y + 1, bw - 3, bh - 3);
+    }
+  }
+}
+
+function paintSiding(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.woodB);
+  ctx.fillRect(0, 0, w, h);
+  const row = 14;
+  for (let y = 0; y < h; y += row) {
+    ctx.fillStyle = hexCss(y % (row * 2) === 0 ? pal.woodA : pal.woodB);
+    ctx.fillRect(0, y, w, row - 3);
+    ctx.fillStyle = rgba(0x000000, 0.18);
+    ctx.fillRect(0, y + row - 3, w, 3);
+  }
+}
+
+function paintCorrugated(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.metalB);
+  ctx.fillRect(0, 0, w, h);
+  const rib = 10;
+  for (let x = 0; x < w; x += rib) {
+    ctx.fillStyle = hexCss(x % (rib * 2) === 0 ? pal.metalA : pal.metalB);
+    ctx.fillRect(x, 0, rib / 2, h);
+  }
+  ctx.strokeStyle = rgba(pal.accent, 0.8);
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(0, 28);
+  ctx.lineTo(w, 28);
+  ctx.stroke();
+  speckle(ctx, w, h, 25, 0x402010, 0.15);
+}
+
+function paintConcrete(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  fillMottle(ctx, w, h, pal.concrete, pal.metalB);
+  ctx.strokeStyle = rgba(0x000000, 0.15);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(8, 8, w - 16, h - 16);
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = rgba(0x000000, 0.2);
+    ctx.beginPath();
+    ctx.arc((i * 37) % w, (i * 53) % h, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function paintCeiling(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.ceiling);
+  ctx.fillRect(0, 0, w, h);
+  if (pal.ceilingStyle === 'wood') {
+    paintSiding(ctx, w, h, pal);
+    return;
+  }
+  if (pal.ceilingStyle === 'exposed') {
+    ctx.fillStyle = hexCss(pal.ceiling);
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = hexCss(pal.metalB);
+    for (let x = 8; x < w; x += 42) ctx.fillRect(x, 0, 8, h);
+    ctx.fillStyle = rgba(pal.accent, 0.25);
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+  const n = pal.ceilingStyle === 'coffer' ? 2 : pal.ceilingStyle === 'tile' ? 4 : 3;
+  const tw = w / n;
+  const th = h / n;
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      ctx.fillStyle = hexCss((x + y) % 2 === 0 ? pal.ceiling : pal.wall);
+      const inset = pal.ceilingStyle === 'coffer' ? 8 : 2;
+      ctx.fillRect(x * tw + inset, y * th + inset, tw - inset * 2, th - inset * 2);
+      ctx.strokeStyle = hexCss(pal.ceilingLine);
+      ctx.strokeRect(x * tw + 0.5, y * th + 0.5, tw - 1, th - 1);
+    }
+  }
+}
+
+function paintLinen(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
+  ctx.fillStyle = hexCss(pal.linenA);
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = rgba(pal.linenB, 0.65);
+  ctx.lineWidth = 1;
+  for (let y = 0; y < h; y += 4) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 12; i++) {
+    ctx.fillStyle = rgba(pal.accent, 0.15);
+    ctx.fillRect((i * 23) % w, (i * 41) % h, 10, 3);
+  }
+}
+
+/** 扉はグレースケールの木目にして、Door 側の乗算色でモチーフ色にする。 */
+function paintDoorGray(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  ctx.fillStyle = '#b4b4b4';
+  ctx.fillRect(0, 0, w, h);
+  for (let x = 0; x < w; x += 5) {
+    ctx.fillStyle = x % 10 === 0 ? 'rgba(40,40,40,0.28)' : 'rgba(255,255,255,0.16)';
+    ctx.fillRect(x, 0, 2, h);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(16, 16, w - 32, h * 0.38);
+  ctx.strokeRect(16, h * 0.5, w - 32, h * 0.38);
+}
+
+function paintGlassPalette(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette, frosted: boolean): void {
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, rgba(pal.wall, frosted ? 0.72 : 0.45));
+  g.addColorStop(1, rgba(pal.accent, frosted ? 0.55 : 0.28));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  if (frosted) speckle(ctx, w, h, 80, 0xffffff, 0.2);
+}
+
+function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette | null): void {
+  const accent = pal?.accent ?? 0xc4a060;
+  const sign = pal?.signText ?? 'SITE';
+  ctx.clearRect(0, 0, w, h);
+  if (kind === 'blood') {
+    ctx.fillStyle = 'rgba(120,16,16,0.82)';
+    ctx.beginPath();
+    ctx.ellipse(w * 0.48, h * 0.52, w * 0.28, h * 0.18, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(90,8,8,0.7)';
+    ctx.beginPath();
+    ctx.ellipse(w * 0.62, h * 0.4, w * 0.12, h * 0.1, -0.6, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  if (kind === 'dirt') {
+    ctx.fillStyle = 'rgba(70,52,32,0.55)';
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.ellipse((40 + i * 27) % w, (30 + i * 33) % h, 18 + (i % 4) * 6, 10 + (i % 3) * 4, i, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return;
+  }
+  if (kind === 'scuff') {
+    ctx.strokeStyle = 'rgba(20,20,20,0.45)';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.moveTo(20, 40 + i * 36);
+      ctx.bezierCurveTo(w * 0.4, 20 + i * 30, w * 0.6, 80 + i * 20, w - 16, 50 + i * 28);
+      ctx.stroke();
+    }
+    return;
+  }
+  if (kind === 'hazard' || kind === 'stripe') {
+    const stripe = kind === 'hazard' ? 22 : 28;
+    for (let x = -h; x < w + h; x += stripe) {
+      ctx.fillStyle = (Math.floor(x / stripe) % 2 === 0) ? '#f0c020' : '#1a1a1a';
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x + h * 0.45, 0);
+      ctx.lineTo(x + h * 0.45 + h, h);
+      ctx.lineTo(x + h, h);
+      ctx.fill();
+    }
+    return;
+  }
+  if (kind === 'medcross') {
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillRect(w * 0.18, h * 0.18, w * 0.64, h * 0.64);
+    ctx.fillStyle = hexCss(accent);
+    ctx.fillRect(w * 0.4, h * 0.26, w * 0.2, h * 0.48);
+    ctx.fillRect(w * 0.26, h * 0.4, w * 0.48, h * 0.2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(w * 0.18, h * 0.18, w * 0.64, h * 0.64);
+    return;
+  }
+  if (kind === 'vault') {
+    ctx.strokeStyle = hexCss(accent);
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, w * 0.36, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 4;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(w / 2 + Math.cos(a) * w * 0.26, h / 2 + Math.sin(a) * h * 0.26);
+      ctx.lineTo(w / 2 + Math.cos(a) * w * 0.36, h / 2 + Math.sin(a) * h * 0.36);
+      ctx.stroke();
+    }
+    ctx.fillStyle = hexCss(accent);
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('VAULT', w / 2, h / 2);
+    return;
+  }
+  if (kind === 'graffiti') {
+    ctx.strokeStyle = rgba(accent, 0.9);
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(24, h * 0.65);
+    ctx.quadraticCurveTo(w * 0.3, h * 0.2, w * 0.55, h * 0.55);
+    ctx.quadraticCurveTo(w * 0.75, h * 0.85, w - 20, h * 0.35);
+    ctx.stroke();
+    ctx.fillStyle = rgba(accent, 0.75);
+    ctx.font = 'bold 42px sans-serif';
+    ctx.fillText(sign.slice(0, 4), 28, h * 0.45);
+    return;
+  }
+  // poster / sign
+  ctx.fillStyle = 'rgba(245,240,230,0.94)';
+  ctx.fillRect(18, 16, w - 36, h - 32);
+  ctx.fillStyle = hexCss(accent);
+  ctx.fillRect(18, 16, w - 36, 18);
+  ctx.fillStyle = '#1a1a1a';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(sign, w / 2, h * 0.48);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#444';
+  ctx.fillText(pal?.id === 'hospital' ? 'EMERGENCY' : pal?.id === 'bank' ? 'RESTRICTED' : 'AUTHORIZED', w / 2, h * 0.68);
 }

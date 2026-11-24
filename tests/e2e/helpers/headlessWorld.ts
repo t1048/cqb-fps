@@ -68,7 +68,10 @@ export function createStubTextures(): TextureLibrary {
   const tex = new THREE.Texture();
   return {
     get: () => tex,
+    getDecal: () => tex,
     byMaterial: () => tex,
+    bindPalette() {},
+    palette: null,
     dispose: () => {
       tex.dispose();
     },

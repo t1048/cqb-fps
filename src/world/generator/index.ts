@@ -1,4 +1,6 @@
 import type { GeneratedMapRaw, GeneratorTemplate } from '../../core/types';
+import { dressWithMotif } from '../Motif';
+import { applyMotifScenes } from '../MotifScenes';
 import { generateHouse } from './HouseGenerator';
 import { generateModularMap } from './ModularGenerator';
 import { normalizeSeed } from './Rng';
@@ -15,13 +17,17 @@ export { FallbackInfeasibleError, verifyFallbackFeasibility } from './ModularGen
  */
 export function generateMap(template: GeneratorTemplate, seed: number, mapId: string, doorLeafHeight?: number): GeneratedMapRaw {
   const normSeed = normalizeSeed(seed);
-  switch (template.type) {
-    case 'house':
-      return generateHouse(template, normSeed, mapId);
-    case 'modular':
-      if (doorLeafHeight === undefined) {
-        throw new Error(`[generator:${template.id}] type "modular" の生成には doors.json の扉高 (doorLeafHeight) が必要です`);
-      }
-      return generateModularMap(template, normSeed, mapId, doorLeafHeight);
-  }
+  const raw = (() => {
+    switch (template.type) {
+      case 'house':
+        return generateHouse(template, normSeed, mapId);
+      case 'modular':
+        if (doorLeafHeight === undefined) {
+          throw new Error(`[generator:${template.id}] type "modular" の生成には doors.json の扉高 (doorLeafHeight) が必要です`);
+        }
+        return generateModularMap(template, normSeed, mapId, doorLeafHeight);
+    }
+  })();
+  // 座標・扉・スポーンは生成器のまま。見た目のモチーフと、後付けの小道具・吹き抜けを足す。
+  return applyMotifScenes(dressWithMotif(raw, normSeed));
 }

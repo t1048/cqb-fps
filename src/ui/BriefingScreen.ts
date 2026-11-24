@@ -1,4 +1,5 @@
 import type { BriefingRange, MapData, StageEntry } from '../core/types';
+import { motifById } from '../world/Motif';
 import type { GameMode } from '../modes/SuspectMode';
 import { collectFloorLevels, drawFloorPlan, floorLabelAt, resolveActiveFloor } from './Minimap';
 
@@ -134,6 +135,13 @@ export class BriefingScreen {
     title.textContent = map.name;
     title.style.cssText = 'font:bold 26px sans-serif;color:#f4f8fc';
     header.append(badge, title);
+    if (map.motif) {
+      const motif = motifById(map.motif);
+      const chip = document.createElement('div');
+      chip.textContent = `モチーフ: ${motif.label}`;
+      chip.style.cssText = `margin-top:4px;font:bold 13px sans-serif;letter-spacing:.08em;color:${motif.accentCss}`;
+      header.appendChild(chip);
+    }
 
     // 2 カラム本体（左: 間取り図、右: インテル＆操作ガイド）
     const body = document.createElement('div');

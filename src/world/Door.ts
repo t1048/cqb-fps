@@ -185,19 +185,19 @@ export class Door {
     const frameTex = this.textures?.get('doorFrame');
     return {
       stile: new THREE.MeshStandardMaterial({
-        color: woodTex ? COLORS.leafStile : 0x765032,
+        color: this.textures?.doorTint?.stile ?? (woodTex ? COLORS.leafStile : 0x765032),
         roughness: 0.68,
         metalness: 0.04,
         ...(woodTex ? { map: woodTex } : {}),
       }),
       recess: new THREE.MeshStandardMaterial({
-        color: woodTex ? COLORS.leafPanel : 0x5f3e25,
+        color: this.textures?.doorTint?.panel ?? (woodTex ? COLORS.leafPanel : 0x5f3e25),
         roughness: 0.74,
         metalness: 0.03,
         ...(woodTex ? { map: woodTex } : {}),
       }),
       frame: new THREE.MeshStandardMaterial({
-        color: frameTex ? COLORS.frame : 0x3d2a1c,
+        color: this.textures?.doorTint?.frame ?? (frameTex ? COLORS.frame : 0x3d2a1c),
         roughness: 0.72,
         metalness: 0.05,
         ...(frameTex ? { map: frameTex } : {}),
