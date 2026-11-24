@@ -3,6 +3,7 @@ import type { BoxDef, MapData, StairDef } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { TextureLibrary, TextureName } from './Materials';
 import { addMotifDecals } from './Decals';
+import { buildScenery } from './Scenery';
 import { motifById, type MotifDef } from './Motif';
 import { buildItem, buildWindow } from './Props';
 import { isLegacyGroundMap, registerGroundPolicy, type StairMark } from './Walk';
@@ -113,7 +114,7 @@ export class WorldBuilder {
     this.root.name = `world:${map.id}`;
     this.buildFloorAndCeiling();
     this.buildBoxes(map.walls, 'wall', this.motif?.interiorTex ?? 'plaster', 0xc8c0b0);
-    this.buildBoxes(map.covers, 'cover', 'wood', 0x8b5a2b);
+    this.buildCovers();
     this.buildBoxes(map.floors, 'floor', this.motif?.groundTex ?? 'wood', 0x8a6844);
     this.buildStairs();
     for (const w of map.windows) this.root.add(buildWindow(w, textures));
@@ -141,7 +142,7 @@ export class WorldBuilder {
     return this.motif.tint[name] ?? 0xffffff;
   }
 
-  private material(name: TextureName, color: number, doubleSide = false): THREE.MeshStandardMaterial {
+  private material(name: TextureName, color: number, doubleSide = false, opacity = 1): THREE.MeshStandardMaterial {
     const map = this.textures.get(name);
     const themed = this.motif !== null;
     const metal = name === 'metal' || name === 'corrugated';
@@ -150,10 +151,32 @@ export class WorldBuilder {
       color,
       roughness: themed ? (name === 'marble' ? 0.32 : name === 'carpet' || name === 'linen' ? 0.94 : metal ? 0.42 : 0.84) : metal ? 0.4 : 0.86,
       metalness: themed ? (name === 'marble' ? 0.14 : metal ? 0.48 : 0.02) : metal ? 0.35 : 0.02,
-      side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
+      side: doubleSide || opacity < 1 ? THREE.DoubleSide : THREE.FrontSide,
+      transparent: opacity < 1,
+      opacity,
+      depthWrite: opacity >= 1,
     });
     this.materials.push(m);
     return m;
+  }
+
+  /** 種類の分かる小道具は部品メッシュ、それ以外の遮蔽物は従来の箱。当たりはどちらも箱。 */
+  private buildCovers(): void {
+    const plain: BoxDef[] = [];
+    for (const def of this.map.covers) {
+      const group = buildScenery(def, (name, color, opacity) => this.material(name, color, opacity !== undefined && opacity < 1, opacity ?? 1));
+      if (!group) {
+        plain.push(def);
+        continue;
+      }
+      group.traverse((obj) => {
+        obj.castShadow = false;
+        obj.receiveShadow = true;
+      });
+      this.root.add(group);
+      this.colliders.push({ kind: 'cover', aabb: boxToAABB(def) });
+    }
+    this.buildBoxes(plain, 'cover', 'wood', 0x8b5a2b);
   }
 
   private buildFloorAndCeiling(): void {

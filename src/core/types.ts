@@ -29,6 +29,8 @@ export interface BoxDef {
   y?: number;
   /** 生成テクスチャ名（concrete / plaster / wood / tile / carpet / fabric / brick / metal）。省略時は種別の既定 */
   material?: string;
+  /** 遮蔽物を読める小道具として描くときの種類（bed, piano など）。省略時は箱のまま */
+  prop?: string;
 }
 
 export type WallDef = BoxDef;

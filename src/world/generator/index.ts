@@ -1,5 +1,6 @@
 import type { GeneratedMapRaw, GeneratorTemplate } from '../../core/types';
 import { dressWithMotif } from '../Motif';
+import { applyMotifScenes } from '../MotifScenes';
 import { generateHouse } from './HouseGenerator';
 import { generateModularMap } from './ModularGenerator';
 import { normalizeSeed } from './Rng';
@@ -27,6 +28,6 @@ export function generateMap(template: GeneratorTemplate, seed: number, mapId: st
         return generateModularMap(template, normSeed, mapId, doorLeafHeight);
     }
   })();
-  // 座標・扉・スポーンは生成器のまま。部屋名とマテリアル、モチーフ ID だけを後付けする。
-  return dressWithMotif(raw, normSeed);
+  // 座標・扉・スポーンは生成器のまま。見た目のモチーフと、後付けの小道具・吹き抜けを足す。
+  return applyMotifScenes(dressWithMotif(raw, normSeed));
 }

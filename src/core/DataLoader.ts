@@ -141,6 +141,7 @@ function parseBox(r: Reader, v: unknown, path: string): BoxDef {
   const y = r.optNum(o, 'y', path);
   if (y !== undefined) box.y = y;
   if (o.material !== undefined) box.material = r.str(o, 'material', path);
+  if (typeof o.prop === 'string' && /^[a-z][a-z0-9_]{0,23}$/.test(o.prop)) box.prop = o.prop;
   return box;
 }
 
