@@ -43,7 +43,7 @@ import {
   isShieldRole,
 } from '../../src/ai/SwatProfile';
 import * as SwatTactics from '../../src/ai/SwatTactics';
-import { FLASHLIGHT_MAX_DIST, LASER_MAX_DIST, TacticalOptics } from '../../src/ai/TacticalOptics';
+import { LASER_MAX_DIST, TacticalOptics } from '../../src/ai/TacticalOptics';
 import * as SwatTeamModule from '../../src/modes/SwatTeam';
 import type { Collider } from '../../src/world/WorldBuilder';
 
@@ -233,22 +233,22 @@ describe('TacticalOptics zero-dynamic-light invariant & behavior', () => {
     optics.dispose();
   });
 
-  it('updates laser, impact dot, and flashlight cone length on open space vs wall hit, and hides/disposes cleanly', () => {
+  it('updates laser and impact dot on open space vs wall hit, keeps the flashlight cone hidden, and hides/disposes cleanly', () => {
     const parent = new THREE.Group();
     const optics = new TacticalOptics();
     parent.add(optics.group);
     expect(optics.group.visible).toBe(false);
+    expect(optics.coneMesh.visible).toBe(false);
 
-    // Open space: full laser length, no impact dot, cone clamped to FLASHLIGHT_MAX_DIST
+    // Open space: full laser length, no impact dot. Flashlight cone stays hidden.
     optics.update({ x: 0, y: 1.4, z: 0 }, { x: 0, y: 0, z: -1 }, []);
     expect(optics.group.visible).toBe(true);
     expect(optics.laserMesh.visible).toBe(true);
     expect(optics.laserMesh.scale.z).toBeCloseTo(LASER_MAX_DIST, 3);
     expect(optics.dotMesh.visible).toBe(false);
-    expect(optics.coneMesh.visible).toBe(true);
-    expect(optics.coneMesh.scale.z).toBeCloseTo(FLASHLIGHT_MAX_DIST, 3);
+    expect(optics.coneMesh.visible).toBe(false);
 
-    // Wall at z = -5: laser & cone clipped to 5m, impact dot visible near z = -4.985
+    // Wall at z = -5: laser clipped to 5m, impact dot visible near z = -4.985
     const wall: Collider = {
       kind: 'wall',
       aabb: new THREE.Box3(new THREE.Vector3(-4, 0, -5.2), new THREE.Vector3(4, 3, -5.0)),
@@ -257,7 +257,7 @@ describe('TacticalOptics zero-dynamic-light invariant & behavior', () => {
     expect(optics.laserMesh.scale.z).toBeCloseTo(5.0, 2);
     expect(optics.dotMesh.visible).toBe(true);
     expect(optics.dotMesh.position.z).toBeCloseTo(-4.985, 2);
-    expect(optics.coneMesh.scale.z).toBeCloseTo(5.0, 2);
+    expect(optics.coneMesh.visible).toBe(false);
 
     // Zero-length direction hides optics safely
     optics.update({ x: 0, y: 1.4, z: 0 }, { x: 0, y: 0, z: 0 }, [wall]);

@@ -12,8 +12,8 @@ export const CONE_UNIT_END_RADIUS = 0.2;
 const UNIT_Z = new THREE.Vector3(0, 0, 1);
 
 /**
- * 隊員 1 名分のタクティカルレーザー・着弾ドット・フラッシュライト光芒（F11）。
- * 動的ライト（PointLight / SpotLight）は一切追加せず、加算合成の MeshBasicMaterial のみで描画する。
+ * 隊員 1 名分のタクティカルレーザー・着弾ドット（F11）。
+ * フラッシュライトの光芒メッシュは残すが常に非表示。動的ライトは追加しない。
  */
 export class TacticalOptics {
   readonly group = new THREE.Group();
@@ -64,6 +64,7 @@ export class TacticalOptics {
     });
     this.coneMesh = new THREE.Mesh(coneGeo, coneMat);
     this.coneMesh.frustumCulled = false;
+    this.coneMesh.visible = false;
 
     this.group.add(this.laserMesh, this.dotMesh, this.coneMesh);
   }
@@ -95,13 +96,7 @@ export class TacticalOptics {
       );
     }
 
-    const coneLen = Math.min(hitDist, FLASHLIGHT_MAX_DIST);
-    this.coneMesh.visible = coneLen > 0.08;
-    if (this.coneMesh.visible) {
-      this.coneMesh.position.set(origin.x, origin.y, origin.z);
-      this.coneMesh.quaternion.copy(this.quat);
-      this.coneMesh.scale.set(coneLen, coneLen, coneLen);
-    }
+    this.coneMesh.visible = false;
   }
 
   hide(): void {
