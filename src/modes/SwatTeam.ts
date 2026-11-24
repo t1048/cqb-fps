@@ -412,6 +412,8 @@ class SwatHunter implements HitTarget {
   barricadeBurst = 0;
   /** 民間人が射線上で実弾を撃てない脅威（ペッパーボールで撃つ） */
   pepperThreat: Vec3 | null = null;
+  /** 視野内の脅威を反応時間まで追い続けている。このあいだは掃討で顔を逸らさない */
+  private acquiring = false;
   pepperCd = Math.random() * SWAT_PEPPER_INTERVAL;
   suppressCd = 0;
   readonly combat: CombatParams;
@@ -674,6 +676,7 @@ class SwatHunter implements HitTarget {
     this.sees = false;
     this.threat = null;
     this.pepperThreat = null;
+    this.acquiring = false;
     const p = this.ctx.player;
     if (p.alive === false) return;
     const engaged = this.state === 'engage' || this.state === 'rush';
@@ -694,6 +697,7 @@ class SwatHunter implements HitTarget {
         this.spotTimer = Math.max(0, this.spotTimer - dt);
         return;
       }
+      this.acquiring = true;
       this.spotTimer += dt;
       if (this.spotTimer < this.team.reactionSec) return;
       this.spotTimer = 0;
@@ -806,6 +810,7 @@ class SwatHunter implements HitTarget {
   }
 
   private updateHunt(dt: number): void {
+    if (this.confineHuntToRoom(dt)) return;
     const t = this.huntTarget;
     if (!t) {
       this.setState('sweep');
@@ -855,6 +860,38 @@ class SwatHunter implements HitTarget {
     }
   }
 
+  /**
+   * 未クリアの屋内にいるあいだは、隣室への迂回・追跡をしない。
+   * 同じ部屋の中の目標へは扉を開けずに歩き、部屋の外が目標なら掃討に戻す。
+   */
+  private confineHuntToRoom(dt: number): boolean {
+    const room = this.team.unclearedIndoorRoom(this);
+    if (!room) return false;
+    const target = this.huntTarget;
+    const destId = target ? this.team.indoorRoomAt(target.x, target.z, target.y)?.id : null;
+    if (this.huntingFlank || !target || destId !== room.id) {
+      this.huntingFlank = false;
+      this.huntTarget = null;
+      this.setState('sweep');
+      this.updateSweep(dt);
+      return true;
+    }
+    if (!this.sees && !this.pepperThreat) this.team.tryShootBarricade(this, dt);
+    const res = this.nav.step(target, this.combat.moveSpeed * HUNT_SPEED, dt, {
+      canOpenDoors: false,
+      canUseStairs: false,
+      faceTravel: !this.acquiring,
+      arriveDist: 1.4,
+    });
+    if (res === 'blocked') this.noteBlocked();
+    if (res !== 'moving' || this.stateTime > 30) {
+      this.huntTarget = null;
+      if (res === 'arrived') this.team.markRoomAt(this.body.px, this.body.pz, this.body.footY);
+      this.setState('sweep');
+    }
+    return true;
+  }
+
   /** 屋外にいる間は入口の接近点→ドアの内側へ進み、施錠されていればそのドアをブリーチする。 */
   private followEntry(route: EntryRoute, dt: number, speedScale: number): void {
     if (this.entryPhase !== route.phase) {
@@ -881,6 +918,7 @@ class SwatHunter implements HitTarget {
   }
 
   private updateSweep(dt: number): void {
+    if (this.sweepUnclearedRoom(dt)) return;
     const leader = this.leader;
     if (leader && leader.state !== 'engage' && leader.state !== 'rush' && leader.state !== 'staging') {
       // ツーマン／スリーマンセル: リーダーの後方を追従する。3 人組の 2 名は左右後方に分かれ、背後を扇状に警戒する
@@ -966,6 +1004,49 @@ class SwatHunter implements HitTarget {
     }
   }
 
+  /** 入った部屋に未確認マスが残っているあいだは、そのマスだけを歩き、扉は開けない。 */
+  private sweepUnclearedRoom(dt: number): boolean {
+    const room = this.team.unclearedIndoorRoom(this);
+    if (!room) return false;
+    this.huntingFlank = false;
+    if (this.goalCell && (this.goalCell.room !== room.id || this.goalCell.seen || this.goalCell.bad)) {
+      this.goalCell = null;
+    }
+    if (!this.goalCell) {
+      this.goalCell = this.team.nextClearCell(this);
+      this.goalTime = 0;
+      if (!this.goalCell) {
+        if (!this.acquiring) this.scanAround(dt, this.body.yawRad);
+        return true;
+      }
+    }
+    this.goalTime += dt;
+    const cell = this.goalCell;
+    if (this.goalTime > GOAL_TIMEOUT_SEC) {
+      this.team.markBad(cell);
+      this.goalCell = null;
+      return true;
+    }
+    if (!this.sees && !this.pepperThreat) this.team.tryShootBarricade(this, dt);
+    const goal = { x: cell.x, y: cell.y, z: cell.z };
+    const res = this.nav.step(goal, this.combat.moveSpeed * SWEEP_SPEED, dt, {
+      canOpenDoors: false,
+      canUseStairs: false,
+      faceTravel: !this.acquiring,
+      arriveDist: 0.9,
+    });
+    if (res === 'arrived') {
+      this.team.markSeenAround(this.body.px, this.body.pz, this.body.footY, COVER_NEAR);
+      cell.seen = true;
+      this.goalCell = null;
+    } else if (res === 'blocked') {
+      this.noteBlocked();
+      this.team.markBad(cell);
+      this.goalCell = null;
+    }
+    return true;
+  }
+
   /**
    * 経路探索の失敗が短時間に続き、かつ階段の途中（どの階の床にもいない）で止まっている場合の救済。
    * 最寄りの階段端（下階/上階の進入点）へ戻す。
@@ -999,6 +1080,8 @@ class SwatHunter implements HitTarget {
 
   /** 経路が施錠ドアで塞がれている場合、目標方向の施錠ドアへ向かってブリーチする。 */
   tryBeginBreach(goal: Vec3, preferId?: string): boolean {
+    // 同じ部屋の中の点へは扉を蹴らない。入口ドアの指定（preferId）と、別室・屋外からの突入は従来どおり。
+    if (!preferId && this.team.sameIndoorRoom(this.body.px, this.body.pz, this.body.footY, goal)) return false;
     const preferred = preferId ? this.team.doorById(preferId) : null;
     const door =
       preferred &&
@@ -1195,6 +1278,8 @@ export class SwatTeam {
   readonly hunters: SwatHunter[] = [];
   lastSighting: Vec3 | null = null;
   private readonly cleared = new Set<string>();
+  /** 一度掃討し終えた部屋。再捜索でマスを戻しても、再び「未クリアなので隣室へ出ない」にはしない */
+  private readonly sweptRooms = new Set<string>();
   private entryCache: EntryPortal[] | null = null;
   /** pickCell 中に hunt へ切り替えたい隊員（sweep 更新中の再入を避けるため次フレームで遷移） */
   private readonly pendingHunt = new Set<SwatHunter>();
@@ -2091,7 +2176,9 @@ export class SwatTeam {
           if (cellIndex === pinIdx) {
             for (const h of members) {
               if (h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
-              h.huntTarget = { x: pos.x, y: pos.y, z: pos.z };
+              const target = { x: pos.x, y: pos.y, z: pos.z };
+              if (this.holdUnclearedRoom(h, target, false)) continue;
+              h.huntTarget = target;
               h.huntingFlank = false;
               h.setState('hunt');
             }
@@ -2111,7 +2198,9 @@ export class SwatTeam {
           if (flank?.doorId) usedFlankDoors.add(flank.doorId);
           for (const h of members) {
             if (h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
-            h.huntTarget = flank ? { ...flank.target } : { x: pos.x, y: pos.y, z: pos.z };
+            const target = flank ? { ...flank.target } : { x: pos.x, y: pos.y, z: pos.z };
+            if (this.holdUnclearedRoom(h, target, flank !== null)) continue;
+            h.huntTarget = target;
             h.huntingFlank = flank !== null;
             h.setState('hunt');
             if (flank) {
@@ -2141,10 +2230,27 @@ export class SwatTeam {
       const d = Math.hypot(h.body.px - pos.x, h.body.pz - pos.z) + Math.abs(h.body.footY - pos.y) * 3;
       if (!visual && d > maxDist) continue;
       if (h.leader && h.leader.alive && !visual) continue; // 音の調査は組のリーダーが判断
-      h.huntTarget = { x: pos.x, y: pos.y, z: pos.z };
+      const target = { x: pos.x, y: pos.y, z: pos.z };
+      if (this.holdUnclearedRoom(h, target, false)) continue;
+      h.huntTarget = target;
       h.huntingFlank = false;
       h.setState('hunt');
     }
+  }
+
+  /**
+   * 未クリアの屋内にいる隊員を、隣室や迂回先の扉へ送り出さない。
+   * 同じ部屋の中の目標（正面からの釘付け）はそのまま追わせる。
+   */
+  private holdUnclearedRoom(h: SwatHunter, target: Vec3, flanking: boolean): boolean {
+    const room = this.unclearedIndoorRoom(h);
+    if (!room) return false;
+    const dest = this.indoorRoomAt(target.x, target.z, target.y);
+    if (!flanking && dest?.id === room.id) return false;
+    h.huntingFlank = false;
+    h.huntTarget = null;
+    if (h.state !== 'sweep') h.setState('sweep');
+    return true;
   }
 
   private onNoise(pos: Vec3, radius: number, kind: NoiseKind, source?: NoiseSource): void {
@@ -2183,6 +2289,7 @@ export class SwatTeam {
       ) continue;
       if (h.huntingFlank) continue;
       if (h.leader && h.leader.alive) continue;
+      if (this.holdUnclearedRoom(h, target, false)) continue;
       h.huntTarget = target;
       h.setState('hunt');
     }
@@ -2564,13 +2671,21 @@ export class SwatTeam {
     return cell;
   }
 
+  /** 未クリアの屋内にいるとき、その部屋の次の未確認マス。 */
+  nextClearCell(h: SwatHunter): CoverCell | null {
+    if (!this.unclearedIndoorRoom(h)) return null;
+    return this.nearestCell(h);
+  }
+
   private nearestCell(h: SwatHunter): CoverCell | null {
+    const confine = this.unclearedIndoorRoom(h)?.id ?? null;
     const taken: CoverCell[] = [];
     for (const x of this.hunters) if (x !== h && x.alive && x.goalCell) taken.push(x.goalCell);
     let best: CoverCell | null = null;
     let bestScore = Infinity;
     for (const c of this.coverCells()) {
       if (c.seen || c.bad) continue;
+      if (confine && c.room !== confine) continue;
       let score = Math.hypot(c.x - h.body.px, c.z - h.body.pz) + Math.abs(c.y - h.body.footY) * 6;
       if (h.goalRoom === c.room) score -= 3; // 今いる部屋を先に塗りつぶす
       for (const t of taken) if (Math.hypot(t.x - c.x, t.z - c.z) < 4 && Math.abs(t.y - c.y) < 0.9) score += 20;
@@ -2585,6 +2700,7 @@ export class SwatTeam {
   }
 
   markCleared(r: RoomDef, by: SwatHunter): void {
+    this.sweptRooms.add(r.id);
     if (this.cleared.has(r.id)) return;
     this.cleared.add(r.id);
     if (this.radioCd <= 0 && Math.random() < 0.45) this.radio(by, `${r.name}、クリア。`, 'Room clear.');
@@ -2601,6 +2717,39 @@ export class SwatTeam {
         (r) => Math.abs((r.floorY ?? 0) - y) < 0.75 && Math.abs(x - r.x) <= r.width / 2 && Math.abs(z - r.z) <= r.depth / 2,
       ) ?? null
     );
+  }
+
+  /** 重なる場合は小さい屋内部屋を優先する。屋外区画は返さない。 */
+  indoorRoomAt(x: number, z: number, y: number): RoomDef | null {
+    let best: RoomDef | null = null;
+    let bestArea = Infinity;
+    for (const r of this.rooms) {
+      if (r.outdoor) continue;
+      if (Math.abs((r.floorY ?? 0) - y) > 0.75) continue;
+      if (Math.abs(x - r.x) > r.width / 2 || Math.abs(z - r.z) > r.depth / 2) continue;
+      const area = r.width * r.depth;
+      if (area < bestArea) {
+        bestArea = area;
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  /** 立っている場所が屋内で、未確認マスが残っていればその部屋。屋外と掃討済みは null。 */
+  unclearedIndoorRoom(h: SwatHunter): RoomDef | null {
+    const room = this.indoorRoomAt(h.body.px, h.body.pz, h.body.footY);
+    if (!room || this.cleared.has(room.id) || this.sweptRooms.has(room.id)) return null;
+    const cells = this.coverCells().filter((c) => c.room === room.id);
+    if (cells.length === 0 || cells.every((c) => c.seen || c.bad)) return null;
+    return room;
+  }
+
+  /** ハンターと目標が同じ屋内部屋にいるか。 */
+  sameIndoorRoom(x: number, z: number, y: number, goal: Vec3): boolean {
+    const here = this.indoorRoomAt(x, z, y);
+    if (!here) return false;
+    return this.indoorRoomAt(goal.x, goal.z, goal.y)?.id === here.id;
   }
 
   private roomName(pos: Vec3): string {
