@@ -9,7 +9,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 const VignetteShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
-    strength: { value: 0.38 },
+    strength: { value: 0.28 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -46,15 +46,20 @@ export class PostFX {
   ) {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    this.composer = new EffectComposer(renderer);
-    this.composer.setPixelRatio(renderer.getPixelRatio());
+    const pr = renderer.getPixelRatio();
+    const rt = new THREE.WebGLRenderTarget(w * pr, h * pr, {
+      samples: renderer.capabilities.isWebGL2 ? 4 : 0,
+      type: THREE.HalfFloatType,
+    });
+    this.composer = new EffectComposer(renderer, rt);
+    this.composer.setPixelRatio(pr);
     this.composer.setSize(w, h);
     this.composer.addPass(new RenderPass(scene, camera));
     this.gtao = new GTAOPass(scene, camera, w, h);
     this.gtao.output = GTAOPass.OUTPUT.Default;
-    this.gtao.blendIntensity = 1;
-    this.gtao.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.4, thickness: 1.2, scale: 1.25, samples: 12, distanceFallOff: 1, screenSpaceRadius: false });
-    this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
+    this.gtao.blendIntensity = 0.85;
+    this.gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.4, thickness: 1.2, scale: 1.0, samples: 8, distanceFallOff: 1, screenSpaceRadius: false });
+    this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 3, samples: 8 });
     this.composer.addPass(this.gtao);
     this.vignette = new ShaderPass(VignetteShader);
     this.composer.addPass(this.vignette);

@@ -54,8 +54,8 @@ function bed(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function hbed(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const metal = mat('metal', 0xd5dee6);
-  const linen = mat('linen', 0xf7fffb);
-  const rail = mat('metal', 0x8fd0c2);
+  const linen = mat('linen', 0xdfe4de);
+  const rail = mat('metal', 0x6fa89c);
   box(g, metal, w * 0.86, 0.05, d * 0.78, 0, h * 0.42, 0);
   box(g, linen, w * 0.78, h * 0.18, d * 0.68, 0, h * 0.52, d * 0.02);
   box(g, linen, w * 0.72, h * 0.16, d * 0.22, 0, h * 0.66, -d * 0.18);
@@ -75,9 +75,9 @@ function hbed(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function piano(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const body = mat('wood', 0xffffff);
-  const wood = mat('wood', 0xf3e6d4);
-  const keys = mat('plaster', 0xfffdf8);
-  const black = mat('metal', 0x1a1a1a);
+  const wood = mat('wood', 0xdcc9a8);
+  const keys = mat('plaster', 0xe8e4da);
+  const black = mat('metal', 0x2e2e30);
   const brass = mat('metal', 0xe6c56b);
   box(g, body, w * 0.96, h * 0.9, d * 0.58, 0, h * 0.48, -d * 0.14);
   box(g, wood, w, h * 0.045, d * 0.66, 0, h * 0.94, -d * 0.1);
@@ -95,7 +95,7 @@ function piano(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function stretcher(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const metal = mat('metal', 0xffffff);
-  const pad = mat('linen', 0xe7f4ef);
+  const pad = mat('linen', 0xcfd8d2);
   box(g, metal, w * 0.92, 0.04, d * 0.12, 0, h * 0.55, -d * 0.38);
   box(g, metal, w * 0.92, 0.04, d * 0.12, 0, h * 0.55, d * 0.38);
   box(g, pad, w * 0.78, h * 0.16, d * 0.7, 0, h * 0.66, 0);
@@ -109,7 +109,7 @@ function stretcher(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 }
 
 function linenMat(mat: SceneMat): THREE.Material {
-  return mat('linen', 0xf7fffb);
+  return mat('linen', 0xdfe4de);
 }
 
 function ivstand(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
@@ -125,7 +125,7 @@ function ivstand(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function curtain(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const metal = mat('metal', 0xc5ccd2);
-  const cloth = mat('linen', 0xe7f6f1);
+  const cloth = mat('linen', 0xd3dcd6);
   box(g, metal, w, 0.04, d, 0, h - 0.03, 0);
   box(g, cloth, w * 0.46, h * 0.86, d * 0.7, -w * 0.24, h * 0.44, 0);
   box(g, cloth, w * 0.46, h * 0.86, d * 0.7, w * 0.24, h * 0.44, 0);
@@ -133,9 +133,9 @@ function curtain(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function medcab(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const body = mat('metal', 0xf4f7f8);
+  const body = mat('metal', 0xdde2e2);
   const glass = mat('glass', 0xd5eee8, 0.45);
-  const cross = mat('linen', 0x2f9e6b);
+  const cross = mat('linen', 0x2a7a52);
   box(g, body, w, h * 0.92, d * 0.86, 0, h * 0.48, -d * 0.04);
   box(g, glass, w * 0.38, h * 0.62, 0.02, -w * 0.22, h * 0.52, d * 0.42);
   box(g, glass, w * 0.38, h * 0.62, 0.02, w * 0.22, h * 0.52, d * 0.42);
@@ -145,9 +145,9 @@ function medcab(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function bar(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const wood = mat('wood', 0xfff6ea);
+  const wood = mat('wood', 0xe8dcc4);
   const front = mat('wood', 0xffffff);
-  const metal = mat('metal', 0xf0d78c);
+  const metal = mat('metal', 0xc8a860);
   box(g, front, w, h * 0.7, d * 0.82, 0, h * 0.35, 0);
   box(g, wood, w * 1.04, h * 0.1, d * 1.05, 0, h * 0.74, 0.02);
   cyl(g, metal, 0.035, w * 0.86, 0, h * 0.28, d * 0.46, 'x');
@@ -160,7 +160,7 @@ function bar(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function sofa(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const cloth = mat('fabric', 0xffffff);
-  const seat = mat('linen', 0xffffff);
+  const seat = mat('linen', 0xd0ccc2);
   const leg = mat('wood', 0x4a3428);
   for (const x of [-1, 1]) {
     for (const z of [-1, 1]) box(g, leg, 0.06, h * 0.16, 0.06, x * w * 0.42, h * 0.08, z * d * 0.36);
@@ -258,7 +258,7 @@ function chair(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function partition(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const panel = mat('panel', 0xf4f7fb);
+  const panel = mat('panel', 0xdde2e8);
   const metal = mat('metal', 0x5d6b7a);
   const cap = mat('metal', 0x2f6f9f);
   const footD = Math.max(d, 0.1);
@@ -303,7 +303,7 @@ function container(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function toilet(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const ceramic = mat('plaster', 0xf7f7f5);
+  const ceramic = mat('plaster', 0xdfe0da);
   box(g, ceramic, w * 0.7, h * 0.42, d * 0.55, 0, h * 0.28, -d * 0.08);
   cyl(g, ceramic, Math.min(w, d) * 0.28, h * 0.16, 0, h * 0.52, d * 0.05);
   box(g, ceramic, w * 0.62, h * 0.08, d * 0.48, 0, h * 0.62, d * 0.02);
@@ -312,7 +312,7 @@ function toilet(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function sink(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const ceramic = mat('plaster', 0xf7f7f5);
+  const ceramic = mat('plaster', 0xdfe0da);
   const metal = mat('metal', 0xd5dbe2);
   box(g, ceramic, w * 0.28, h * 0.7, d * 0.28, 0, h * 0.35, 0);
   box(g, ceramic, w * 0.9, h * 0.16, d * 0.7, 0, h * 0.74, 0);
@@ -323,7 +323,7 @@ function sink(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function stall(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const panel = mat('plaster', 0xf7f8f6);
+  const panel = mat('plaster', 0xd8dcd8);
   const metal = mat('metal', 0x8e9894);
   box(g, panel, w, h * 0.78, d, 0, h * 0.52, 0);
   box(g, metal, w, 0.04, d * 1.2, 0, h * 0.92, 0);
@@ -348,7 +348,7 @@ function rail(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function wardrobe(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const wood = mat('wood', 0xffffff);
-  const door = mat('wood', 0xc4a574);
+  const door = mat('wood', 0xb08d5e);
   box(g, wood, w, h, d * 0.86, 0, h / 2, -d * 0.04);
   box(g, mat('wood', 0x5c4030), w, 0.04, d * 0.2, 0, h * 0.96, d * 0.4);
   box(g, door, w * 0.46, h * 0.82, 0.04, -w * 0.24, h * 0.48, d * 0.44);
@@ -358,7 +358,7 @@ function wardrobe(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function fridge(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const metal = mat('metal', 0xe6eaee);
+  const metal = mat('metal', 0xd0d4d8);
   box(g, metal, w, h * 0.62, d, 0, h * 0.68, 0);
   box(g, metal, w, h * 0.32, d, 0, h * 0.16, 0);
   box(g, mat('metal', 0x9aa3ad), w * 0.08, 0.28, 0.03, w * 0.36, h * 0.62, d * 0.5);
@@ -366,7 +366,7 @@ function fridge(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function bathtub(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
-  const ceramic = mat('plaster', 0xf4f7f8);
+  const ceramic = mat('plaster', 0xd8dcd8);
   box(g, ceramic, w, h * 0.7, d, 0, h * 0.35, 0);
   box(g, mat('glass', 0xd5e8ee, 0.35), w * 0.7, h * 0.18, d * 0.55, 0, h * 0.62, 0);
   cyl(g, mat('metal', 0xd5dbe2), 0.02, h * 0.28, -w * 0.28, h * 0.85, -d * 0.2);
@@ -375,7 +375,7 @@ function bathtub(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function counter(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const wood = mat('wood', 0xffffff);
-  const top = mat('wood', 0xd7c4a2);
+  const top = mat('wood', 0xc9b48e);
   const metal = mat('metal', 0xd5dbe2);
   box(g, wood, w * 0.96, h * 0.72, d * 0.9, 0, h * 0.36, 0);
   box(g, mat('wood', 0x5c4030), 0.02, h * 0.62, 0.02, 0, h * 0.34, d * 0.42);
@@ -415,11 +415,11 @@ function beam(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 
 function lamp(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { height: h } = def;
-  const metal = mat('metal', 0xf0d78c);
-  const glass = mat('glass', 0xfff4d2, 0.9);
+  const metal = mat('metal', 0xc8a860);
+  const glass = mat('glass', 0xf2e2c0, 0.9);
   if (glass instanceof THREE.MeshStandardMaterial) {
     glass.emissive = new THREE.Color(0xffd98a);
-    glass.emissiveIntensity = 0.85;
+    glass.emissiveIntensity = 0.6;
   }
   cyl(g, metal, 0.015, h * 0.42, 0, h * 0.76, 0);
   cyl(g, metal, 0.1, 0.025, 0, h * 0.54, 0);

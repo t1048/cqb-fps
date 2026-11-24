@@ -100,7 +100,6 @@ export class WorldBuilder {
   private housingGeo?: THREE.BoxGeometry;
   private housingMat?: THREE.MeshStandardMaterial;
   private diffuserGeo?: THREE.BoxGeometry;
-  private diffuserMat?: THREE.MeshBasicMaterial;
   /** 部屋照明。全室分の PointLight を常時置くとフラグメントシェーダが室数ぶん重くなるため、近傍だけに割り当てる。 */
   lights!: RoomLightPool;
   private sun!: THREE.DirectionalLight;
@@ -146,15 +145,20 @@ export class WorldBuilder {
     const map = this.textures.get(name);
     const themed = this.motif !== null;
     const metal = name === 'metal' || name === 'corrugated';
+    const baseRoughness = themed ? (name === 'marble' ? 0.32 : name === 'carpet' || name === 'linen' ? 0.94 : metal ? 0.42 : 0.84) : metal ? 0.4 : 0.86;
+    // ガラス系以外は同一 canvas 派生の bump / roughness で肌理を出す（派生は TextureLibrary がキャッシュ・解放する）
+    const textured = name !== 'glass' && name !== 'frostedGlass';
+    const derived = textured ? this.textures.getDerivedMaps(map) : null;
     const m = new THREE.MeshStandardMaterial({
       map,
       color,
-      roughness: themed ? (name === 'marble' ? 0.32 : name === 'carpet' || name === 'linen' ? 0.94 : metal ? 0.42 : 0.84) : metal ? 0.4 : 0.86,
+      roughness: derived ? Math.max(0.05, baseRoughness - 0.05) : baseRoughness,
       metalness: themed ? (name === 'marble' ? 0.14 : metal ? 0.48 : 0.02) : metal ? 0.35 : 0.02,
       side: doubleSide || opacity < 1 ? THREE.DoubleSide : THREE.FrontSide,
       transparent: opacity < 1,
       opacity,
       depthWrite: opacity >= 1,
+      ...(derived ? { bumpMap: derived.bumpMap, bumpScale: 0.02, roughnessMap: derived.roughnessMap } : {}),
     });
     this.materials.push(m);
     return m;
@@ -531,8 +535,11 @@ export class WorldBuilder {
       });
       const housing = new THREE.Mesh(this.housingGeo ??= new THREE.BoxGeometry(1.05, 0.09, 0.27), this.housingMat ??= this.material('metal', this.colorFor('metal', 0x74767a)));
       housing.position.set(room.x, lightY + 0.24, room.z);
-      const diffuser = new THREE.Mesh(this.diffuserGeo ??= new THREE.BoxGeometry(0.94, 0.028, 0.2),
-        this.diffuserMat ??= new THREE.MeshBasicMaterial({ color: tints[0] ?? 0xffebcc }));
+      const tint = tints[idx % tints.length] ?? 0xffebcc;
+      const dimmed = (((tint >> 16) & 255) * 0.82 << 16) | (((tint >> 8) & 255) * 0.82 << 8) | ((tint & 255) * 0.82);
+      const diffuserMat = new THREE.MeshBasicMaterial({ color: dimmed });
+      this.materials.push(diffuserMat);
+      const diffuser = new THREE.Mesh(this.diffuserGeo ??= new THREE.BoxGeometry(0.94, 0.028, 0.2), diffuserMat);
       diffuser.position.y = -0.054;
       housing.add(diffuser);
       this.root.add(housing);

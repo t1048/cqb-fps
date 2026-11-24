@@ -15,9 +15,11 @@ export interface LightSpot {
  * 室数ぶん（大型マップで 30 超）置くと GPU 負荷が室数に比例して増える。数は固定（シェーダ再コンパイル回避）。
  */
 export const ROOM_LIGHT_SLOTS = 8;
-const RESELECT_SEC = 0.2;
+const RESELECT_SEC = 0.5;
 const SHADOW_MAP = 512;
-const FADE_PER_SEC = 5;
+const FADE_PER_SEC = 3;
+/** 切替境界での明滅を防ぐヒステリシス閾値（m）。 */
+const HYSTERESIS_METERS = 1.5;
 /** 階が違う照明は壁・床越しにしか届かないので距離を割増して優先度を下げる。 */
 const VERTICAL_WEIGHT = 3;
 
@@ -129,8 +131,39 @@ export class RoomLightPool {
       return { spot, d: Math.hypot(dx, dy, dz) - spot.distance * 0.25 };
     });
     scored.sort((a, b) => a.d - b.d);
+    const candidateNearest = scored[0]?.spot ?? null;
+    if (this.wanted.size > 0) {
+      const candidateSet = new Set<LightSpot>();
+      for (let i = 0; i < n && i < scored.length; i++) candidateSet.add(scored[i]!.spot);
+      const added = scored.slice(0, n).filter((x) => !this.wanted.has(x.spot));
+      // 差分が 1 灯以下かつ最寄り照明が同一なら現状維持
+      if (added.length <= 1 && candidateNearest === this.nearest) return;
+
+      const scoreOf = new Map(scored.map((x) => [x.spot, x.d]));
+      const removedScores = [...this.wanted]
+        .filter((s) => !candidateSet.has(s))
+        .map((s) => scoreOf.get(s) ?? Infinity);
+      const maxDiff =
+        added.length > 0 && removedScores.length > 0
+          ? Math.max(...removedScores) - Math.min(...added.map((x) => x.d))
+          : 0;
+      const keepWanted = added.length === 0 || maxDiff < HYSTERESIS_METERS;
+      const nearestDiff =
+        this.nearest !== null && scored[0]
+          ? (scoreOf.get(this.nearest) ?? Infinity) - scored[0].d
+          : Infinity;
+      const keepNearest = candidateNearest === this.nearest || nearestDiff < HYSTERESIS_METERS;
+
+      if (!keepNearest) this.nearest = candidateNearest;
+      if (!keepWanted) {
+        this.wanted.clear();
+        for (const s of candidateSet) this.wanted.add(s);
+      }
+      return;
+    }
+
     this.wanted.clear();
-    this.nearest = scored[0]?.spot ?? null;
+    this.nearest = candidateNearest;
     for (let i = 0; i < n && i < scored.length; i++) this.wanted.add(scored[i]!.spot);
   }
 }

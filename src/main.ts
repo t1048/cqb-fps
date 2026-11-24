@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { AdaptiveResolution, MIN_RATIO } from './core/AdaptiveResolution';
 import { PostFX } from './core/PostFX';
 import { GameLoop } from './core/GameLoop';
@@ -103,6 +104,7 @@ class App {
   private readonly mode: GameMode;
   private readonly resultScreen: ResultScreen;
   private readonly textures: TextureLibrary;
+  private readonly envTex: THREE.Texture;
   private readonly viewModel: ViewModel;
   private readonly avatar: PlayerAvatar;
   private readonly squad: SquadSystem;
@@ -162,6 +164,14 @@ class App {
     if (visual) this.textures.bindPalette(visual.palette);
     this.world = new WorldBuilder(map, this.textures);
     this.scene.add(this.world.root);
+    // 軽量プロシージャル環境マップ（IBL）を 1 回だけ生成して PBR の金属・石材に立体感を与える
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const roomEnv = new RoomEnvironment();
+    this.envTex = pmrem.fromScene(roomEnv, 0.04).texture;
+    roomEnv.dispose();
+    pmrem.dispose();
+    this.scene.environment = this.envTex;
+    this.scene.environmentIntensity = 0.35;
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);
     this.resolution.onChange = (r) => {
       this.postfx.setPixelRatio(r);
@@ -692,6 +702,8 @@ class App {
     window.removeEventListener('resize', this.onResize);
     this.world.dispose();
     this.textures.dispose();
+    this.scene.environment = null;
+    this.envTex.dispose();
     disposeObject(this.scene);
     this.postfx.dispose();
     this.renderer.dispose();

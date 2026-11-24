@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { DecalKind, SurfacePalette } from './Motif';
 
+/** 異方性フィルタリング段数。デバイス上限でクランプされるため固定値で安全。 */
+const TEX_ANISO = 8;
+
 export type TextureName =
   | 'camo'
   | 'fabric'
@@ -51,6 +54,7 @@ function rgba(n: number, a: number): string {
  */
 export class TextureLibrary {
   private readonly textures = new Map<string, THREE.CanvasTexture>();
+  private readonly derived = new Map<string, { bump: THREE.CanvasTexture; rough: THREE.CanvasTexture }>();
   private disposed = false;
   /** 建築面の塗り。武器・制服テクスチャには影響しない。 */
   palette: SurfacePalette | null = null;
@@ -72,8 +76,8 @@ export class TextureLibrary {
     if (hit) return hit;
     const canvas = document.createElement('canvas');
     const garment = name === 'ally' || name === 'suspect' || name === 'civilian';
-    canvas.width = garment ? 512 : 256;
-    canvas.height = garment ? 384 : 256;
+    canvas.width = 512;
+    canvas.height = garment ? 384 : 512;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context を取得できません');
     paint(name, ctx, canvas.width, canvas.height, themed ? this.palette : null);
@@ -81,14 +85,33 @@ export class TextureLibrary {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = 4;
+    tex.anisotropy = TEX_ANISO;
     tex.userData.shared = true;
-    if (!themed && (garment || ['faceA', 'faceB', 'fabric', 'concrete', 'wood', 'plaster'].includes(name))) {
+    // themed 時も実写 webp の肌理を multiply で重ねる（plain の落ち着いた質感を全モチーフへ）。
+    // ロード前は手続き塗りが表示されるため破綻しない。
+    const webp = themed ? themedWebpName(name, this.palette) : null;
+    if (webp) {
+      const image = new Image();
+      image.onload = () => {
+        if (this.disposed) return;
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = 0.45;
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+        tex.needsUpdate = true;
+        const d = this.derived.get(tex.uuid);
+        if (d) { d.bump.needsUpdate = true; d.rough.needsUpdate = true; }
+      };
+      image.src = import.meta.env.BASE_URL + 'textures/' + webp + '.webp';
+    } else if (!themed && (garment || ['faceA', 'faceB', 'fabric', 'concrete', 'wood', 'plaster'].includes(name))) {
       const image = new Image();
       image.onload = () => {
         if (this.disposed) return;
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         tex.needsUpdate = true;
+        const d = this.derived.get(tex.uuid);
+        if (d) { d.bump.needsUpdate = true; d.rough.needsUpdate = true; }
       };
       image.src = import.meta.env.BASE_URL + 'textures/' + name + '.webp';
     }
@@ -112,7 +135,7 @@ export class TextureLibrary {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.ClampToEdgeWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.anisotropy = 4;
+    tex.anisotropy = TEX_ANISO;
     tex.userData.shared = true;
     this.textures.set(key, tex);
     return tex;
@@ -128,11 +151,31 @@ export class TextureLibrary {
     return this.get(key);
   }
 
+  /** 同一 canvas から bump / roughness 用テクスチャを派生させる。キャッシュし userData.shared で共有扱いにする。 */
+  getDerivedMaps(source: THREE.CanvasTexture): { bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture } {
+    const hit = this.derived.get(source.uuid);
+    if (hit) return { bumpMap: hit.bump, roughnessMap: hit.rough };
+    const canvas = source.image as HTMLCanvasElement;
+    const make = (): THREE.CanvasTexture => {
+      const t = new THREE.CanvasTexture(canvas);
+      t.wrapS = THREE.RepeatWrapping;
+      t.wrapT = THREE.RepeatWrapping;
+      t.anisotropy = TEX_ANISO;
+      t.userData.shared = true;
+      return t;
+    };
+    const entry = { bump: make(), rough: make() };
+    this.derived.set(source.uuid, entry);
+    return { bumpMap: entry.bump, roughnessMap: entry.rough };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     for (const tex of this.textures.values()) tex.dispose();
     this.textures.clear();
+    for (const d of this.derived.values()) { d.bump.dispose(); d.rough.dispose(); }
+    this.derived.clear();
   }
 }
 
@@ -365,6 +408,22 @@ const NEUTRAL_PALETTE: SurfacePalette = {
   wallStyle: 'plaster', ceilingStyle: 'acoustic', signText: 'SITE',
 };
 
+function mixHex(a: number, b: number, t: number): number {
+  const r = Math.round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * t);
+  const g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t);
+  const bl = Math.round((a & 255) + ((b & 255) - (a & 255)) * t);
+  return (r << 16) | (g << 8) | bl;
+}
+
+/** themed 時に実写肌理として重ねる webp 名。無い面は null。 */
+function themedWebpName(name: TextureName, pal: SurfacePalette | null): string | null {
+  if (name === 'plaster') return 'plaster';
+  if (name === 'concrete') return 'concrete';
+  if (name === 'panel') return pal?.wallStyle === 'wood' ? 'wood' : 'plaster';
+  if (name === 'ceiling') return 'plaster';
+  return null;
+}
+
 function speckle(ctx: CanvasRenderingContext2D, w: number, h: number, n: number, color: number, alpha: number): void {
   for (let i = 0; i < n; i++) {
     ctx.fillStyle = rgba(i % 2 === 0 ? color : 0x000000, alpha * (0.35 + (i % 5) * 0.12));
@@ -406,18 +465,14 @@ function paintPanel(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Su
   if (pal.wallStyle === 'clinical') {
     ctx.fillStyle = hexCss(pal.wall);
     ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = rgba(pal.grout, 0.55);
+    ctx.strokeStyle = rgba(pal.grout, 0.35);
     ctx.lineWidth = 2;
-    for (let y = 0; y <= h; y += 64) {
+    for (let y = 0; y <= h; y += 128) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
-    for (let x = 0; x <= w; x += 86) {
+    for (let x = 0; x <= w; x += 172) {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
     }
-    ctx.fillStyle = hexCss(pal.accent);
-    ctx.fillRect(0, h - 22, w, 10);
-    ctx.fillStyle = hexCss(pal.wallAlt);
-    ctx.fillRect(0, h - 12, w, 12);
     speckle(ctx, w, h, 30, pal.accent, 0.08);
     return;
   }
@@ -432,8 +487,6 @@ function paintPanel(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Su
       ctx.fillStyle = rgba(0x000000, 0.12);
       ctx.fillRect(i * bw, 0, 2, h);
     }
-    ctx.fillStyle = hexCss(pal.accent);
-    ctx.fillRect(0, h * 0.62, w, 6);
     return;
   }
   if (pal.wallStyle === 'stone') {
@@ -445,10 +498,6 @@ function paintPanel(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Su
     return;
   }
   fillMottle(ctx, w, h, pal.wall, pal.wallAlt);
-  ctx.fillStyle = hexCss(pal.wallAlt);
-  ctx.fillRect(0, h - 18, w, 18);
-  ctx.fillStyle = rgba(pal.accent, 0.85);
-  ctx.fillRect(0, h - 20, w, 3);
 }
 
 function paintTilePalette(ctx: CanvasRenderingContext2D, w: number, h: number, a: number, b: number, grout: number): void {
@@ -460,10 +509,11 @@ function paintTilePalette(ctx: CanvasRenderingContext2D, w: number, h: number, a
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
       const stain = (x * 3 + y * 5) % 7 === 0;
-      ctx.fillStyle = hexCss(stain ? b : (x + y) % 2 === 0 ? a : b);
+      // grout との輝度差を抑えるためタイル色を目地へ少し寄せる
+      ctx.fillStyle = hexCss(mixHex(stain ? b : (x + y) % 2 === 0 ? a : b, grout, 0.15));
       ctx.fillRect(x * tw + 2, y * th + 2, tw - 4, th - 4);
       if (stain) {
-        ctx.fillStyle = rgba(0x000000, 0.08);
+        ctx.fillStyle = rgba(0x000000, 0.05);
         ctx.beginPath();
         ctx.ellipse(x * tw + tw * 0.5, y * th + th * 0.55, tw * 0.22, th * 0.12, 0.4, 0, Math.PI * 2);
         ctx.fill();
@@ -475,56 +525,35 @@ function paintTilePalette(ctx: CanvasRenderingContext2D, w: number, h: number, a
 function paintLinoleum(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   ctx.fillStyle = hexCss(pal.tileA);
   ctx.fillRect(0, 0, w, h);
-  speckle(ctx, w, h, 180, pal.tileB, 0.22);
-  ctx.strokeStyle = rgba(pal.grout, 0.35);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.5);
-  ctx.lineTo(w, h * 0.5);
-  ctx.moveTo(w * 0.5, 0);
-  ctx.lineTo(w * 0.5, h);
-  ctx.stroke();
-  ctx.fillStyle = rgba(pal.accent, 0.55);
-  ctx.fillRect(0, h - 8, w, 8);
+  speckle(ctx, w, h, 120, pal.tileB, 0.15);
 }
 
 function paintCarpet(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   ctx.fillStyle = hexCss(pal.carpetA);
   ctx.fillRect(0, 0, w, h);
-  for (let y = 0; y < h; y += 2) {
-    ctx.fillStyle = y % 4 === 0 ? hexCss(pal.carpetB) : hexCss(pal.carpetA);
-    ctx.globalAlpha = 0.55;
-    ctx.fillRect(0, y, w, 1);
-    ctx.globalAlpha = 1;
+  // 2px 行縞と縁取りはモアレ源のため廃止し、大まかな濃淡まだら＋微細 speckle のみにする
+  for (let i = 0; i < 14; i++) {
+    ctx.fillStyle = rgba(pal.carpetB, 0.08);
+    ctx.beginPath();
+    ctx.ellipse((i * 97) % w, (i * 61) % h, 48 + (i % 4) * 18, 32 + (i % 3) * 14, i * 0.7, 0, Math.PI * 2);
+    ctx.fill();
   }
-  ctx.strokeStyle = rgba(pal.accent, 0.7);
-  ctx.lineWidth = 8;
-  ctx.strokeRect(10, 10, w - 20, h - 20);
-  speckle(ctx, w, h, 50, pal.linenA, 0.12);
+  speckle(ctx, w, h, 120, pal.linenA, 0.1);
 }
 
 /** い草の目と布縁。民家の座敷・寝室用。 */
 function paintTatami(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   ctx.fillStyle = '#6f934c';
   ctx.fillRect(0, 0, w, h);
-  for (let x = 0; x < w; x += 3) {
-    ctx.fillStyle = x % 6 === 0 ? 'rgba(40,62,24,0.28)' : 'rgba(210,230,160,0.16)';
-    ctx.fillRect(x, 0, 1, h);
+  // 縦ラインは周期を広げ輝度差 10% 以内に緩和。布縁・帯はタイリングで反復するため削除
+  for (let x = 0; x < w; x += 12) {
+    ctx.fillStyle = x % 24 === 0 ? 'rgba(40,62,24,0.10)' : 'rgba(210,230,160,0.07)';
+    ctx.fillRect(x, 0, 2, h);
   }
-  for (let y = 0; y < h; y += 28) {
+  for (let y = 0; y < h; y += 128) {
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(0, y, w, 1);
+    ctx.fillRect(0, y, w, 2);
   }
-  ctx.fillStyle = '#2c2418';
-  ctx.fillRect(0, 0, w, 14);
-  ctx.fillRect(0, h - 14, w, 14);
-  ctx.fillRect(0, 0, 14, h);
-  ctx.fillRect(w - 14, 0, 14, h);
-  ctx.fillStyle = '#c4a574';
-  ctx.fillRect(10, 10, w - 20, 4);
-  ctx.fillRect(10, h - 14, w - 20, 4);
-  ctx.fillRect(10, 10, 4, h - 20);
-  ctx.fillRect(w - 14, 10, 4, h - 20);
 }
 
 function paintMarble(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
@@ -538,20 +567,18 @@ function paintMarble(ctx: CanvasRenderingContext2D, w: number, h: number, pal: S
     ctx.bezierCurveTo(w * 0.3, h * (0.2 + i * 0.08), w * 0.7, h * (0.5 - i * 0.05), w, (h * (0.15 * i)) % h);
     ctx.stroke();
   }
-  ctx.strokeStyle = rgba(0xffffff, 0.25);
-  ctx.strokeRect(1, 1, w - 2, h - 2);
   speckle(ctx, w, h, 20, pal.marbleVein, 0.08);
 }
 
 function paintBrickPalette(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   ctx.fillStyle = hexCss(pal.mortar);
   ctx.fillRect(0, 0, w, h);
-  const bh = 18;
-  const bw = 40;
+  const bh = 36;
+  const bw = 80;
   for (let y = 0; y < h; y += bh) {
     const off = Math.round(y / bh) % 2 === 0 ? 0 : bw / 2;
     for (let x = -bw; x < w; x += bw) {
-      ctx.fillStyle = hexCss((x + y) % 80 === 0 ? pal.brickB : pal.brickA);
+      ctx.fillStyle = hexCss((x + y) % 160 === 0 ? pal.brickB : pal.brickA);
       ctx.fillRect(x + off + 1, y + 1, bw - 3, bh - 3);
     }
   }
@@ -560,11 +587,11 @@ function paintBrickPalette(ctx: CanvasRenderingContext2D, w: number, h: number, 
 function paintSiding(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   ctx.fillStyle = hexCss(pal.woodB);
   ctx.fillRect(0, 0, w, h);
-  const row = 14;
+  const row = 28;
   for (let y = 0; y < h; y += row) {
     ctx.fillStyle = hexCss(y % (row * 2) === 0 ? pal.woodA : pal.woodB);
     ctx.fillRect(0, y, w, row - 3);
-    ctx.fillStyle = rgba(0x000000, 0.18);
+    ctx.fillStyle = rgba(0x000000, 0.12);
     ctx.fillRect(0, y + row - 3, w, 3);
   }
 }
@@ -572,27 +599,19 @@ function paintSiding(ctx: CanvasRenderingContext2D, w: number, h: number, pal: S
 function paintCorrugated(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   ctx.fillStyle = hexCss(pal.metalB);
   ctx.fillRect(0, 0, w, h);
-  const rib = 10;
+  const rib = 20;
   for (let x = 0; x < w; x += rib) {
-    ctx.fillStyle = hexCss(x % (rib * 2) === 0 ? pal.metalA : pal.metalB);
+    // リブの明暗差を輝度差 20% 以内に抑える（全面切替にしない）
+    ctx.fillStyle = rgba(pal.metalA, 0.35);
     ctx.fillRect(x, 0, rib / 2, h);
   }
-  ctx.strokeStyle = rgba(pal.accent, 0.8);
-  ctx.lineWidth = 6;
-  ctx.beginPath();
-  ctx.moveTo(0, 28);
-  ctx.lineTo(w, 28);
-  ctx.stroke();
-  speckle(ctx, w, h, 25, 0x402010, 0.15);
+  speckle(ctx, w, h, 25, 0x402010, 0.12);
 }
 
 function paintConcrete(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   fillMottle(ctx, w, h, pal.concrete, pal.metalB);
-  ctx.strokeStyle = rgba(0x000000, 0.15);
-  ctx.lineWidth = 1;
-  ctx.strokeRect(8, 8, w - 16, h - 16);
   for (let i = 0; i < 8; i++) {
-    ctx.fillStyle = rgba(0x000000, 0.2);
+    ctx.fillStyle = rgba(0x000000, 0.12);
     ctx.beginPath();
     ctx.arc((i * 37) % w, (i * 53) % h, 2, 0, Math.PI * 2);
     ctx.fill();
@@ -610,7 +629,7 @@ function paintCeiling(ctx: CanvasRenderingContext2D, w: number, h: number, pal: 
     ctx.fillStyle = hexCss(pal.ceiling);
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = hexCss(pal.metalB);
-    for (let x = 8; x < w; x += 42) ctx.fillRect(x, 0, 8, h);
+    for (let x = 16; x < w; x += 84) ctx.fillRect(x, 0, 16, h);
     ctx.fillStyle = rgba(pal.accent, 0.25);
     ctx.fillRect(0, 0, w, h);
     return;
@@ -620,7 +639,7 @@ function paintCeiling(ctx: CanvasRenderingContext2D, w: number, h: number, pal: 
   const th = h / n;
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
-      ctx.fillStyle = hexCss((x + y) % 2 === 0 ? pal.ceiling : pal.wall);
+      ctx.fillStyle = hexCss((x + y) % 2 === 0 ? pal.ceiling : mixHex(pal.ceiling, 0x000000, 0.06));
       const inset = pal.ceilingStyle === 'coffer' ? 8 : 2;
       ctx.fillRect(x * tw + inset, y * th + inset, tw - inset * 2, th - inset * 2);
       ctx.strokeStyle = hexCss(pal.ceilingLine);
@@ -632,16 +651,16 @@ function paintCeiling(ctx: CanvasRenderingContext2D, w: number, h: number, pal: 
 function paintLinen(ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette): void {
   ctx.fillStyle = hexCss(pal.linenA);
   ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = rgba(pal.linenB, 0.65);
+  ctx.strokeStyle = rgba(pal.linenB, 0.35);
   ctx.lineWidth = 1;
-  for (let y = 0; y < h; y += 4) {
+  for (let y = 0; y < h; y += 12) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(w, y);
     ctx.stroke();
   }
   for (let i = 0; i < 12; i++) {
-    ctx.fillStyle = rgba(pal.accent, 0.15);
+    ctx.fillStyle = rgba(pal.accent, 0.08);
     ctx.fillRect((i * 23) % w, (i * 41) % h, 10, 3);
   }
 }
@@ -650,11 +669,12 @@ function paintLinen(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Su
 function paintDoorGray(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   ctx.fillStyle = '#b4b4b4';
   ctx.fillRect(0, 0, w, h);
-  for (let x = 0; x < w; x += 5) {
-    ctx.fillStyle = x % 10 === 0 ? 'rgba(40,40,40,0.28)' : 'rgba(255,255,255,0.16)';
-    ctx.fillRect(x, 0, 2, h);
+  for (let x = 0; x < w; x += 16) {
+    ctx.fillStyle = x % 32 === 0 ? 'rgba(40,40,40,0.12)' : 'rgba(255,255,255,0.08)';
+    ctx.fillRect(x, 0, 3, h);
   }
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  // Door の BoxGeometry は面ごとに UV 0..1 のため框・鏡板はタイリングされず維持する
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
   ctx.lineWidth = 10;
   ctx.strokeRect(16, 16, w - 32, h * 0.38);
   ctx.strokeRect(16, h * 0.5, w - 32, h * 0.38);
@@ -666,7 +686,7 @@ function paintGlassPalette(ctx: CanvasRenderingContext2D, w: number, h: number, 
   g.addColorStop(1, rgba(pal.accent, frosted ? 0.55 : 0.28));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
-  if (frosted) speckle(ctx, w, h, 80, 0xffffff, 0.2);
+  if (frosted) speckle(ctx, w, h, 80, 0xffffff, 0.12);
 }
 
 function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h: number, pal: SurfacePalette | null): void {
@@ -707,7 +727,7 @@ function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h
   if (kind === 'hazard' || kind === 'stripe') {
     const stripe = kind === 'hazard' ? 22 : 28;
     for (let x = -h; x < w + h; x += stripe) {
-      ctx.fillStyle = (Math.floor(x / stripe) % 2 === 0) ? '#f0c020' : '#1a1a1a';
+      ctx.fillStyle = (Math.floor(x / stripe) % 2 === 0) ? '#c8982a' : '#2a2a28';
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x + h * 0.45, 0);
@@ -750,7 +770,7 @@ function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h
     return;
   }
   if (kind === 'graffiti') {
-    ctx.strokeStyle = rgba(accent, 0.9);
+    ctx.strokeStyle = rgba(accent, 0.55);
     ctx.lineWidth = 7;
     ctx.lineCap = 'round';
     ctx.beginPath();
@@ -758,13 +778,13 @@ function paintDecal(kind: DecalKind, ctx: CanvasRenderingContext2D, w: number, h
     ctx.quadraticCurveTo(w * 0.3, h * 0.2, w * 0.55, h * 0.55);
     ctx.quadraticCurveTo(w * 0.75, h * 0.85, w - 20, h * 0.35);
     ctx.stroke();
-    ctx.fillStyle = rgba(accent, 0.75);
+    ctx.fillStyle = rgba(accent, 0.5);
     ctx.font = 'bold 42px sans-serif';
     ctx.fillText(sign.slice(0, 4), 28, h * 0.45);
     return;
   }
   // poster / sign
-  ctx.fillStyle = 'rgba(245,240,230,0.94)';
+  ctx.fillStyle = 'rgba(232,226,214,0.88)';
   ctx.fillRect(18, 16, w - 36, h - 32);
   ctx.fillStyle = hexCss(accent);
   ctx.fillRect(18, 16, w - 36, 18);

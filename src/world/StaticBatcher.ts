@@ -26,6 +26,8 @@ function signature(m: Std): string {
   return [
     m.type,
     m.map?.uuid ?? '-',
+    m.bumpMap?.uuid ?? '-',
+    m.roughnessMap?.uuid ?? '-',
     m.normalMap?.uuid ?? '-',
     m.roughness.toFixed(3),
     m.metalness.toFixed(3),
