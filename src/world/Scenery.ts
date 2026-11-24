@@ -12,7 +12,7 @@ export const SCENERY_PROPS: ReadonlySet<string> = new Set([
   'bed', 'hbed', 'piano', 'stretcher', 'ivstand', 'curtain', 'medcab', 'bar', 'sofa', 'table', 'low_table',
   'teller', 'vault', 'bench', 'column', 'desk', 'chair', 'partition', 'shelf', 'metal_rack', 'tool_shelf',
   'pallet', 'container', 'crates', 'toilet', 'sink', 'stall', 'rail', 'wardrobe', 'fridge', 'bathtub',
-  'counter', 'tv_board', 'beam', 'lamp',
+  'counter', 'tv_board', 'beam', 'lamp', 'engawa', 'post',
 ]);
 
 type Builder = (g: THREE.Group, def: BoxDef, mat: SceneMat) => void;
@@ -37,7 +37,7 @@ function bed(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const wood = mat('wood', 0xffffff);
   const linen = mat('linen', 0xffffff);
-  const blanket = mat('linen', 0xd5e4ea);
+  const blanket = mat('linen', 0xa06048);
   for (const x of [-1, 1]) {
     for (const z of [-1, 1]) box(g, wood, 0.07, h * 0.34, 0.07, x * w * 0.42, h * 0.17, z * d * 0.38);
   }
@@ -348,10 +348,12 @@ function rail(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 function wardrobe(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const wood = mat('wood', 0xffffff);
-  box(g, wood, w, h, d * 0.92, 0, h / 2, 0);
-  box(g, mat('wood', 0x5c4030), 0.02, h * 0.86, 0.02, 0, h * 0.5, d * 0.47);
-  cyl(g, mat('metal', 0xd8c7a4), 0.02, 0.02, -w * 0.12, h * 0.5, d * 0.48, 'z');
-  cyl(g, mat('metal', 0xd8c7a4), 0.02, 0.02, w * 0.12, h * 0.5, d * 0.48, 'z');
+  const door = mat('wood', 0xc4a574);
+  box(g, wood, w, h, d * 0.86, 0, h / 2, -d * 0.04);
+  box(g, mat('wood', 0x5c4030), w, 0.04, d * 0.2, 0, h * 0.96, d * 0.4);
+  box(g, door, w * 0.46, h * 0.82, 0.04, -w * 0.24, h * 0.48, d * 0.44);
+  box(g, door, w * 0.46, h * 0.82, 0.04, w * 0.24, h * 0.48, d * 0.44);
+  box(g, mat('wood', 0x3d2a1c), 0.03, h * 0.82, 0.02, 0, h * 0.48, d * 0.47);
 }
 
 function fridge(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
@@ -371,7 +373,37 @@ function bathtub(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 }
 
 function counter(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
-  bar(g, def, mat);
+  const { width: w, height: h, depth: d } = def;
+  const wood = mat('wood', 0xffffff);
+  const top = mat('wood', 0xd7c4a2);
+  const metal = mat('metal', 0xd5dbe2);
+  box(g, wood, w * 0.96, h * 0.72, d * 0.9, 0, h * 0.36, 0);
+  box(g, mat('wood', 0x5c4030), 0.02, h * 0.62, 0.02, 0, h * 0.34, d * 0.42);
+  box(g, top, w, h * 0.08, d, 0, h * 0.76, 0);
+  box(g, mat('plaster', 0xe8e4dc), w * 0.28, 0.04, d * 0.42, w * 0.22, h * 0.78, 0);
+  box(g, mat('metal', 0x8a9094), w * 0.16, 0.03, d * 0.22, w * 0.22, h * 0.8, 0);
+  cyl(g, metal, 0.015, h * 0.22, w * 0.22, h * 0.92, -d * 0.12);
+  box(g, wood, w, h * 0.18, 0.04, 0, h * 0.88, -d * 0.48);
+}
+
+function engawa(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
+  const { width: w, height: h, depth: d } = def;
+  const wood = mat('wood', 0xffffff);
+  const dark = mat('wood', 0x5c4030);
+  const slats = 5;
+  for (let i = 0; i < slats; i++) {
+    const z = -d * 0.42 + (d * 0.84 * i) / (slats - 1);
+    box(g, i % 2 === 0 ? wood : dark, w * 0.96, h * 0.28, d * 0.12, 0, h * 0.72, z);
+  }
+  for (const x of [-w * 0.32, 0, w * 0.32]) box(g, dark, w * 0.08, h * 0.55, d * 0.9, x, h * 0.28, 0);
+}
+
+function post(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
+  const { width: w, height: h, depth: d } = def;
+  const wood = mat('wood', 0xffffff);
+  box(g, wood, w * 0.72, h, d * 0.72, 0, h / 2, 0);
+  box(g, mat('wood', 0x5c4030), w, h * 0.06, d, 0, h * 0.96, 0);
+  box(g, mat('wood', 0x5c4030), w, h * 0.05, d, 0, h * 0.08, 0);
 }
 
 function beam(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
@@ -398,7 +430,7 @@ function lamp(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 const BUILDERS: Record<string, Builder> = {
   bed, hbed, piano, stretcher, ivstand, curtain, medcab, bar, sofa, table, low_table: table, teller, vault, bench,
   column, desk, chair, partition, shelf, metal_rack: shelf, tool_shelf: shelf, pallet, container, crates: container,
-  toilet, sink, stall, rail, wardrobe, fridge, bathtub, counter, tv_board: desk, beam, lamp,
+  toilet, sink, stall, rail, wardrobe, fridge, bathtub, counter, tv_board: desk, beam, lamp, engawa, post,
 };
 
 /** 小道具メッシュ。未知の prop は null（呼び出し側が箱のまま描く）。原点は足元中心。 */

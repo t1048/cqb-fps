@@ -365,7 +365,7 @@ export class WorldBuilder {
     for (const def of defs) {
       const names: readonly TextureName[] = [
         'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
-        'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+        'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
       ];
       const safe = names.find((n) => n === def.material) ?? fallback;
       const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);

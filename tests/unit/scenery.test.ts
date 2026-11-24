@@ -18,7 +18,7 @@ function template() {
 }
 
 function mapFor(id: MotifId) {
-  const seed = [...Array(80).keys()].find((s) => motifFromSeed(s).id === id);
+  const seed = [...Array(240).keys()].find((s) => motifFromSeed(s).id === id);
   if (seed === undefined) throw new Error(id);
   return generateMap(template(), seed, 'random_small', 2.18);
 }
@@ -55,6 +55,7 @@ describe('motif scenery', () => {
       bank: 'teller',
       office: 'desk',
       warehouse: 'shelf',
+      house: 'bed',
     };
     for (const id of MOTIF_IDS) {
       const map = mapFor(id);
@@ -81,7 +82,7 @@ describe('motif scenery', () => {
       const rails = map.covers.filter((c) => c.prop === 'rail');
       expect(rails.length).toBeGreaterThan(0);
       expect(map.stairs?.length ?? 0).toBeGreaterThan(0);
-      const hall = map.rooms.find((r) => /ホール|ラウンジ|ロビー/.test(r.name));
+      const hall = map.rooms.find((r) => /ホール|ラウンジ|ロビー|座敷/.test(r.name));
       expect(hall).toBeTruthy();
     }
     expect(found).toBe(true);

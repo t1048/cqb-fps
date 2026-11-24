@@ -183,7 +183,7 @@ export class Hud {
     if (motif) {
       const chip = document.createElement('div');
       chip.className = 'panel motif-chip';
-      chip.textContent = `施設 ${motif.label}`;
+      chip.textContent = motif.label === '民家' ? '民家' : `施設 ${motif.label}`;
       chip.style.color = motif.color;
       chip.style.borderColor = motif.color;
       this.topRightSlot.appendChild(chip);

@@ -42,13 +42,13 @@ describe('map motifs', () => {
   it('derives a stable motif from the seed and covers every motif', () => {
     expect(motifFromSeed(101).id).toBe(motifFromSeed(101).id);
     const seen = new Set<MotifId>();
-    for (let s = 0; s < 80; s++) seen.add(motifFromSeed(s).id);
+    for (let s = 0; s < 240; s++) seen.add(motifFromSeed(s).id);
     expect([...seen].sort()).toEqual([...MOTIF_IDS].sort());
   });
 
   it('renames rooms and retints surfaces without moving collision boxes', () => {
     const src = bareMap();
-    const seed = [...Array(40).keys()].find((s) => motifFromSeed(s).id === 'hospital') ?? 0;
+    const seed = [...Array(240).keys()].find((s) => motifFromSeed(s).id === 'hospital') ?? 0;
     const dressed = dressWithMotif(src, seed);
     expect(dressed.motif).toBe('hospital');
     expect(dressed.rooms.map((r) => r.name).join(',')).not.toBe('寝室,廊下');
@@ -78,7 +78,7 @@ describe('map motifs', () => {
     const hospital = withMotifBias(tpl, motifFromSeed(0));
     // 0 が病院とは限らないので、明示的に病院定義を使う
     const motif = motifFromSeed(
-      [...Array(40).keys()].find((s) => motifFromSeed(s).id === 'hospital') ?? 0,
+      [...Array(240).keys()].find((s) => motifFromSeed(s).id === 'hospital') ?? 0,
     );
     expect(motif.id).toBe('hospital');
     const biased = withMotifBias(tpl, motif);
@@ -94,7 +94,7 @@ describe('map motifs', () => {
   it('generates two motifs with different names from the same template', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators/house_compact.json'), 'utf8')) as unknown;
     const tpl = validateGeneratorTemplate(raw, 'house_compact.json');
-    const seeds = MOTIF_IDS.map((id) => [...Array(60).keys()].find((s) => motifFromSeed(s).id === id)).filter((s): s is number => s !== undefined);
+    const seeds = MOTIF_IDS.map((id) => [...Array(240).keys()].find((s) => motifFromSeed(s).id === id)).filter((s): s is number => s !== undefined);
     expect(seeds.length).toBe(MOTIF_IDS.length);
     const a = generateMap(tpl, seeds[0]!, 'random_small', 2.18);
     const b = generateMap(tpl, seeds[1]!, 'random_small', 2.18);
@@ -106,5 +106,27 @@ describe('map motifs', () => {
     const matsA = new Set(a.floors?.map((f) => f.material));
     const matsB = new Set(b.floors?.map((f) => f.material));
     expect([...matsA].sort().join(',')).not.toBe([...matsB].sort().join(','));
+  });
+
+  it('keeps the house as its own motif with tatami, wood and domestic room names', () => {
+    const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators/house_compact.json'), 'utf8')) as unknown;
+    const tpl = validateGeneratorTemplate(raw, 'house_compact.json');
+    const seed = [...Array(240).keys()].find((s) => motifFromSeed(s).id === 'house');
+    expect(seed).toBeTypeOf('number');
+    const map = generateMap(tpl, seed!, 'random_small', 2.18);
+    expect(map.motif).toBe('house');
+    expect(map.name.startsWith('民家')).toBe(true);
+    const names = map.rooms.map((r) => r.name).join(',');
+    expect(names).toMatch(/座敷|寝室/);
+    expect(names).toMatch(/浴室|縁側|台所|廊下/);
+    const floors = new Set(map.floors?.map((f) => f.material));
+    expect(floors.has('tatami')).toBe(true);
+    expect(floors.has('wood')).toBe(true);
+    const props = map.covers.map((c) => c.prop);
+    expect(props).not.toContain('hbed');
+    expect(props).not.toContain('piano');
+    expect(props).toContain('bed');
+    expect(map.walls.some((w) => w.material === 'plaster')).toBe(true);
+    expect(map.walls.some((w) => w.material === 'siding')).toBe(true);
   });
 });

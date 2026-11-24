@@ -25,6 +25,7 @@ const HALL_NAME: Record<MotifId, string> = {
   bank: '窓口ホール',
   office: 'ロビー',
   warehouse: '荷捌きホール',
+  house: '座敷',
 };
 
 const TOILET_NAME: Record<MotifId, string> = {
@@ -33,6 +34,7 @@ const TOILET_NAME: Record<MotifId, string> = {
   bank: '化粧室',
   office: 'トイレ',
   warehouse: 'トイレ',
+  house: 'トイレ',
 };
 
 const HALL_FLOOR: Record<MotifId, string> = {
@@ -41,6 +43,7 @@ const HALL_FLOOR: Record<MotifId, string> = {
   bank: 'marble',
   office: 'carpet',
   warehouse: 'concrete',
+  house: 'tatami',
 };
 
 const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
@@ -101,6 +104,10 @@ const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
       { prop: 'pallet', width: 1.2, depth: 0.85, height: 0.16, place: 'center' },
     ],
     work: [{ prop: 'shelf', width: 1.6, depth: 0.48, height: 1.85, place: 'wall' }],
+  },
+  house: {
+    social: [{ prop: 'low_table', width: 1.2, depth: 0.72, height: 0.35, place: 'center' }],
+    outdoor: [{ prop: 'engawa', width: 2.2, depth: 0.72, height: 0.32, place: 'wall' }],
   },
 };
 
@@ -337,9 +344,28 @@ function pickHall(rooms: readonly RoomDef[], doors: readonly DoorDef[]): RoomDef
   return best;
 }
 
-function placeColumns(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef): void {
-  if (Math.min(room.width, room.depth) < 5.2) return;
-  const spec: Spec = { prop: 'column', width: 0.42, depth: 0.42, height: 2.12, place: 'wall' };
+/** 民家では浴室をトイレに書き換えず、物置や書斎など生活の間以外を選ぶ。 */
+function pickHouseToilet(rooms: readonly RoomDef[], hall: RoomDef | undefined): RoomDef | undefined {
+  const indoor = rooms.filter((r) => !r.outdoor && r !== hall && !r.id.includes('stair') && !r.id.startsWith('core'));
+  const rank = (r: RoomDef): number => {
+    if (/bath/.test(r.id)) return 80;
+    if (/bedroom|ldk|living/.test(r.id)) return 40;
+    if (/storage|garage|closet|kitchen/.test(r.id)) return 0;
+    return 12;
+  };
+  const candidates = indoor.filter((r) => rank(r) < 40 && r.width * r.depth < 22);
+  candidates.sort((a, b) => rank(a) - rank(b) || a.width * a.depth - b.width * b.depth);
+  if (candidates[0]) return candidates[0];
+  const fallback = indoor.filter((r) => rank(r) < 80);
+  fallback.sort((a, b) => a.width * a.depth - b.width * b.depth);
+  return fallback[0];
+}
+
+function placeColumns(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, prop: 'column' | 'post' = 'column'): void {
+  if (Math.min(room.width, room.depth) < (prop === 'post' ? 4.2 : 5.2)) return;
+  const spec: Spec = prop === 'post'
+    ? { prop: 'post', width: 0.18, depth: 0.18, height: 2.2, place: 'wall' }
+    : { prop: 'column', width: 0.42, depth: 0.42, height: 2.12, place: 'wall' };
   const ix = room.width / 2 - 0.7;
   const iz = room.depth / 2 - 0.7;
   for (const x of [-ix, ix]) {
@@ -526,19 +552,20 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
   if (hall) {
     hall.name = HALL_NAME[motif.id];
     if (floors) retile(floors, hall, HALL_FLOOR[motif.id]);
-    placeColumns(covers, map, hall);
+    placeColumns(covers, map, hall, motif.id === 'house' ? 'post' : 'column');
     placeHallDress(covers, hall);
   }
-  const toilet = pickToilet(rooms, hall);
+  const toilet = motif.id === 'house' ? pickHouseToilet(rooms, hall) : pickToilet(rooms, hall);
   if (toilet) {
     toilet.name = TOILET_NAME[motif.id];
     if (floors) retile(floors, toilet, 'tile');
     placeToiletFixtures(covers, map, toilet);
   }
 
-  const limit: Record<string, number> = { bed: 3, hbed: 3, piano: 1, bar: 1, sofa: 2, teller: 1, vault: 1, stretcher: 1, medcab: 1, container: 2, shelf: 2, desk: 3, chair: 4, partition: 2 };
+  const limit: Record<string, number> = { bed: 3, hbed: 3, piano: 1, bar: 1, sofa: 2, teller: 1, vault: 1, stretcher: 1, medcab: 1, container: 2, shelf: 2, desk: 3, chair: 4, partition: 2, low_table: 3, engawa: 2 };
   for (const room of rooms) {
-    if (room.outdoor || room.id.includes('stair') || room === toilet) continue;
+    if (room.id.includes('stair') || room === toilet) continue;
+    if (room.outdoor && motif.id !== 'house') continue;
     const role = roleOf(room.id);
     const specs = ROOM_PROPS[motif.id][role] ?? [];
     for (const spec of specs) placeSpec(covers, map, room, spec, rng, limit[spec.prop] ?? 2);
@@ -558,6 +585,12 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
   if (hall && motif.id === 'office') {
     placeSpec(covers, map, hall, { prop: 'partition', width: 1.8, depth: 0.08, height: 1.45, place: 'center' }, rng, 2);
   }
+  if (hall && motif.id === 'house') {
+    placeSpec(covers, map, hall, { prop: 'low_table', width: 1.2, depth: 0.72, height: 0.35, place: 'center' }, rng, 2);
+  }
+  if (motif.id === 'house' && floors) {
+    for (const room of rooms) if (room.outdoor) retile(floors, room, 'wood');
+  }
 
   if (!covers.some((c) => c.prop === 'hbed') && motif.id === 'hospital') {
     const room = rooms.find((r) => !r.outdoor && r !== toilet && Math.min(r.width, r.depth) >= 2.6);
@@ -566,6 +599,11 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
   if (!covers.some((c) => c.prop === 'piano') && motif.id === 'clubhouse') {
     const room = hall ?? rooms.find((r) => !r.outdoor && Math.min(r.width, r.depth) >= 3);
     if (room) placeSpec(covers, map, room, { prop: 'piano', width: 1.45, depth: 0.7, height: 1.28, place: 'wall' }, rng, 1);
+  }
+  if (motif.id === 'house' && !covers.some((c) => c.prop === 'bed')) {
+    const room = rooms.find((r) => !r.outdoor && r !== toilet && /bedroom|private/.test(r.id))
+      ?? rooms.find((r) => !r.outdoor && r !== toilet && Math.min(r.width, r.depth) >= 2.4);
+    if (room) placeSpec(covers, map, room, { prop: 'bed', width: 2.0, depth: 1.4, height: 0.6, place: 'wall' }, rng, 1);
   }
 
   if (floors && hall) carveAtrium(rooms, floors, covers, map, hall);

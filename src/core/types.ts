@@ -155,7 +155,7 @@ export interface BriefingDef {
 }
 
 /** ランダム生成マップの施設モチーフ。シードから一意に決まり、見た目と部屋の出方を変える。 */
-export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse'] as const;
+export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse', 'house'] as const;
 export type MotifId = (typeof MOTIF_IDS)[number];
 
 export interface MapData {
