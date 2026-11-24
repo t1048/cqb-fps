@@ -26,6 +26,7 @@ const HALL_NAME: Record<MotifId, string> = {
   office: 'ロビー',
   warehouse: '荷捌きホール',
   house: '座敷',
+  plain: '座敷',
 };
 
 const TOILET_NAME: Record<MotifId, string> = {
@@ -35,6 +36,7 @@ const TOILET_NAME: Record<MotifId, string> = {
   office: 'トイレ',
   warehouse: 'トイレ',
   house: 'トイレ',
+  plain: 'トイレ',
 };
 
 const HALL_FLOOR: Record<MotifId, string> = {
@@ -44,6 +46,7 @@ const HALL_FLOOR: Record<MotifId, string> = {
   office: 'carpet',
   warehouse: 'concrete',
   house: 'tatami',
+  plain: 'wood',
 };
 
 const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
@@ -109,6 +112,7 @@ const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
     social: [{ prop: 'low_table', width: 1.2, depth: 0.72, height: 0.35, place: 'center' }],
     outdoor: [{ prop: 'engawa', width: 2.2, depth: 0.72, height: 0.32, place: 'wall' }],
   },
+  plain: {},
 };
 
 function rectOf(r: RoomDef): Rect {
@@ -541,7 +545,8 @@ function overlap(a: Rect, b: Rect): Rect | null {
 }
 
 export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
-  if (!map.motif || map.seed === undefined) return map;
+  // 簡素は生成器の部屋名と家具のまま。階段・壁・扉のコリジョンは生成器側が既に持つ。
+  if (!map.motif || map.motif === 'plain' || map.seed === undefined) return map;
   const motif = motifById(map.motif);
   const rng = new Rng((normalizeSeed(map.seed) ^ 0x51e11e) >>> 0);
   const covers = map.covers.map((c) => ({ ...c }));

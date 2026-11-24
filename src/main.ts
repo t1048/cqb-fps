@@ -153,12 +153,13 @@ class App {
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
     // モチーフがあれば空・霧・露出を施設ごとに変える。未設定は従来の夕暮れ。
     const motif = map.motif ? motifById(map.motif) : null;
-    const atm = motif?.atmosphere;
+    const visual = motif?.id === 'plain' ? null : motif;
+    const atm = visual?.atmosphere;
     this.scene.background = new THREE.Color(atm?.background ?? 0x3a4656);
     this.scene.fog = new THREE.Fog(atm?.fog ?? 0x3a4656, atm?.fogNear ?? 30, atm?.fogFar ?? 100);
     if (atm) this.renderer.toneMappingExposure = atm.exposure;
     this.textures = new TextureLibrary();
-    if (motif) this.textures.bindPalette(motif.palette);
+    if (visual) this.textures.bindPalette(visual.palette);
     this.world = new WorldBuilder(map, this.textures);
     this.scene.add(this.world.root);
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);

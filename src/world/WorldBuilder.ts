@@ -110,7 +110,7 @@ export class WorldBuilder {
     private readonly map: MapData,
     private readonly textures: TextureLibrary,
   ) {
-    this.motif = map.motif ? motifById(map.motif) : null;
+    this.motif = map.motif && map.motif !== 'plain' ? motifById(map.motif) : null;
     this.root.name = `world:${map.id}`;
     this.buildFloorAndCeiling();
     this.buildBoxes(map.walls, 'wall', this.motif?.interiorTex ?? 'plaster', 0xc8c0b0);

@@ -624,6 +624,94 @@ export const MOTIFS: readonly MotifDef[] = [
     categoryWeight: { living_hub: 1.2, wing_private: 1.15, study_office: 0.9, basement_utility: 0.85, garage: 0.8, corridor: 1.05, courtyard: 0.9, terrace: 1.15 },
     profileWeight: {},
   },
+  {
+    // モチーフ導入前の共通見た目。部屋名・材質・家具は生成器のまま（dress もシーンも掛けない）。
+    id: 'plain',
+    label: '簡素',
+    accentCss: css(0xc8c0b0),
+    summaries: [
+      '郊外の建物に立てこもりが起きている。漆喰の壁と木の床のまま、玄関から各室をクリアリングせよ。',
+      '通報を受けた現場。特別な施設表示はなく、廊下と階段、各室の家具だけを目印に制圧せよ。',
+    ],
+    atmosphere: {
+      background: 0x3a4656,
+      fog: 0x3a4656,
+      fogNear: 30,
+      fogFar: 100,
+      hemiSky: 0xb8c6dc,
+      hemiGround: 0x2a2620,
+      hemiIntensity: 0.5,
+      sunColor: 0xffe6c4,
+      sunIntensity: 2.4,
+      roomLights: [0xffd9a8, 0xffe6c4, 0xf2f0ea, 0xffdcb4, 0xe6eef8],
+      roomIntensity: 11,
+      exposure: 1.15,
+    },
+    palette: {
+      id: 'plain',
+      wall: 0xc8c0b0,
+      wallAlt: 0xb8b0a0,
+      grout: 0xa8a298,
+      tileA: 0xd7d2c6,
+      tileB: 0xc9c3b4,
+      carpetA: 0x6a3a3a,
+      carpetB: 0x4a2828,
+      woodA: 0x8a6844,
+      woodB: 0x7a5230,
+      metalA: 0xb0b6bb,
+      metalB: 0x5c6368,
+      marbleA: 0xe8e4dc,
+      marbleVein: 0xb0a898,
+      brickA: 0xa35242,
+      brickB: 0x8a4034,
+      mortar: 0x6d5a52,
+      ceiling: 0xd5d0c6,
+      ceilingLine: 0xb8b2a6,
+      linenA: 0xd8d2c4,
+      linenB: 0xb8b0a0,
+      accent: 0x8a7048,
+      concrete: 0x555c64,
+      doorA: 0x7c5536,
+      doorB: 0x69462b,
+      frame: 0x3d2a1c,
+      wallStyle: 'plaster',
+      ceilingStyle: 'acoustic',
+      signText: '',
+    },
+    tint: { wood: 0x8a6844, metal: 0xffffff, fabric: 0xffffff },
+    interiorTex: 'plaster',
+    exteriorTex: 'plaster',
+    ceilingTex: 'plaster',
+    roofTex: 'concrete',
+    groundTex: 'concrete',
+    stairTex: 'wood',
+    floorTex: {
+      wet: 'tile',
+      service: 'wood',
+      circ: 'wood',
+      private: 'wood',
+      work: 'wood',
+      outdoor: 'concrete',
+      secure: 'wood',
+      social: 'wood',
+      stair: 'wood',
+    },
+    props: { vehicle: 'metal', tall: 'wood', low: 'wood', counter: 'wood', misc: 'wood' },
+    roomNames: {
+      wet: '浴室',
+      service: 'キッチン',
+      circ: '廊下',
+      private: '寝室',
+      work: '書斎',
+      outdoor: '前庭',
+      secure: '物置',
+      social: 'リビング',
+      stair: '階段',
+    },
+    decals: [],
+    categoryWeight: {},
+    profileWeight: {},
+  },
 ];
 
 const BY_ID = new Map<MotifId, MotifDef>(MOTIFS.map((m) => [m.id, m]));
@@ -715,6 +803,9 @@ function coverTex(motif: MotifDef, box: BoxDef, room: RoomDef | undefined): Text
  */
 export function dressWithMotif<T extends GeneratedMapRaw>(map: T, seed: number): T {
   const motif = motifFromSeed(seed);
+  if (motif.id === 'plain') {
+    return { ...map, name: `簡素（${scaleLabel(map.id)}）`, motif: 'plain' };
+  }
   const roles = map.rooms.map((r) => motif.roomNames[roleOf(r.id)]);
   const totals = new Map<string, number>();
   for (const name of roles) totals.set(name, (totals.get(name) ?? 0) + 1);
