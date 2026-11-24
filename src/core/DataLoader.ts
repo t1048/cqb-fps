@@ -52,6 +52,7 @@ import type {
   WeaponDef,
   WeaponsData,
 } from './types';
+import { MOTIF_IDS } from './types';
 import { generateMap, verifyFallbackFeasibility } from '../world/generator';
 
 import { DataError } from './DataError';
@@ -251,6 +252,7 @@ export function validateMap(raw: unknown, source = 'map'): MapData {
   r.uniqueIds(rooms, 'rooms');
   const seed = r.optNum(o, 'seed', '', 0, 0xffffffff);
   if (seed !== undefined && !Number.isInteger(seed)) r.fail('seed', '整数が必要です');
+  const motif = o.motif === undefined ? undefined : r.oneOf(o, 'motif', '', MOTIF_IDS);
   const storyHeight = r.optNum(o, 'storyHeight', '', 1);
   const floors = o.floors === undefined ? [] : r.arr(o.floors, 'floors').map((w, i) => parseBox(r, w, `floors[${i}]`));
   const stairs = o.stairs === undefined ? [] : r.arr(o.stairs, 'stairs').map((d, i) => parseStair(r, d, i));
@@ -265,6 +267,7 @@ export function validateMap(raw: unknown, source = 'map'): MapData {
     id: r.str(o, 'id', ''),
     name: r.str(o, 'name', ''),
     ...(briefing !== undefined ? { briefing } : {}),
+    ...(motif !== undefined ? { motif } : {}),
     ...(seed !== undefined ? { seed } : {}),
     ...(storyHeight !== undefined ? { storyHeight } : {}),
     ceilingHeight: mapCeilingHeight,

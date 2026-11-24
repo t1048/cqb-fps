@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { BoxDef, MapData, StairDef } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { TextureLibrary, TextureName } from './Materials';
+import { addMotifDecals } from './Decals';
+import { motifById, type MotifDef } from './Motif';
 import { buildItem, buildWindow } from './Props';
 import { isLegacyGroundMap, registerGroundPolicy, type StairMark } from './Walk';
 import { subtractRects, type Rect } from './generator/Layout';
@@ -101,19 +103,22 @@ export class WorldBuilder {
   /** 部屋照明。全室分の PointLight を常時置くとフラグメントシェーダが室数ぶん重くなるため、近傍だけに割り当てる。 */
   lights!: RoomLightPool;
   private sun!: THREE.DirectionalLight;
+  private readonly motif: MotifDef | null;
 
   constructor(
     private readonly map: MapData,
     private readonly textures: TextureLibrary,
   ) {
+    this.motif = map.motif ? motifById(map.motif) : null;
     this.root.name = `world:${map.id}`;
     this.buildFloorAndCeiling();
-    this.buildBoxes(map.walls, 'wall', 'plaster', 0xc8c0b0);
+    this.buildBoxes(map.walls, 'wall', this.motif?.interiorTex ?? 'plaster', 0xc8c0b0);
     this.buildBoxes(map.covers, 'cover', 'wood', 0x8b5a2b);
-    this.buildBoxes(map.floors, 'floor', 'wood', 0x8a6844);
+    this.buildBoxes(map.floors, 'floor', this.motif?.groundTex ?? 'wood', 0x8a6844);
     this.buildStairs();
     for (const w of map.windows) this.root.add(buildWindow(w, textures));
     for (const item of map.items) this.root.add(buildItem(item, textures));
+    if (this.motif) addMotifDecals(this.root, map, textures, (m) => this.materials.push(m));
     this.buildLights();
     // 静的ジオメトリを統合してドローコールを削減する（コライダは別管理なので見た目だけに影響）
     batchStaticMeshes(this.root, { cellSize: STATIC_BATCH_CELL });
@@ -130,13 +135,21 @@ export class WorldBuilder {
     this.sun.position.set(cx + SUN_DIR.x * 50, SUN_DIR.y * 50, cz + SUN_DIR.z * 50);
   }
 
+  /** フルカラーの手続きテクスチャは白で乗算し、木・金属だけモチーフの tint を使う。 */
+  private colorFor(name: TextureName, fallback: number): number {
+    if (!this.motif) return fallback;
+    return this.motif.tint[name] ?? 0xffffff;
+  }
+
   private material(name: TextureName, color: number, doubleSide = false): THREE.MeshStandardMaterial {
     const map = this.textures.get(name);
+    const themed = this.motif !== null;
+    const metal = name === 'metal' || name === 'corrugated';
     const m = new THREE.MeshStandardMaterial({
       map,
       color,
-      roughness: name === 'metal' ? 0.4 : 0.86,
-      metalness: name === 'metal' ? 0.35 : 0.02,
+      roughness: themed ? (name === 'marble' ? 0.32 : name === 'carpet' || name === 'linen' ? 0.94 : metal ? 0.42 : 0.84) : metal ? 0.4 : 0.86,
+      metalness: themed ? (name === 'marble' ? 0.14 : metal ? 0.48 : 0.02) : metal ? 0.35 : 0.02,
       side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
     });
     this.materials.push(m);
@@ -160,7 +173,8 @@ export class WorldBuilder {
         { x0: -width / 2, z0: -depth / 2, x1: width / 2, z1: depth / 2 },
         groundHoles,
       );
-      const groundMat = this.material('concrete', 0x555c64);
+      const groundName = this.motif?.groundTex ?? 'concrete';
+      const groundMat = this.material(groundName, this.colorFor(groundName, 0x555c64));
       for (const gr of groundRects) {
         const gw = gr.x1 - gr.x0;
         const gd = gr.z1 - gr.z0;
@@ -194,8 +208,10 @@ export class WorldBuilder {
 
     const tileIds = ['genkan', 'foyer', 'entry', 'kitchen', 'bathroom', 'bath', 'washroom', 'toilet', 'lobby', 'reception'];
     const addIndoorFloors = map.floors.length === 0;
-    const ceilMat = this.material('plaster', 0xd5d0c6, true);
-    const roofMat = this.material('concrete', 0x383e46);
+    const ceilName = this.motif?.ceilingTex ?? 'plaster';
+    const roofName = this.motif?.roofTex ?? 'concrete';
+    const ceilMat = this.material(ceilName, this.colorFor(ceilName, 0xd5d0c6), true);
+    const roofMat = this.material(roofName, this.colorFor(roofName, 0x383e46));
     const placedCeilings = new Map<number, Rect[]>();
     const placedRoofs = new Map<number, Rect[]>();
 
@@ -207,7 +223,8 @@ export class WorldBuilder {
         const isTile = tileIds.some((k) => room.id.includes(k));
         const slabGeo = new THREE.BoxGeometry(room.width, 0.02, room.depth);
         alignBoxTexture(slabGeo, room.x, floorY + 0.01, room.z, 0);
-        const slab = new THREE.Mesh(slabGeo, this.material(isTile ? 'tile' : 'wood', isTile ? 0xa5abb0 : 0x987450));
+        const floorName: TextureName = this.motif ? (isTile ? 'tile' : this.motif.floorTex.private) : isTile ? 'tile' : 'wood';
+        const slab = new THREE.Mesh(slabGeo, this.material(floorName, this.colorFor(floorName, isTile ? 0xa5abb0 : 0x987450)));
         slab.position.set(room.x, floorY + 0.01, room.z);
         slab.name = `floor:${room.id}`;
         this.root.add(slab);
@@ -323,13 +340,17 @@ export class WorldBuilder {
 
   private buildBoxes(defs: readonly BoxDef[], kind: ColliderKind, fallback: TextureName, color: number): void {
     for (const def of defs) {
-      const names: readonly TextureName[] = ['camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass'];
+      const names: readonly TextureName[] = [
+        'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
+        'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen',
+      ];
       const safe = names.find((n) => n === def.material) ?? fallback;
       const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);
       const y = (def.y ?? 0) + def.height / 2;
       const yaw = (def.yaw ?? 0) * DEG2RAD;
       if (kind === 'wall' || kind === 'floor') alignBoxTexture(geometry, def.x, y, def.z, yaw);
-      const mesh = new THREE.Mesh(geometry, this.material(safe, kind === 'cover' && def.material ? 0xb7b2a9 : color));
+      const baseColor = kind === 'cover' && def.material ? 0xb7b2a9 : color;
+      const mesh = new THREE.Mesh(geometry, this.material(safe, this.colorFor(safe, baseColor)));
       mesh.position.set(def.x, y, def.z);
       mesh.rotation.y = yaw;
       mesh.name = kind;
@@ -339,21 +360,28 @@ export class WorldBuilder {
           trim.position.set(x,y,z);
           mesh.add(trim);
         };
-        if (safe === 'metal') {
+        const hi = this.motif ? 0xf2f2f2 : 0xb1af9e;
+        const mid = this.motif ? 0xd0d0d0 : 0x989186;
+        if (safe === 'metal' || safe === 'corrugated') {
           const count = Math.max(2, Math.round(def.height / 0.36));
           const row = def.height / count;
           for (let i = 0; i < count; i++) {
             const center = -def.height / 2 + (i + 0.5) * row;
-            detail(def.width * 0.92, row * 0.92, 0.018, 0, center, def.depth / 2, 0x9a9e99);
-            detail(0.16, 0.023, 0.032, 0, center + row * 0.23, def.depth / 2 + 0.016, 0x555957);
+            detail(def.width * 0.92, row * 0.92, 0.018, 0, center, def.depth / 2, this.colorFor(safe, 0x9a9e99));
+            detail(0.16, 0.023, 0.032, 0, center + row * 0.23, def.depth / 2 + 0.016, this.colorFor(safe, 0x555957));
           }
-        } else if (safe === 'fabric') {
-          detail(def.width * 0.96, 0.13, def.depth * 0.93, 0, def.height / 2 - 0.045, 0, 0xb1af9e);
-          detail(def.width, 0.28, def.depth * 0.16, 0, def.height / 2 + 0.06, -def.depth * 0.41, 0x989186);
-        } else if (safe === 'wood') {
+        } else if (safe === 'fabric' || safe === 'linen') {
+          detail(def.width * 0.96, 0.13, def.depth * 0.93, 0, def.height / 2 - 0.045, 0, hi);
+          detail(def.width, 0.28, def.depth * 0.16, 0, def.height / 2 + 0.06, -def.depth * 0.41, mid);
+        } else if (safe === 'wood' || safe === 'siding') {
           for (const side of [-1,1]) {
-            detail(def.width + 0.015, 0.067, def.depth + 0.015, 0, side * (def.height / 2 - 0.07), 0, 0xb8a489);
+            detail(def.width + 0.015, 0.067, def.depth + 0.015, 0, side * (def.height / 2 - 0.07), 0, this.colorFor('wood', 0xb8a489));
           }
+        } else if (safe === 'marble') {
+          detail(def.width * 0.96, 0.06, def.depth * 0.96, 0, def.height / 2 - 0.04, 0, 0xffffff);
+          detail(def.width * 0.9, 0.04, def.depth * 0.08, 0, def.height / 2 - 0.02, def.depth * 0.42, 0xf4f1ea);
+        } else if (safe === 'concrete') {
+          detail(def.width * 0.92, 0.05, def.depth * 0.04, 0, 0, def.depth / 2, 0xffffff);
         }
       }
       this.root.add(mesh);
@@ -373,7 +401,8 @@ export class WorldBuilder {
     const rz = -Math.sin(yaw);
     const base = def.y ?? 0;
     const total = def.steps * def.run;
-    const wood = this.material('wood', 0x7a5432);
+    const stairName = this.motif?.stairTex ?? 'wood';
+    const wood = this.material(stairName, this.colorFor(stairName, 0x7a5432));
     let low = { x: def.x, z: def.z, y: base };
     let high = { x: def.x, z: def.z, y: base };
     for (let i = 0; i < def.steps; i++) {
@@ -397,7 +426,7 @@ export class WorldBuilder {
     const railLength = Math.hypot(high.x - low.x, high.y - low.y, high.z - low.z);
     if (railLength > 0) {
       const railHeight = 0.82;
-      const railMat = this.material('metal', 0x6b645c);
+      const railMat = this.material('metal', this.colorFor('metal', 0x6b645c));
       const geometry = new THREE.BoxGeometry(0.032, 0.032, railLength);
       const postGeo = new THREE.BoxGeometry(0.028, railHeight, 0.028);
       for (const side of [-1, 1]) {
@@ -438,9 +467,10 @@ export class WorldBuilder {
 
   private buildLights(): void {
     // 環境光は控えめにして、部屋照明の減衰と影で奥行きを作る
-    this.root.add(new THREE.HemisphereLight(0xb8c6dc, 0x2a2620, 0.5));
+    const atm = this.motif?.atmosphere;
+    this.root.add(new THREE.HemisphereLight(atm?.hemiSky ?? 0xb8c6dc, atm?.hemiGround ?? 0x2a2620, atm?.hemiIntensity ?? 0.5));
     // 太陽は影付き: 屋外と窓から差す光だけが明るくなり、屋内は部屋照明が主になる
-    const sun = new THREE.DirectionalLight(0xffe6c4, 2.4);
+    const sun = new THREE.DirectionalLight(atm?.sunColor ?? 0xffe6c4, atm?.sunIntensity ?? 2.4);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const cam = sun.shadow.camera;
@@ -457,7 +487,8 @@ export class WorldBuilder {
     const story = this.map.storyHeight ?? this.map.ceilingHeight;
     const spots: LightSpot[] = [];
     // 部屋ごとに色温度を少し振る（白熱灯寄り / 蛍光灯寄り）
-    const tints = [0xffd9a8, 0xffe6c4, 0xf2f0ea, 0xffdcb4, 0xe6eef8];
+    const tints = atm?.roomLights ?? [0xffd9a8, 0xffe6c4, 0xf2f0ea, 0xffdcb4, 0xe6eef8];
+    const roomIntensity = atm?.roomIntensity ?? 11;
     this.map.rooms.forEach((room, idx) => {
       const floorY = room.floorY ?? 0;
       if (room.outdoor) {
@@ -473,12 +504,12 @@ export class WorldBuilder {
       const lightY = Math.min(floorY + story, roomCeilY) - 0.35;
       spots.push({
         x: room.x, y: lightY, z: room.z,
-        color: tints[idx % tints.length]!, intensity: 11, distance: Math.max(room.width, room.depth) * 2.1, decay: 1.7,
+        color: tints[idx % tints.length]!, intensity: roomIntensity, distance: Math.max(room.width, room.depth) * 2.1, decay: 1.7,
       });
-      const housing = new THREE.Mesh(this.housingGeo ??= new THREE.BoxGeometry(1.05, 0.09, 0.27), this.housingMat ??= this.material('metal', 0x74767a));
+      const housing = new THREE.Mesh(this.housingGeo ??= new THREE.BoxGeometry(1.05, 0.09, 0.27), this.housingMat ??= this.material('metal', this.colorFor('metal', 0x74767a)));
       housing.position.set(room.x, lightY + 0.24, room.z);
       const diffuser = new THREE.Mesh(this.diffuserGeo ??= new THREE.BoxGeometry(0.94, 0.028, 0.2),
-        this.diffuserMat ??= new THREE.MeshBasicMaterial({ color: 0xffebcc }));
+        this.diffuserMat ??= new THREE.MeshBasicMaterial({ color: tints[0] ?? 0xffebcc }));
       diffuser.position.y = -0.054;
       housing.add(diffuser);
       this.root.add(housing);

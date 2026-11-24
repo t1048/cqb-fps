@@ -1,0 +1,690 @@
+import type {
+  BoxDef,
+  GeneratedMapRaw,
+  ModularGeneratorTemplate,
+  ModuleCategory,
+  MotifId,
+  RoomDef,
+} from '../core/types';
+import { MOTIF_IDS } from '../core/types';
+import type { TextureName } from './Materials';
+import { normalizeSeed } from './generator/Rng';
+
+/** キャンバス塗りと Three.js の色乗算で共有する面の色。数値は 0xRRGGBB。 */
+export interface SurfacePalette {
+  id: string;
+  wall: number;
+  wallAlt: number;
+  grout: number;
+  tileA: number;
+  tileB: number;
+  carpetA: number;
+  carpetB: number;
+  woodA: number;
+  woodB: number;
+  metalA: number;
+  metalB: number;
+  marbleA: number;
+  marbleVein: number;
+  brickA: number;
+  brickB: number;
+  mortar: number;
+  ceiling: number;
+  ceilingLine: number;
+  linenA: number;
+  linenB: number;
+  accent: number;
+  concrete: number;
+  doorA: number;
+  doorB: number;
+  frame: number;
+  wallStyle: 'clinical' | 'plaster' | 'wood' | 'stone' | 'metal';
+  ceilingStyle: 'acoustic' | 'wood' | 'coffer' | 'exposed' | 'tile';
+  signText: string;
+}
+
+export type DecalKind =
+  | 'blood'
+  | 'dirt'
+  | 'scuff'
+  | 'poster'
+  | 'graffiti'
+  | 'hazard'
+  | 'medcross'
+  | 'vault'
+  | 'sign'
+  | 'stripe';
+
+export type RoomRole = 'wet' | 'service' | 'circ' | 'private' | 'work' | 'outdoor' | 'secure' | 'social' | 'stair';
+
+export interface MotifAtmosphere {
+  background: number;
+  fog: number;
+  fogNear: number;
+  fogFar: number;
+  hemiSky: number;
+  hemiGround: number;
+  hemiIntensity: number;
+  sunColor: number;
+  sunIntensity: number;
+  roomLights: readonly number[];
+  roomIntensity: number;
+  exposure: number;
+}
+
+export interface MotifDef {
+  id: MotifId;
+  /** ブリーフィングと HUD に出す日本語名 */
+  label: string;
+  accentCss: string;
+  summaries: readonly string[];
+  atmosphere: MotifAtmosphere;
+  palette: SurfacePalette;
+  /** フルカラーテクスチャは 0xffffff。木・金属は乗算色。 */
+  tint: Partial<Record<TextureName, number>>;
+  interiorTex: TextureName;
+  exteriorTex: TextureName;
+  ceilingTex: TextureName;
+  roofTex: TextureName;
+  groundTex: TextureName;
+  stairTex: TextureName;
+  floorTex: Record<RoomRole, TextureName>;
+  props: { vehicle: TextureName; tall: TextureName; low: TextureName; counter: TextureName; misc: TextureName };
+  roomNames: Record<RoomRole, string>;
+  decals: readonly DecalKind[];
+  /** モジュールカテゴリの重み倍率。1 が現状。必須室は minCount で残る。 */
+  categoryWeight: Partial<Record<ModuleCategory, number>>;
+  /** storyProfiles[].id の重み倍率 */
+  profileWeight: Record<string, number>;
+}
+
+const css = (n: number): string => `#${n.toString(16).padStart(6, '0')}`;
+
+export const MOTIFS: readonly MotifDef[] = [
+  {
+    id: 'hospital',
+    label: '病院',
+    accentCss: css(0x3ecf8e),
+    summaries: [
+      '市立総合病院に武装グループが立てこもっている。冷たい蛍光灯の病棟廊下を区画ごとに制圧し、病室と薬品庫の人質を確保せよ。',
+      '救急外来から侵入した病院事案。処置室のストレッチャーと緑の誘導ラインに注意し、ナースステーションを先に抑えよ。',
+    ],
+    atmosphere: {
+      background: 0xb7c9d2,
+      fog: 0xc5d5de,
+      fogNear: 16,
+      fogFar: 62,
+      hemiSky: 0xd7f3ee,
+      hemiGround: 0x7f9aa4,
+      hemiIntensity: 0.72,
+      sunColor: 0xe7f6ff,
+      sunIntensity: 1.45,
+      roomLights: [0xe9fff6, 0xd4f1ff, 0xf7fffb, 0xc8ffe8],
+      roomIntensity: 15,
+      exposure: 1.22,
+    },
+    palette: {
+      id: 'hospital',
+      wall: 0xf4f7f6,
+      wallAlt: 0xd5ebe3,
+      grout: 0x9ec8bc,
+      tileA: 0xf7fbfa,
+      tileB: 0xd9efe8,
+      carpetA: 0xc5ddd4,
+      carpetB: 0xa9c9be,
+      woodA: 0xd7e4df,
+      woodB: 0xb7cdc4,
+      metalA: 0xe7eef1,
+      metalB: 0xb7c6ce,
+      marbleA: 0xf3f7f6,
+      marbleVein: 0x8fbfb0,
+      brickA: 0xe7eeea,
+      brickB: 0xc5d5ce,
+      mortar: 0xf7f7f5,
+      ceiling: 0xfbfefd,
+      ceilingLine: 0xc5ddd6,
+      linenA: 0xf4fffb,
+      linenB: 0xd5eee6,
+      accent: 0x1fa971,
+      concrete: 0xd5dbdf,
+      doorA: 0xf7fffc,
+      doorB: 0xd9f0e6,
+      frame: 0x9fd8c4,
+      wallStyle: 'clinical',
+      ceilingStyle: 'acoustic',
+      signText: 'WARD',
+    },
+    tint: { wood: 0xd5e6df, metal: 0xd5e4ea, fabric: 0xe7f4ef },
+    interiorTex: 'panel',
+    exteriorTex: 'brick',
+    ceilingTex: 'ceiling',
+    roofTex: 'concrete',
+    groundTex: 'concrete',
+    stairTex: 'linoleum',
+    floorTex: {
+      wet: 'tile',
+      service: 'linoleum',
+      circ: 'linoleum',
+      private: 'linoleum',
+      work: 'tile',
+      outdoor: 'concrete',
+      secure: 'tile',
+      social: 'tile',
+      stair: 'linoleum',
+    },
+    props: { vehicle: 'metal', tall: 'metal', low: 'linen', counter: 'metal', misc: 'linoleum' },
+    roomNames: {
+      wet: '処置室',
+      service: '器材庫',
+      circ: '病棟廊下',
+      private: '病室',
+      work: 'ナースステーション',
+      outdoor: '救急搬入口',
+      secure: '薬品庫',
+      social: '待合ホール',
+      stair: '避難階段',
+    },
+    decals: ['medcross', 'hazard', 'stripe', 'sign', 'scuff', 'dirt', 'blood'],
+    // 階数プロファイルは変えない（同じシードの階層と編成規模を維持する）。室種の比率だけ偏らせる。
+    categoryWeight: { living_hub: 0.72, wing_private: 1.45, study_office: 0.9, basement_utility: 1.25, garage: 0.65, corridor: 1.2, courtyard: 0.6, terrace: 0.7 },
+    profileWeight: {},
+  },
+  {
+    id: 'clubhouse',
+    label: 'クラブハウス',
+    accentCss: css(0xe0a050),
+    summaries: [
+      '会員制クラブハウスが占拠されている。暗いウッドパネルとカーペットのラウンジを、バーカウンターの死角に注意してクリアせよ。',
+      '深夜のクラブハウス事案。個室とワインセラー、テラスへの抜け道を先に押さえ、暖かい照明の奥を警戒せよ。',
+    ],
+    atmosphere: {
+      background: 0x2c1814,
+      fog: 0x3a221c,
+      fogNear: 10,
+      fogFar: 48,
+      hemiSky: 0xffc090,
+      hemiGround: 0x3a2418,
+      hemiIntensity: 0.32,
+      sunColor: 0xffb080,
+      sunIntensity: 1.15,
+      roomLights: [0xffb060, 0xffc888, 0xffd8a8, 0xffaa70],
+      roomIntensity: 8.5,
+      exposure: 0.98,
+    },
+    palette: {
+      id: 'clubhouse',
+      wall: 0x6b3e28,
+      wallAlt: 0x8a5a32,
+      grout: 0x4a3020,
+      tileA: 0xc4a070,
+      tileB: 0x8d6840,
+      carpetA: 0x6a2428,
+      carpetB: 0x3e1418,
+      woodA: 0xa56b3c,
+      woodB: 0x6e4124,
+      metalA: 0xc4a46a,
+      metalB: 0x8a7040,
+      marbleA: 0xd8c4a4,
+      marbleVein: 0x8a6844,
+      brickA: 0x8a4034,
+      brickB: 0x5c2a24,
+      mortar: 0xc8b8a4,
+      ceiling: 0x4a3024,
+      ceilingLine: 0x2a1a12,
+      linenA: 0x8a3038,
+      linenB: 0x5c1c24,
+      accent: 0xe0a050,
+      concrete: 0x6a6058,
+      doorA: 0x8a5a32,
+      doorB: 0x5c3a22,
+      frame: 0x3a2418,
+      wallStyle: 'wood',
+      ceilingStyle: 'wood',
+      signText: 'BAR',
+    },
+    tint: { wood: 0xc48848, metal: 0xc4a060, fabric: 0xa84848 },
+    interiorTex: 'panel',
+    exteriorTex: 'siding',
+    ceilingTex: 'ceiling',
+    roofTex: 'brick',
+    groundTex: 'concrete',
+    stairTex: 'wood',
+    floorTex: {
+      wet: 'tile',
+      service: 'concrete',
+      circ: 'wood',
+      private: 'carpet',
+      work: 'wood',
+      outdoor: 'concrete',
+      secure: 'wood',
+      social: 'carpet',
+      stair: 'wood',
+    },
+    props: { vehicle: 'metal', tall: 'wood', low: 'linen', counter: 'wood', misc: 'wood' },
+    roomNames: {
+      wet: 'パウダールーム',
+      service: 'バックヤード',
+      circ: 'クラブ廊下',
+      private: '個室',
+      work: '応接室',
+      outdoor: 'テラス',
+      secure: 'ワインセラー',
+      social: 'ラウンジ',
+      stair: '主階段',
+    },
+    decals: ['poster', 'graffiti', 'scuff', 'dirt', 'sign', 'stripe'],
+    categoryWeight: { living_hub: 1.55, wing_private: 1.15, study_office: 0.7, basement_utility: 0.75, garage: 0.6, corridor: 1.05, courtyard: 1.25, terrace: 1.3 },
+    profileWeight: {},
+  },
+  {
+    id: 'bank',
+    label: '銀行',
+    accentCss: css(0x8eb4e8),
+    summaries: [
+      '第一中央銀行の支店が襲撃されている。大理石のロビーと窓口カウンターを越え、地下金庫室の前で展開せよ。',
+      '銀行強盗の立てこもり。冷たい照明のホールと金属扉の金庫前室を区別し、窓口裏の事務区画を先に隔離せよ。',
+    ],
+    atmosphere: {
+      background: 0x1a2433,
+      fog: 0x243044,
+      fogNear: 20,
+      fogFar: 88,
+      hemiSky: 0xd4dcea,
+      hemiGround: 0x2a313c,
+      hemiIntensity: 0.48,
+      sunColor: 0xf2f5ff,
+      sunIntensity: 1.9,
+      roomLights: [0xfff4e0, 0xe6eef8, 0xf7f1e4, 0xd8e2f4],
+      roomIntensity: 12,
+      exposure: 1.12,
+    },
+    palette: {
+      id: 'bank',
+      wall: 0xe4e2dc,
+      wallAlt: 0xc8c6be,
+      grout: 0x9a9890,
+      tileA: 0xeeeae2,
+      tileB: 0xd0ccc2,
+      carpetA: 0x2c3f62,
+      carpetB: 0x1a2844,
+      woodA: 0x8d7048,
+      woodB: 0x5e4830,
+      metalA: 0xc5ccd4,
+      metalB: 0x8a949e,
+      marbleA: 0xf3f1ea,
+      marbleVein: 0xb7a48a,
+      brickA: 0xc8c4bc,
+      brickB: 0xa8a49c,
+      mortar: 0xe8e6e0,
+      ceiling: 0xf7f5f0,
+      ceilingLine: 0xc8c2b4,
+      linenA: 0xd8d4c8,
+      linenB: 0xb7b2a4,
+      accent: 0x1a3a72,
+      concrete: 0xb7bcc4,
+      doorA: 0xdedad2,
+      doorB: 0xc2beb4,
+      frame: 0x8a929c,
+      wallStyle: 'stone',
+      ceilingStyle: 'coffer',
+      signText: 'VAULT',
+    },
+    tint: { wood: 0xb09060, metal: 0xc8d0d8, fabric: 0xc8c4b8 },
+    interiorTex: 'marble',
+    exteriorTex: 'marble',
+    ceilingTex: 'ceiling',
+    roofTex: 'concrete',
+    groundTex: 'concrete',
+    stairTex: 'marble',
+    floorTex: {
+      wet: 'marble',
+      service: 'concrete',
+      circ: 'marble',
+      private: 'carpet',
+      work: 'marble',
+      outdoor: 'concrete',
+      secure: 'concrete',
+      social: 'marble',
+      stair: 'marble',
+    },
+    props: { vehicle: 'metal', tall: 'metal', low: 'linen', counter: 'marble', misc: 'wood' },
+    roomNames: {
+      wet: '化粧室',
+      service: '後方事務',
+      circ: '銀行ホール',
+      private: '役員室',
+      work: '窓口',
+      outdoor: '正面広場',
+      secure: '金庫室',
+      social: 'ロビー',
+      stair: '主階段',
+    },
+    decals: ['vault', 'sign', 'stripe', 'scuff', 'dirt', 'hazard'],
+    categoryWeight: { living_hub: 1.2, wing_private: 0.65, study_office: 1.55, basement_utility: 1.45, garage: 0.65, corridor: 1.2, courtyard: 0.8, terrace: 0.65 },
+    profileWeight: {},
+  },
+  {
+    id: 'office',
+    label: 'オフィス',
+    accentCss: css(0x7ec8e8),
+    summaries: [
+      'テナントオフィスが占拠されている。蛍光灯の執務フロアと会議室、サーバ室を順にクリアし、非常階段の上下を警戒せよ。',
+      '高層オフィスの立てこもり。カーペットの執務室とガラス越しのミーティング区画を、コピー機とデスクの陰から確認せよ。',
+    ],
+    atmosphere: {
+      background: 0x8ea6ba,
+      fog: 0x9eb4c6,
+      fogNear: 18,
+      fogFar: 78,
+      hemiSky: 0xe8eef6,
+      hemiGround: 0x6a7684,
+      hemiIntensity: 0.58,
+      sunColor: 0xfff2e2,
+      sunIntensity: 2.05,
+      roomLights: [0xf4f7ff, 0xe8f0ff, 0xfff8ee, 0xdfe8f8],
+      roomIntensity: 13.5,
+      exposure: 1.16,
+    },
+    palette: {
+      id: 'office',
+      wall: 0xe7eaee,
+      wallAlt: 0xc5ced8,
+      grout: 0x9aa6b4,
+      tileA: 0xe8eef2,
+      tileB: 0xc9d3dc,
+      carpetA: 0x4a6278,
+      carpetB: 0x314556,
+      woodA: 0xb08960,
+      woodB: 0x7a5a38,
+      metalA: 0xd5dbe2,
+      metalB: 0xa8b2bc,
+      marbleA: 0xe8eaee,
+      marbleVein: 0x98a8b8,
+      brickA: 0xd0d4da,
+      brickB: 0xb0b6be,
+      mortar: 0xe8eaee,
+      ceiling: 0xf4f6f8,
+      ceilingLine: 0xb7c2cc,
+      linenA: 0xd5dde6,
+      linenB: 0xb7c4d0,
+      accent: 0x2f6f9a,
+      concrete: 0xc5ccd2,
+      doorA: 0xf2f4f6,
+      doorB: 0xd5dbe2,
+      frame: 0x8aa0b4,
+      wallStyle: 'plaster',
+      ceilingStyle: 'tile',
+      signText: 'OFFICE',
+    },
+    tint: { wood: 0xc4a070, metal: 0xc8d2dc, fabric: 0xc5d0dc },
+    interiorTex: 'panel',
+    exteriorTex: 'concrete',
+    ceilingTex: 'ceiling',
+    roofTex: 'concrete',
+    groundTex: 'concrete',
+    stairTex: 'tile',
+    floorTex: {
+      wet: 'tile',
+      service: 'concrete',
+      circ: 'carpet',
+      private: 'carpet',
+      work: 'carpet',
+      outdoor: 'concrete',
+      secure: 'carpet',
+      social: 'carpet',
+      stair: 'tile',
+    },
+    props: { vehicle: 'metal', tall: 'metal', low: 'linen', counter: 'wood', misc: 'wood' },
+    roomNames: {
+      wet: '洗面',
+      service: 'サーバ室',
+      circ: 'オフィス廊下',
+      private: '役員室',
+      work: '執務室',
+      outdoor: '屋上',
+      secure: '資料庫',
+      social: 'ミーティング',
+      stair: '非常階段',
+    },
+    decals: ['poster', 'sign', 'scuff', 'dirt', 'stripe', 'graffiti'],
+    categoryWeight: { living_hub: 0.8, wing_private: 0.6, study_office: 1.6, basement_utility: 0.9, garage: 0.6, corridor: 1.35, courtyard: 0.7, terrace: 0.85 },
+    profileWeight: {},
+  },
+  {
+    id: 'warehouse',
+    label: '倉庫',
+    accentCss: css(0xe0b43a),
+    summaries: [
+      '港湾倉庫がアジトになっている。むき出しのコンクリートと危険物の黄黒ラインを目印に、荷捌き場から保管区画へ押し込め。',
+      '物流倉庫の立てこもり。高い金属ラックとパレットの陰、ヤード側の開口を先に封鎖してから奥の危険物庫へ進め。',
+    ],
+    atmosphere: {
+      background: 0x6a6258,
+      fog: 0x7a7268,
+      fogNear: 12,
+      fogFar: 55,
+      hemiSky: 0xd8d0c4,
+      hemiGround: 0x4a4038,
+      hemiIntensity: 0.4,
+      sunColor: 0xffe0b0,
+      sunIntensity: 2.55,
+      roomLights: [0xffc090, 0xffd0a0, 0xe8d8c0],
+      roomIntensity: 7.5,
+      exposure: 1.05,
+    },
+    palette: {
+      id: 'warehouse',
+      wall: 0x8a9094,
+      wallAlt: 0x5c6468,
+      grout: 0x3a4044,
+      tileA: 0xb7bcc0,
+      tileB: 0x8a9094,
+      carpetA: 0x6a645c,
+      carpetB: 0x4a453e,
+      woodA: 0x8a6844,
+      woodB: 0x5c4028,
+      metalA: 0xb7bcc0,
+      metalB: 0x6a7074,
+      marbleA: 0xc8ccc8,
+      marbleVein: 0x6a7070,
+      brickA: 0x8a5848,
+      brickB: 0x5c3830,
+      mortar: 0xa8a49c,
+      ceiling: 0x4a5054,
+      ceilingLine: 0x2a3034,
+      linenA: 0xc8b89a,
+      linenB: 0x8a7860,
+      accent: 0xe0b43a,
+      concrete: 0x8a8680,
+      doorA: 0x9aa0a4,
+      doorB: 0x6a7074,
+      frame: 0x3e4448,
+      wallStyle: 'metal',
+      ceilingStyle: 'exposed',
+      signText: 'DOCK',
+    },
+    tint: { wood: 0xa07848, metal: 0xb0b6ba, fabric: 0xc8b898 },
+    interiorTex: 'concrete',
+    exteriorTex: 'corrugated',
+    ceilingTex: 'ceiling',
+    roofTex: 'corrugated',
+    groundTex: 'concrete',
+    stairTex: 'metal',
+    floorTex: {
+      wet: 'tile',
+      service: 'concrete',
+      circ: 'concrete',
+      private: 'linoleum',
+      work: 'concrete',
+      outdoor: 'concrete',
+      secure: 'concrete',
+      social: 'concrete',
+      stair: 'metal',
+    },
+    props: { vehicle: 'metal', tall: 'metal', low: 'wood', counter: 'metal', misc: 'concrete' },
+    roomNames: {
+      wet: '洗面',
+      service: '保管区画',
+      circ: '通路',
+      private: '休憩室',
+      work: '現場事務所',
+      outdoor: 'ヤード',
+      secure: '危険物庫',
+      social: '荷捌き',
+      stair: '鉄階段',
+    },
+    decals: ['hazard', 'stripe', 'dirt', 'scuff', 'sign', 'graffiti', 'blood'],
+    categoryWeight: { living_hub: 0.55, wing_private: 0.5, study_office: 0.65, basement_utility: 1.5, garage: 1.55, corridor: 1.1, courtyard: 1.1, terrace: 0.6 },
+    profileWeight: {},
+  },
+];
+
+const BY_ID = new Map<MotifId, MotifDef>(MOTIFS.map((m) => [m.id, m]));
+
+export function motifById(id: MotifId): MotifDef {
+  return BY_ID.get(id) ?? MOTIFS[0]!;
+}
+
+/** 同じシードなら同じモチーフ。生成器の乱数ストリームは消費しない。 */
+export function motifFromSeed(seed: number): MotifDef {
+  const h = Math.imul(normalizeSeed(seed) ^ 0x9e3779b1, 0x85ebca6b) >>> 0;
+  return MOTIFS[h % MOTIFS.length]!;
+}
+
+export function roleOf(id: string): RoomRole {
+  const s = id.toLowerCase();
+  if (s.includes('stair')) return 'stair';
+  if (/(bath|toilet|restroom|ensuite|wash|vanity)/.test(s)) return 'wet';
+  if (/(kitchen|garage|motor|storage|closet|utility|plant|crate)/.test(s)) return 'service';
+  if (/(vault|cellar|wine|archive|safe)/.test(s)) return 'secure';
+  if (/(court|terrace|balcony|approach|porch|yard)/.test(s)) return 'outdoor';
+  if (/(reception|ldk|living|dining|banquet)/.test(s)) return 'social';
+  if (/(genkan|hall|lobby|corridor|entry|foyer)/.test(s)) return 'circ';
+  if (/(bed|suite|vip|master)/.test(s)) return 'private';
+  if (/(study|office|conference|consular|comm|ambassador|exec|secretary)/.test(s)) return 'work';
+  return 'social';
+}
+
+function scaleLabel(mapId: string): string {
+  if (mapId.includes('small') || mapId.includes('compact')) return '小';
+  if (mapId.includes('embassy')) return '大';
+  return '中';
+}
+
+function roomAt(rooms: readonly RoomDef[], x: number, z: number, surfaceY: number): RoomDef | undefined {
+  let best: RoomDef | undefined;
+  let bestArea = Infinity;
+  for (const r of rooms) {
+    if (Math.abs((r.floorY ?? 0) - surfaceY) > 0.45) continue;
+    if (Math.abs(r.x - x) > r.width / 2 + 0.08) continue;
+    if (Math.abs(r.z - z) > r.depth / 2 + 0.08) continue;
+    const area = r.width * r.depth;
+    if (area < bestArea) {
+      bestArea = area;
+      best = r;
+    }
+  }
+  return best;
+}
+
+function indoorBounds(rooms: readonly RoomDef[]): { x0: number; z0: number; x1: number; z1: number } | null {
+  let x0 = Infinity;
+  let z0 = Infinity;
+  let x1 = -Infinity;
+  let z1 = -Infinity;
+  let n = 0;
+  for (const r of rooms) {
+    if (r.outdoor) continue;
+    n++;
+    x0 = Math.min(x0, r.x - r.width / 2);
+    x1 = Math.max(x1, r.x + r.width / 2);
+    z0 = Math.min(z0, r.z - r.depth / 2);
+    z1 = Math.max(z1, r.z + r.depth / 2);
+  }
+  return n === 0 ? null : { x0, z0, x1, z1 };
+}
+
+function isExteriorWall(w: BoxDef, bounds: { x0: number; z0: number; x1: number; z1: number }): boolean {
+  const nearX = Math.min(Math.abs(w.x - w.width / 2 - bounds.x0), Math.abs(w.x + w.width / 2 - bounds.x1)) < 0.42;
+  const nearZ = Math.min(Math.abs(w.z - w.depth / 2 - bounds.z0), Math.abs(w.z + w.depth / 2 - bounds.z1)) < 0.42;
+  return nearX || nearZ;
+}
+
+function coverTex(motif: MotifDef, box: BoxDef, room: RoomDef | undefined): TextureName {
+  const h = box.height;
+  const long = Math.max(box.width, box.depth);
+  const short = Math.min(box.width, box.depth);
+  if (h >= 1.2 && long >= 3.2) return motif.props.vehicle;
+  if (h >= 1.5 && short <= 0.9) return motif.props.tall;
+  if (h <= 0.72 && long >= 1.45 && short >= 0.85) return motif.props.low;
+  if (h >= 0.68 && h <= 1.25 && long >= 1.35) return motif.props.counter;
+  if (room && roleOf(room.id) === 'secure') return motif.props.tall;
+  return motif.props.misc;
+}
+
+/**
+ * 生成済みマップの座標・扉・スポーンは動かさず、部屋名とマテリアルだけをモチーフへ寄せる。
+ * 当たり判定の箱寸法は変えない。
+ */
+export function dressWithMotif<T extends GeneratedMapRaw>(map: T, seed: number): T {
+  const motif = motifFromSeed(seed);
+  const roles = map.rooms.map((r) => motif.roomNames[roleOf(r.id)]);
+  const totals = new Map<string, number>();
+  for (const name of roles) totals.set(name, (totals.get(name) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  const rooms = map.rooms.map((r, i) => {
+    const base = roles[i] ?? motif.label;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    const multi = (totals.get(base) ?? 0) > 1;
+    return { ...r, name: multi ? `${base}${n}` : base };
+  });
+  const bounds = indoorBounds(rooms);
+  const floors = map.floors?.map((f) => {
+    const surfaceY = (f.y ?? 0) + f.height;
+    const room = roomAt(rooms, f.x, f.z, surfaceY);
+    const tex = !room || room.outdoor ? motif.groundTex : motif.floorTex[roleOf(room.id)];
+    return { ...f, material: tex };
+  });
+  const walls = map.walls.map((w) => ({
+    ...w,
+    material: bounds && isExteriorWall(w, bounds) ? motif.exteriorTex : motif.interiorTex,
+  }));
+  const covers = map.covers.map((c) => {
+    const room = roomAt(rooms, c.x, c.z, c.y ?? 0);
+    return { ...c, material: coverTex(motif, c, room) };
+  });
+  const summary = motif.summaries[normalizeSeed(seed) % motif.summaries.length] ?? motif.summaries[0]!;
+  return {
+    ...map,
+    name: `${motif.label}（${scaleLabel(map.id)}）`,
+    motif: motif.id,
+    briefing: { ...map.briefing, summary },
+    rooms,
+    ...(floors !== undefined ? { floors } : {}),
+    walls,
+    covers,
+  };
+}
+
+/**
+ * フォールバック最小構成の検証に使う元テンプレートは壊さず、計画用の複製だけ重みを偏らせる。
+ * 寸法・個数の範囲・家具の寸法は変えない（当たりの契約を維持する）。
+ */
+export function withMotifBias(tpl: ModularGeneratorTemplate, motif: MotifDef): ModularGeneratorTemplate {
+  return {
+    ...tpl,
+    storyProfiles: tpl.storyProfiles.map((p) => ({
+      ...p,
+      weight: p.weight * (motif.profileWeight[p.id] ?? 1),
+    })),
+    modules: tpl.modules.map((m) => ({
+      ...m,
+      weight: m.weight * (motif.categoryWeight[m.category] ?? 1),
+    })),
+  };
+}
+
+export function isMotifId(value: string): value is MotifId {
+  return (MOTIF_IDS as readonly string[]).includes(value);
+}

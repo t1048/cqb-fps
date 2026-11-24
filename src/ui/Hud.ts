@@ -65,6 +65,7 @@ const STYLE = `
 .cqb-hud .obj-tag{font:bold 10px sans-serif;margin-left:5px;padding:1px 5px;border-radius:3px;background:rgba(242,193,78,.2);color:#ffd978}
 .cqb-hud .obj-tag.red{background:rgba(255,90,90,.24);color:#ffb0b0}
 .cqb-hud .obj-subhint{margin-top:6px;padding-top:5px;border-top:1px solid rgba(110,145,180,.22);font-size:11px;color:#9cc2df;text-align:right}
+.cqb-hud .motif-chip{align-self:flex-end;font:bold 12px sans-serif;letter-spacing:.12em;padding:4px 10px}
 `;
 
 interface RadioEntry {
@@ -133,6 +134,7 @@ export class Hud {
     private readonly interaction?: Interaction,
     private readonly mission?: Mission,
     private readonly squad?: SquadSystem,
+    motif?: { label: string; color: string },
   ) {
     this.styleEl.textContent = STYLE;
     this.root.className = 'cqb-hud';
@@ -178,6 +180,14 @@ export class Hud {
     bottomLeft.append(this.rosterEl, playerBar);
 
     this.topRightSlot.className = 'top-right';
+    if (motif) {
+      const chip = document.createElement('div');
+      chip.className = 'panel motif-chip';
+      chip.textContent = `施設 ${motif.label}`;
+      chip.style.color = motif.color;
+      chip.style.borderColor = motif.color;
+      this.topRightSlot.appendChild(chip);
+    }
     this.objPanelEl.className = 'obj-panel';
     const oHead = document.createElement('div');
     oHead.className = 'obj-head';

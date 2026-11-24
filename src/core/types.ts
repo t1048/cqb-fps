@@ -152,9 +152,15 @@ export interface BriefingDef {
   estimatedHostages: BriefingRange;
 }
 
+/** ランダム生成マップの施設モチーフ。シードから一意に決まり、見た目と部屋の出方を変える。 */
+export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse'] as const;
+export type MotifId = (typeof MOTIF_IDS)[number];
+
 export interface MapData {
   id: string;
   name: string;
+  /** 施設モチーフ（ランダム生成時）。省略時は従来の住宅パレット */
+  motif?: MotifId;
   /** 突入前ブリーフィング情報（任意） */
   briefing?: BriefingDef;
   /** 壁高さの既定値 / 建物全体の天井高(m) */
@@ -582,6 +588,8 @@ export type AnyGeneratorTemplate = GeneratorTemplate;
 export interface GeneratedMapRaw {
   id: string;
   name: string;
+  /** 施設モチーフ。dressWithMotif がシードから付与する */
+  motif?: MotifId;
   seed: number;
   briefing: { summary: string; estimatedSuspects: BriefingRange; estimatedHostages: BriefingRange };
   ceilingHeight: number;

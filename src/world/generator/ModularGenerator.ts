@@ -16,6 +16,7 @@ import type {
 } from '../../core/types';
 import { DataError } from '../../core/DataError';
 import { missionRoster } from '../../rules/MissionRoster';
+import { motifFromSeed, withMotifBias } from '../Motif';
 import {
   CirculationRules,
   FRONT_APPROACH_ID,
@@ -1429,27 +1430,30 @@ export function generateModularMapWithMeta(
   if (!(doorLeafHeight >= 2.05)) throw new Error(`[generator:${tpl.id}] doorLeafHeight ${doorLeafHeight} は 2.05m 以上が必要です`);
   verifyFallbackFeasibility(tpl, doorLeafHeight);
   const normSeed = normalizeSeed(seed);
+  // モチーフはシードから独立に決め、計画用の複製だけ部屋カテゴリの重みを偏らせる。
+  // 最小構成の検証と最終フォールバックは元テンプレートのまま（寸法契約を変えない）。
+  const themed = withMotifBias(tpl, motifFromSeed(normSeed));
   // 階層プロファイルと敷地変換は試行ループの前に 1 回だけ選ぶ（以後降格・変更しない）
   const sel = new Rng((normSeed ^ SELECTION_SEED_XOR) >>> 0);
-  const profile = pickStoryProfile(tpl, sel);
+  const profile = pickStoryProfile(themed, sel);
   const { rot, mirrorX } = pickSiteTransform(tpl.site.rotationsAllowed, tpl.site.mirrorAllowed, () => sel.next());
   const reasons: string[] = [];
   for (let attempt = 0; attempt < tpl.maxAttempts; attempt++) {
     const rng = new Rng((normSeed + Math.imul(attempt, 0x9e3779b1)) >>> 0);
-    const ctxOf = (layout: PlacedBuildingLayout): CompileContext => ({
-      tpl,
+    const ctxOf = (layout: PlacedBuildingLayout, source: ModularGeneratorTemplate): CompileContext => ({
+      tpl: source,
       profile,
       layout,
-      frame: computeSiteFrame(layoutBounds(layout), layout.perimeterMargin, tpl.snap, rot, mirrorX),
+      frame: computeSiteFrame(layoutBounds(layout), layout.perimeterMargin, source.snap, rot, mirrorX),
       doorLeafHeight,
       mapId,
       seed: normSeed,
     });
     if (attempt < tpl.maxAttempts - 1) {
       try {
-        const plan = planStoriesAndGraph(tpl, profile, rng);
-        const layout = solveSpatialLayout(tpl, plan, rng);
-        return compileLayout(ctxOf(layout), rng, { fallback: false, bare: false, attemptsUsed: attempt + 1, retryReasons: reasons });
+        const plan = planStoriesAndGraph(themed, profile, rng);
+        const layout = solveSpatialLayout(themed, plan, rng);
+        return compileLayout(ctxOf(layout, themed), rng, { fallback: false, bare: false, attemptsUsed: attempt + 1, retryReasons: reasons });
       } catch (err) {
         if (!(err instanceof RetryGeneration)) throw err;
         reasons.push(`#${attempt}: ${err.message}`);
@@ -1459,7 +1463,7 @@ export function generateModularMapWithMeta(
     // 最終試行: 選択プロファイルを維持した決定論的最小構成。家具が格子点補填を塞いだときは家具・外窓なしで
     // コンパイルし直す（その条件での人物同時配置は verifyFallbackFeasibility で検証済み）
     const layout = safeMinimalFor(tpl, profile, doorLeafHeight);
-    const ctx = ctxOf(layout);
+    const ctx = ctxOf(layout, tpl);
     const fbOpts = (bare: boolean): CompileOptions => ({ fallback: true, bare, attemptsUsed: attempt + 1, retryReasons: reasons });
     try {
       return compileLayout(ctx, rng, fbOpts(false));

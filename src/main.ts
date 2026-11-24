@@ -38,6 +38,7 @@ import { WorldBuilder, type Collider } from './world/WorldBuilder';
 import { DoorSystem } from './world/Door';
 import { normalizeSeed, randomSeed } from './world/generator/Rng';
 import { TextureLibrary } from './world/Materials';
+import { motifById } from './world/Motif';
 import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { SquadSystem } from './ai/Squad';
@@ -150,10 +151,14 @@ class App {
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
-    // 夕暮れ寄りの空。霧は遠景だけを沈めて奥行きを出す
-    this.scene.background = new THREE.Color(0x3a4656);
-    this.scene.fog = new THREE.Fog(0x3a4656, 30, 100);
+    // モチーフがあれば空・霧・露出を施設ごとに変える。未設定は従来の夕暮れ。
+    const motif = map.motif ? motifById(map.motif) : null;
+    const atm = motif?.atmosphere;
+    this.scene.background = new THREE.Color(atm?.background ?? 0x3a4656);
+    this.scene.fog = new THREE.Fog(atm?.fog ?? 0x3a4656, atm?.fogNear ?? 30, atm?.fogFar ?? 100);
+    if (atm) this.renderer.toneMappingExposure = atm.exposure;
     this.textures = new TextureLibrary();
+    if (motif) this.textures.bindPalette(motif.palette);
     this.world = new WorldBuilder(map, this.textures);
     this.scene.add(this.world.root);
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);
@@ -407,6 +412,7 @@ class App {
       this.interaction,
       this.mission ?? undefined,
       suspect ? undefined : this.squad,
+      motif ? { label: motif.label, color: motif.accentCss } : undefined,
     );
     this.minimap = new Minimap(
       document.body,

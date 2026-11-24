@@ -76,7 +76,9 @@ export function buildWindow(def: WindowDef, tex: TextureLibrary): THREE.Group {
   const y = (def.y ?? 0) + def.sill + def.height / 2;
   g.position.set(def.x, y, def.z);
   g.rotation.y = def.yaw * DEG;
-  const frame = mat(tex, 'wood', 0x4a3424);
+  const frame = tex.palette
+    ? new THREE.MeshStandardMaterial({ map: tex.get('doorFrame'), color: tex.doorTint?.frame ?? 0xffffff, roughness: 0.62, metalness: 0.05 })
+    : mat(tex, 'wood', 0x4a3424);
   const t = Math.min(0.06, def.width / 3, def.height / 3);
   const bar = (w: number, h: number, x: number, yy: number) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, t), frame);
