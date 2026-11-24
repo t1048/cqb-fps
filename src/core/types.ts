@@ -1085,6 +1085,8 @@ export type SquadOrder =
   | 'clear'
   | 'flashClear'
   | 'breachClear'
+  | 'c2Clear'
+  | 'gasClear'
   | 'pieDoor'
   | 'restrain';
 
