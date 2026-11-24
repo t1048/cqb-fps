@@ -16,6 +16,7 @@ export class Morale {
 
   /** 低下を適用。scale は武器倍率等（既定 1）。戻り値: 実際の低下量 */
   apply(source: MoraleSource, scale = 1): number {
+    if (!Number.isFinite(scale)) return 0;
     const m = this.profile.modifiers[source];
     const base = typeof m === 'number' ? m : m.min + Math.random() * (m.max - m.min);
     const amount = base * scale;
@@ -26,6 +27,7 @@ export class Morale {
 
   /** 符号付きの増減（正=上昇/硬化、負=低下）。交渉用。 */
   shift(delta: number): void {
+    if (!Number.isFinite(delta)) return;
     this.value = clamp(this.value + delta);
   }
 
@@ -89,6 +91,38 @@ export class MoraleSystem {
           if (dx * e.dir.x + dz * e.dir.z <= 0) continue; // 室内側のみ
           if (!hasLineOfSight(this.colliders, e.pos, c)) continue;
           a.morale.apply('breach');
+        }
+      }),
+      bus.on('c2Detonated', (e) => {
+        if (
+          !Number.isFinite(e.radius) ||
+          e.radius <= 0 ||
+          !Number.isFinite(e.pos.x) ||
+          !Number.isFinite(e.pos.y) ||
+          !Number.isFinite(e.pos.z) ||
+          !Number.isFinite(e.dir.x) ||
+          !Number.isFinite(e.dir.z)
+        ) {
+          return;
+        }
+        const dirLen = Math.hypot(e.dir.x, e.dir.z);
+        if (!Number.isFinite(dirLen) || dirLen <= 1e-6) return;
+        const dxDir = e.dir.x / dirLen;
+        const dzDir = e.dir.z / dirLen;
+        // 爆破直後のドア面自己遮蔽を避けるため爆風側へ 0.25m オフセット
+        const origin: Vec3 = { x: e.pos.x + dxDir * 0.25, y: e.pos.y, z: e.pos.z + dzDir * 0.25 };
+        for (const a of this.active()) {
+          const c = a.body.chestPos();
+          if (Math.abs(c.y - origin.y) > 2.2) continue;
+          const dx = c.x - origin.x;
+          const dz = c.z - origin.z;
+          const dist = Math.hypot(dx, dz);
+          if (dist > e.radius) continue;
+          if (dist > 0.25 && (dx * dxDir + dz * dzDir) / dist <= 0) continue;
+          if (!hasLineOfSight(this.colliders, origin, c)) continue;
+          a.morale.apply('breach', 1.25);
+          const falloff = Math.max(0.25, 1 - (dist / e.radius) * 0.72);
+          a.onFlashed?.(1.4 * falloff);
         }
       }),
       bus.on('suspectStateChanged', (e) => {

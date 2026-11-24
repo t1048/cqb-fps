@@ -92,7 +92,7 @@ class App {
   private readonly hostageGrab: HostageGrab | null = null;
   private readonly fortify: Fortify | null = null;
   private readonly pepper: PepperEffect | null = null;
-  private readonly tearGas: TearGas | null = null;
+  private readonly tearGas: TearGas;
   private readonly tearGasEffect: TearGasEffect | null = null;
   private readonly roe: RoE;
   private readonly mission: Mission | null = null;
@@ -183,6 +183,11 @@ class App {
     this.scene.add(this.doors.root);
     this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
+    this.flashOverlay = new FlashOverlay(document.body);
+    this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight);
+    this.scene.add(this.flashbang.root);
+    this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight);
+    this.scene.add(this.tearGas.root);
     this.entities = new EntityManager(
       map.entities,
       aiProfiles,
@@ -195,6 +200,7 @@ class App {
       this.textures,
       { doors: this.doors, bounds: map.floor, stairs: this.world.stairs },
       suspect,
+      this.tearGas,
     );
     this.roe.attach(this.entities);
     this.scene.add(this.entities.root);
@@ -215,6 +221,7 @@ class App {
       { range: flashDef?.range ?? 8, blindSec: flashDef?.throwable?.blindMaxSec ?? 2 },
       map.rooms,
       playerCfg.arrest,
+      { flashbang: this.flashbang, tearGas: this.tearGas },
     );
     this.entities.attachSquad(this.squad, squadCfg.presenceBonusPerAlly);
     this.scene.add(this.squad.root);
@@ -255,9 +262,6 @@ class App {
       this.warningCall = new WarningCall(playerCfg.warning, this.player, this.bus, this.subtitle, this.input);
       this.arrest = new Arrest(playerCfg.arrest, this.player, this.entities, this.bus, this.interaction);
     }
-    this.flashOverlay = new FlashOverlay(document.body);
-    this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight);
-    this.scene.add(this.flashbang.root);
     const releaseHostage = (c: Civilian): void => {
       if (c.evacuate()) this.weapons.removeTarget(c);
     };
@@ -268,8 +272,6 @@ class App {
       // 容疑者モード: 部隊指揮メニュー（Tab / 右クリック）を無効化
       this.input.orderMenuEnabled = false;
       this.input.onOrderMenu = undefined;
-      this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight);
-      this.scene.add(this.tearGas.root);
       this.swatTeam = new SwatTeam({
         spawns: swatSpawns,
         count: swatCount,
@@ -535,7 +537,7 @@ class App {
     this.doors.update(dt);
     this.world.update(dt, this.camera.position);
     this.flashbang.update(dt);
-    this.tearGas?.update(dt);
+    this.tearGas.update(dt);
     this.weapons.update(dt);
     this.entities.update(dt);
     if (this.swatTeam) this.swatTeam.update(dt);
@@ -659,7 +661,7 @@ class App {
     this.fortify?.dispose();
     this.pepper?.dispose();
     this.tearGasEffect?.dispose();
-    this.tearGas?.dispose();
+    this.tearGas.dispose();
     this.negotiationPhase.dispose();
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.hud.dispose();

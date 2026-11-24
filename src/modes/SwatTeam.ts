@@ -14,13 +14,85 @@ import {
 import { HumanoidBody } from '../ai/HumanoidBody';
 import { noiseRayOriginY } from '../ai/Perception';
 import { shieldBlocks } from '../ai/ShieldGuard';
-import { blockedAtFiltered, reachableRouteLength } from '../ai/SquadRoute';
-import { layoutStackSlots, type StackSlotPortal } from '../ai/stackSlots';
+import { blockedAtFiltered } from '../ai/SquadRoute';
+import { layoutStackSlots } from '../ai/stackSlots';
+import {
+  BASE_SHIELD_COMBAT,
+  BASE_SHIELD_MOBILITY,
+  BASE_SWAT_COMBAT,
+  BASE_SWAT_MOBILITY,
+  SWAT_C2_BEEP_INTERVAL,
+  SWAT_C2_FUSE_SEC,
+  SWAT_C2_PLANT_SEC,
+  SWAT_C2_URGENT_AT_SEC,
+  SWAT_C2_URGENT_BEEP_INTERVAL,
+  SWAT_FLASH_CARRY_MAX,
+  SWAT_FLASH_MAX_DIST,
+  SWAT_FLASH_MIN_DIST,
+  SWAT_FLASH_PER_TEAM,
+  SWAT_FOOTSTEP_STRIDE_FAST,
+  SWAT_FOOTSTEP_STRIDE_NORMAL,
+  SWAT_GAS_MAX_DIST,
+  SWAT_GAS_MIN_DIST,
+  SWAT_GAS_PER_TEAM,
+  SWAT_HP,
+  SWAT_PEPPER_INTERVAL,
+  SWAT_PEPPER_RANGE,
+  SWAT_RADIO_STAGGER_SEC,
+  SWAT_READY_POSE,
+  SWAT_RUSH_DURATION_SEC,
+  SWAT_RUSH_LOW_HP,
+  SWAT_RUSH_RADIUS,
+  SWAT_RUSH_SPEED_MAX,
+  SWAT_RUSH_SPEED_MIN,
+  SWAT_RUSH_TEAM_COOLDOWN,
+  SWAT_SHIELD_RUSH_SPEED,
+  SWAT_SUPPRESS_END_SEC,
+  SWAT_SUPPRESS_INTERVAL,
+  SWAT_SUPPRESS_START_SEC,
+  SWAT_UNIFORM_COLOR,
+  cloneCombatProfile,
+  cloneMobilityProfile,
+  isShieldRole,
+} from '../ai/SwatProfile';
+import {
+  C2_BLAST_RADIUS,
+  C2_MIN_LOCKED_DOORS,
+  C2_PRESSURE_THRESHOLD,
+  assignCellPortals,
+  buildStackSlotPortal,
+  computeBallisticVelocity,
+  computeC2Standoff,
+  entryRouteDest,
+  evaluateC2BlastCone,
+  filterReachableExteriorEntries,
+  findRoomDoors,
+  isIndoorPoint,
+  listExteriorEntries,
+  planDoorwayFlashThrow,
+  planFlashThrow,
+  planPincerFlankGoal,
+  planWallBankFlashThrow,
+  planWindowFlashThrow,
+  raycastWallXZ,
+  selectPinningCell,
+  shouldUseC2Breach,
+  type C2BlastResult,
+  type EntryPortal,
+  type EntryRoute,
+  type EntrySample,
+  type FlankDoorSample,
+  type FlashDoorSample,
+  type FlashThrowPlan,
+  type PincerFlankGoal,
+  type PincerFlankParams,
+  type PinningCellInfo,
+} from '../ai/SwatTactics';
+import { TacticalOptics } from '../ai/TacticalOptics';
 import type { PlayerCombatReceiver } from '../ai/EntityManager';
 import { hasLineOfSight, type Flashbang } from '../weapons/Flashbang';
 import type { TearGas } from '../weapons/TearGas';
 import type { HitTarget, WeaponSystem } from '../weapons/WeaponSystem';
-import { raycastColliders } from '../world/ColliderIndex';
 import type { Door, DoorSystem } from '../world/Door';
 import type { TextureLibrary } from '../world/Materials';
 import type { StairMark } from '../world/Walk';
@@ -30,95 +102,62 @@ import type { Subtitle } from '../ui/Subtitle';
 import type { BarricadeHooks, BarricadeInfo } from './Fortify';
 
 export type { BarricadeHooks, BarricadeInfo } from './Fortify';
+export {
+  C2_BLAST_RADIUS,
+  C2_MIN_LOCKED_DOORS,
+  C2_PRESSURE_THRESHOLD,
+  assignCellPortals,
+  buildStackSlotPortal,
+  computeBallisticVelocity,
+  computeC2Standoff,
+  entryRouteDest,
+  evaluateC2BlastCone,
+  filterReachableExteriorEntries,
+  findRoomDoors,
+  isIndoorPoint,
+  listExteriorEntries,
+  planDoorwayFlashThrow,
+  planFlashThrow,
+  planPincerFlankGoal,
+  planWallBankFlashThrow,
+  planWindowFlashThrow,
+  raycastWallXZ,
+  selectPinningCell,
+  shouldUseC2Breach,
+};
+export type {
+  C2BlastResult,
+  EntryPortal,
+  EntryRoute,
+  EntrySample,
+  FlankDoorSample,
+  FlashDoorSample,
+  FlashThrowPlan,
+  PincerFlankGoal,
+  PincerFlankParams,
+  PinningCellInfo,
+};
 
 /**
- * 容疑者モード専用の SWAT 戦闘パラメータ（EngageBehavior をこのモードだけで使う）。
- * 通常モードの容疑者プロファイルは変えない。開けた場所では危険だが、遮蔽と短いピークの隙で撃ち返せる強さ。
+ * 容疑者モードの SWAT 戦闘パラメータ（基準値は SwatProfile.ts）。
+ * 圧力（時間経過で SWAT が積極的になる）に応じて SwatTeam が毎秒書き換える（生成時に基準値へ戻す）。
  */
-export const SWAT_COMBAT: CombatParams = {
-  decisionSec: 0.7,
-  alertCalmSec: 10,
-  hesitateFireSec: 3,
-  hesitateRetreatSpeed: 0.8,
-  hesitateRetreatMax: 1.5,
-  hesitateShakeDeg: 0,
-  moveSpeed: 2.35,
-  fireInterval: 0.2,
-  shotsPerPeek: 4,
-  magazineSize: 30,
-  reloadSec: 2.2,
-  coverSecMin: 0.9,
-  coverSecMax: 1.8,
-  peekSecMax: 1.4,
-  engageRange: 18,
-  coverSearchRange: 6,
-  coverMargin: 0.45,
-  crouchCoverMaxHeight: 1.5,
-  flinchSec: 0.35,
-  gunshotNoiseRadius: 40,
-  shotDamage: 13,
-  baseSpreadDeg: 3.2,
-};
-
-const SWAT_MOBILITY: MobilityParams = {
-  canOpenDoors: true,
-  canUseStairs: true,
-  patrolChance: 0,
-  patrolIntervalMin: 99,
-  patrolIntervalMax: 99,
-  patrolSpeedScale: 0.6,
-  investigateChance: 1,
-  investigateMaxDist: 40,
-  investigateSpeedScale: 0.9,
-  reinforceOnGunshot: true,
-  repositionAfterLostSec: 1.6,
-  flankChance: 0.5,
-  guardHostageRoom: false,
-};
+export const SWAT_COMBAT: CombatParams = cloneCombatProfile(BASE_SWAT_COMBAT);
+const SWAT_MOBILITY: MobilityParams = cloneMobilityProfile(BASE_SWAT_MOBILITY);
 
 /**
  * 盾持ち隊員（ポイントマン）: 防弾盾を構えてハンドガンで撃ちながら前進する。遮蔽には籠らず、見失えば即座に詰める。
  * 盾は脛より上の正面を完全に防ぐので、足元を撃つか側面・背後へ回り込むしか倒せない。圧力で SwatTeam が一部を書き換える。
  */
-export const SHIELD_COMBAT: CombatParams = {
-  ...SWAT_COMBAT,
-  moveSpeed: 1.95,
-  fireInterval: 0.32,
-  shotsPerPeek: 5,
-  magazineSize: 15,
-  reloadSec: 1.8,
-  coverSecMin: 0.25,
-  coverSecMax: 0.5,
-  peekSecMax: 2.4,
-  coverSearchRange: 0,
-  flinchSec: 0.06,
-  shotDamage: 9,
-  baseSpreadDeg: 2.6,
-};
-const SHIELD_MOBILITY: MobilityParams = {
-  ...SWAT_MOBILITY,
-  repositionAfterLostSec: 0.5,
-  flankChance: 0,
-};
-const BASE_SHIELD_COMBAT: Readonly<CombatParams> = { ...SHIELD_COMBAT };
+export const SHIELD_COMBAT: CombatParams = cloneCombatProfile(BASE_SHIELD_COMBAT);
+const SHIELD_MOBILITY: Readonly<MobilityParams> = BASE_SHIELD_MOBILITY;
 
-/**
- * 圧力（時間経過で SWAT が積極的になる）。SWAT_COMBAT / SWAT_MOBILITY は SwatTeam が毎秒書き換える（生成時に基準値へ戻す）。
- * 隠れて撃つだけの籠城を許さず、時間が経つほど遮蔽に籠る時間が短く・射撃が正確に・回り込みが速くなる。
- */
-const BASE_COMBAT: Readonly<CombatParams> = { ...SWAT_COMBAT };
-const BASE_MOBILITY: Readonly<MobilityParams> = { ...SWAT_MOBILITY };
 /** 突入開始から圧力が最大になるまでの秒数 */
 export const PRESSURE_RAMP_SEC = 95;
 /** 隊員が倒されるたびに残りが本気になる加算量 */
 export const PRESSURE_PER_DOWN = 0.12;
 /** 閃光弾の補充間隔(s)。圧力が高いほどクールダウンも短い */
 const FLASH_REFILL_SEC = 45;
-const FLASH_CARRY_MAX = 4;
-/** 姿を見失った直後、最後に見えた位置への制圧射撃（リーン撃ち・顔出し対策） */
-const SUPPRESS_MIN_LOST = 0.35;
-const SUPPRESS_MAX_LOST = 3.5;
-const SUPPRESS_INTERVAL = 0.5;
 /** ドローン熱源探知: 隠れ続ける相手の大まかな位置を共有する間隔(s)と誤差半径(m)。圧力 0.3 以上で作動 */
 const INTEL_INTERVAL_MIN = 16;
 const INTEL_INTERVAL_MAX = 38;
@@ -128,8 +167,6 @@ const INTEL_ERROR_MIN = 2.5;
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 const DEG2RAD = Math.PI / 180;
-/** ボディアーマー込み。改造拳銃（19 ダメージ）で約 6 発 */
-const HP = 100;
 export const VISION_FOV_DEG = 120;
 const VISION_RANGE = 16;
 const VISION_RANGE_CROUCH = 11;
@@ -141,34 +178,12 @@ const ENGAGE_LOST_SEC = 5;
 const SWEEP_SPEED = 1.0;
 const HUNT_SPEED = 1.05;
 const FLASH_TEAM_CD = 14;
-const FLASH_PER_TEAM = 3;
-const FLASH_MIN_DIST = 3.2;
-const FLASH_MAX_DIST = 9;
 const SELF_NOISE_RADIUS = 3.2;
-/** 弱った瞬間（フラッシュ/リロード/ペッパー/低HP）へのラッシュ設定 */
-const RUSH_LOW_HP = 40;
-const RUSH_RADIUS = 14;
-const RUSH_DURATION_SEC = 5.5;
-const RUSH_TEAM_COOLDOWN = 6.0;
-const RUSH_SPEED_MIN = 2.7;
-const RUSH_SPEED_MAX = 2.9;
-const SHIELD_RUSH_SPEED = 2.35;
 /** 多方向同時突入（F6）のスタック・カウントダウン設定 */
 const STACK_OFFSET = 0.48;
 const STACK_PERSONAL_SPACE = 0.68;
 const STACK_TIMEOUT_SEC = 18;
 const ENTRY_COUNTDOWN_SEC = 2.4;
-/** C2 爆破ブリーチ（F8）設定 */
-export const C2_PRESSURE_THRESHOLD = 0.4;
-export const C2_MIN_LOCKED_DOORS = 2;
-const C2_PLANT_SEC = 0.8;
-const C2_FUSE_SEC = 1.8;
-const C2_URGENT_AT_SEC = 1.1;
-const C2_BEEP_INTERVAL = 0.45;
-const C2_URGENT_BEEP_INTERVAL = 0.2;
-export const C2_BLAST_RADIUS = 4.5;
-const C2_CONE_HALF_ANGLE_DEG = 70;
-const C2_MAX_DAMAGE = 45;
 /** 窓バリケード破壊（F9）設定 */
 export const BARRICADE_SHOOT_RANGE = 14;
 const BARRICADE_MIN_DIST = 1.0;
@@ -195,9 +210,6 @@ const RADIO_NAME = 'SWAT無線(傍受)';
 
 export type HunterState = 'staging' | 'stack' | 'sweep' | 'hunt' | 'breach' | 'engage' | 'rush' | 'disarm' | 'down';
 
-/** ペッパーボール（人質・民間人が射線上にいて実弾を撃てないとき） */
-const PEPPER_INTERVAL = 0.42;
-const PEPPER_RANGE = 20;
 /** トラップに気付く距離と確率（一度トラップを見つけた後は警戒して上がる） */
 const TRAP_SPOT_DIST = 2.1;
 const TRAP_SPOT_CHANCE = 0.35;
@@ -295,9 +307,6 @@ const NAMES = ['アルファ', 'ブラボー', 'チャーリー', 'デルタ', '
 
 const CAMP_GAS_THRESHOLD_SEC = 20;
 const GAS_TEAM_CD = 24;
-const GAS_PER_TEAM = 3;
-const GAS_MIN_DIST = 2.0;
-const GAS_MAX_DIST = 13.0;
 
 /** 同一室内での滞在秒数を更新する純粋ヘルパ（屋外または部屋移動で 0 リセット） */
 export function updateRoomStay(
@@ -313,7 +322,7 @@ export function updateRoomStay(
 }
 
 /** 連携無線の最小発話間隔（秒）。speechSynthesis の即時キャンセルを防ぐため >= 1.2s とする */
-export const RADIO_STAGGER_SEC = 1.25;
+export const RADIO_STAGGER_SEC = SWAT_RADIO_STAGGER_SEC;
 
 /** 建物中心に対する入口の方角ラベル（日英）を返す */
 export function describePortalDirection(portalPos: Vec3, center: Vec3): { ja: string; en: string } {
@@ -352,125 +361,12 @@ export function shouldTriggerReinforcements(c: ReinforcementCheck): boolean {
   return c.killsSinceLastWave >= REINFORCEMENT_TRIGGER_KILLS;
 }
 
-const LASER_MAX_DIST = 18;
-const FLASHLIGHT_MAX_DIST = 10;
-const LASER_RADIUS = 0.0045;
-const LASER_DOT_RADIUS = 0.028;
-const CONE_UNIT_END_RADIUS = 0.2;
-const UNIT_Z = new THREE.Vector3(0, 0, 1);
-
-/**
- * 隊員 1 名分のタクティカルレーザー・着弾ドット・フラッシュライト光芒（F11）。
- * 動的ライト（PointLight / SpotLight）は一切追加せず、加算合成の MeshBasicMaterial のみで描画する。
- */
-class TacticalOptics {
-  readonly group = new THREE.Group();
-  readonly laserMesh: THREE.Mesh;
-  readonly dotMesh: THREE.Mesh;
-  readonly coneMesh: THREE.Mesh;
-  private readonly dirVec = new THREE.Vector3();
-  private readonly quat = new THREE.Quaternion();
-
-  constructor() {
-    this.group.name = 'tacticalOptics';
-    this.group.visible = false;
-
-    const laserGeo = new THREE.CylinderGeometry(LASER_RADIUS, LASER_RADIUS, 1, 6, 1, true);
-    laserGeo.translate(0, 0.5, 0);
-    laserGeo.rotateX(Math.PI / 2);
-    const laserMat = new THREE.MeshBasicMaterial({
-      color: 0xff2222,
-      transparent: true,
-      opacity: 0.45,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    this.laserMesh = new THREE.Mesh(laserGeo, laserMat);
-    this.laserMesh.frustumCulled = false;
-
-    const dotGeo = new THREE.SphereGeometry(LASER_DOT_RADIUS, 6, 6);
-    const dotMat = new THREE.MeshBasicMaterial({
-      color: 0xff4433,
-      transparent: true,
-      opacity: 0.92,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    this.dotMesh = new THREE.Mesh(dotGeo, dotMat);
-    this.dotMesh.frustumCulled = false;
-
-    const coneGeo = new THREE.CylinderGeometry(CONE_UNIT_END_RADIUS, 0.008, 1, 12, 1, true);
-    coneGeo.translate(0, 0.5, 0);
-    coneGeo.rotateX(Math.PI / 2);
-    const coneMat = new THREE.MeshBasicMaterial({
-      color: 0xdceeff,
-      transparent: true,
-      opacity: 0.065,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    this.coneMesh = new THREE.Mesh(coneGeo, coneMat);
-    this.coneMesh.frustumCulled = false;
-
-    this.group.add(this.laserMesh, this.dotMesh, this.coneMesh);
-  }
-
-  update(origin: Vec3, dir: Vec3, colliders: readonly Collider[]): void {
-    const hitDist = raycastColliders(colliders, origin, dir, LASER_MAX_DIST);
-    this.dirVec.set(dir.x, dir.y, dir.z);
-    if (this.dirVec.lengthSq() < 1e-8) {
-      this.hide();
-      return;
-    }
-    this.dirVec.normalize();
-    this.quat.setFromUnitVectors(UNIT_Z, this.dirVec);
-
-    this.group.visible = true;
-    this.laserMesh.visible = true;
-    this.laserMesh.position.set(origin.x, origin.y, origin.z);
-    this.laserMesh.quaternion.copy(this.quat);
-    this.laserMesh.scale.set(1, 1, Math.max(0.02, hitDist));
-
-    const hitWall = hitDist < LASER_MAX_DIST - 0.05;
-    this.dotMesh.visible = hitWall;
-    if (hitWall) {
-      const d = Math.max(0, hitDist - 0.015);
-      this.dotMesh.position.set(
-        origin.x + this.dirVec.x * d,
-        origin.y + this.dirVec.y * d,
-        origin.z + this.dirVec.z * d,
-      );
-    }
-
-    const coneLen = Math.min(hitDist, FLASHLIGHT_MAX_DIST);
-    this.coneMesh.visible = coneLen > 0.08;
-    if (this.coneMesh.visible) {
-      this.coneMesh.position.set(origin.x, origin.y, origin.z);
-      this.coneMesh.quaternion.copy(this.quat);
-      this.coneMesh.scale.set(coneLen, coneLen, coneLen);
-    }
-  }
-
-  hide(): void {
-    this.group.visible = false;
-    this.laserMesh.visible = false;
-    this.dotMesh.visible = false;
-    this.coneMesh.visible = false;
-  }
-
-  dispose(): void {
-    this.group.removeFromParent();
-    disposeObject(this.group);
-  }
-}
-
 /** SWAT 隊員 1 名。部屋の掃討・音/目撃情報の追跡・施錠ドアのブリーチ・交戦を行う。 */
 class SwatHunter implements HitTarget {
   readonly body: HumanoidBody;
   readonly nav: SuspectNavigator;
   readonly engage: EngageBehavior;
-  hp = HP;
+  hp = SWAT_HP;
   state: HunterState = 'staging';
   /** 所属する組（先頭ほど序列が上。生存者の先頭がその組のリーダー） */
   cell: SwatHunter[] = [this];
@@ -516,7 +412,7 @@ class SwatHunter implements HitTarget {
   barricadeBurst = 0;
   /** 民間人が射線上で実弾を撃てない脅威（ペッパーボールで撃つ） */
   pepperThreat: Vec3 | null = null;
-  pepperCd = Math.random() * PEPPER_INTERVAL;
+  pepperCd = Math.random() * SWAT_PEPPER_INTERVAL;
   suppressCd = 0;
   readonly combat: CombatParams;
   disarmDoor: Door | null = null;
@@ -547,9 +443,9 @@ class SwatHunter implements HitTarget {
     this.lastStepX = spawn.x;
     this.lastStepZ = spawn.z;
     this.combat = shielded ? SHIELD_COMBAT : SWAT_COMBAT;
-    this.body = new HumanoidBody(spawn.x, spawn.z, 0, 0x2b3440, true, { role: 'ally', footY: spawn.y, textures, shield: shielded });
+    this.body = new HumanoidBody(spawn.x, spawn.z, 0, SWAT_UNIFORM_COLOR, true, { role: 'ally', footY: spawn.y, textures, shield: shielded });
     this.body.ground = ctx.colliders;
-    this.body.setReadyPose('high');
+    this.body.setReadyPose(SWAT_READY_POSE);
     this.nav = new SuspectNavigator(this.body, ctx);
     this.engage = new EngageBehavior(
       this.combat,
@@ -640,7 +536,7 @@ class SwatHunter implements HitTarget {
     }
     if (next === 'rush') {
       this.body.setPose('stand');
-      this.rushTimer = RUSH_DURATION_SEC;
+      this.rushTimer = SWAT_RUSH_DURATION_SEC;
       this.rushFireCd = 0;
       this.rushFlinch = 0;
     }
@@ -730,7 +626,7 @@ class SwatHunter implements HitTarget {
     this.lastStepZ = this.body.pz;
     if (moved > 0.001 && moved < 1.5) {
       this.stepAccum += moved;
-      const stride = this.state === 'rush' || this.state === 'stack' ? 0.85 : 1.05;
+      const stride = this.state === 'rush' || this.state === 'stack' ? SWAT_FOOTSTEP_STRIDE_FAST : SWAT_FOOTSTEP_STRIDE_NORMAL;
       if (this.stepAccum >= stride) {
         this.stepAccum -= stride;
         const heavy = this.shielded || this.state === 'rush' || this.state === 'stack' || this.state === 'breach';
@@ -824,17 +720,17 @@ class SwatHunter implements HitTarget {
     this.engage.update(dt, k, this.sees, this.threat);
     this.pepperCd = Math.max(0, this.pepperCd - dt);
     if (!this.sees && this.pepperThreat && this.pepperCd <= 0) {
-      this.pepperCd = PEPPER_INTERVAL * (0.8 + Math.random() * 0.5);
+      this.pepperCd = SWAT_PEPPER_INTERVAL * (0.8 + Math.random() * 0.5);
       this.lostSec = 0;
       this.body.faceToward(this.pepperThreat.x, this.pepperThreat.z);
       this.team.firePepper(this, this.pepperThreat);
     }
     // 見失った直後: 最後に見えた位置へ閃光を投げ込み、バリケード破壊や制圧射撃で顔出しを潰す
     this.suppressCd = Math.max(0, this.suppressCd - dt);
-    if (!this.sees && !this.pepperThreat && k && this.lostSec >= SUPPRESS_MIN_LOST && this.lostSec <= SUPPRESS_MAX_LOST) {
+    if (!this.sees && !this.pepperThreat && k && this.lostSec >= SWAT_SUPPRESS_START_SEC && this.lostSec <= SWAT_SUPPRESS_END_SEC) {
       if (this.lostSec >= 0.6) this.team.tryFlash(this, k);
       if (!this.team.tryShootBarricade(this, dt) && this.suppressCd <= 0) {
-        this.suppressCd = SUPPRESS_INTERVAL * (0.8 + Math.random() * 0.5);
+        this.suppressCd = SWAT_SUPPRESS_INTERVAL * (0.8 + Math.random() * 0.5);
         this.team.suppress(this, k);
       }
     }
@@ -867,7 +763,7 @@ class SwatHunter implements HitTarget {
       this.setState('sweep');
       return;
     }
-    const speed = this.shielded ? SHIELD_RUSH_SPEED : lerp(RUSH_SPEED_MIN, RUSH_SPEED_MAX, this.team.currentPressure);
+    const speed = this.shielded ? SWAT_SHIELD_RUSH_SPEED : lerp(SWAT_RUSH_SPEED_MIN, SWAT_RUSH_SPEED_MAX, this.team.currentPressure);
     const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, goal, this.assignedPortal?.id);
     if (route.phase !== 'direct') {
       this.followEntry(route, dt, speed / this.combat.moveSpeed);
@@ -903,7 +799,7 @@ class SwatHunter implements HitTarget {
         this.rushFireCd = this.combat.fireInterval;
       }
     } else if (!this.sees && this.pepperThreat && this.pepperCd <= 0) {
-      this.pepperCd = PEPPER_INTERVAL * (0.8 + Math.random() * 0.5);
+      this.pepperCd = SWAT_PEPPER_INTERVAL * (0.8 + Math.random() * 0.5);
       this.body.faceToward(this.pepperThreat.x, this.pepperThreat.z);
       this.team.firePepper(this, this.pepperThreat);
     }
@@ -1217,7 +1113,7 @@ class SwatHunter implements HitTarget {
       this.body.faceToward(door.centerX, door.centerZ);
       this.body.setPose('crouch');
       this.c2Timer += dt;
-      if (this.c2Timer >= C2_PLANT_SEC) {
+      if (this.c2Timer >= SWAT_C2_PLANT_SEC) {
         this.body.setPose('stand');
         this.c2Standoff = computeC2Standoff(door, this.c2Side, this.ctx.colliders, {
           x: this.body.px,
@@ -1244,13 +1140,13 @@ class SwatHunter implements HitTarget {
     this.body.faceToward(door.centerX, door.centerZ);
     this.c2Timer += dt;
     this.c2BeepTimer += dt;
-    const urgent = this.c2Timer >= C2_URGENT_AT_SEC;
-    const interval = urgent ? C2_URGENT_BEEP_INTERVAL : C2_BEEP_INTERVAL;
-    if (this.c2BeepTimer >= interval && this.c2Timer < C2_FUSE_SEC) {
+    const urgent = this.c2Timer >= SWAT_C2_URGENT_AT_SEC;
+    const interval = urgent ? SWAT_C2_URGENT_BEEP_INTERVAL : SWAT_C2_BEEP_INTERVAL;
+    if (this.c2BeepTimer >= interval && this.c2Timer < SWAT_C2_FUSE_SEC) {
       this.c2BeepTimer = 0;
       this.team.emitC2Beep(door, urgent);
     }
-    if (this.c2Timer >= C2_FUSE_SEC) {
+    if (this.c2Timer >= SWAT_C2_FUSE_SEC) {
       this.team.detonateC2(this, door, this.c2Side);
       this.clearBreachState();
       this.setState(this.huntTarget ? 'hunt' : 'sweep');
@@ -1288,110 +1184,7 @@ class SwatHunter implements HitTarget {
   }
 }
 
-export interface EntrySample {
-  id: string;
-  centerX: number;
-  centerZ: number;
-  normalX: number;
-  normalZ: number;
-  sillY: number;
-}
 
-export interface EntryPortal {
-  id: string;
-  outside: Vec3;
-  inside: Vec3;
-  sillY: number;
-}
-
-export interface EntryRoute {
-  dest: Vec3;
-  entryId: string | null;
-  /** direct = 目標そのもの。approach = 屋外側の入口。cross = ドアを抜けた屋内側 */
-  phase: 'direct' | 'approach' | 'cross';
-}
-
-/** 屋内の部屋（outdoor 以外）にいるか。重なる場合は小さい部屋を優先する。 */
-export function isIndoorPoint(rooms: readonly RoomDef[], x: number, z: number, y: number): boolean {
-  let best: RoomDef | null = null;
-  let bestArea = Infinity;
-  for (const r of rooms) {
-    if (r.outdoor) continue;
-    if (Math.abs((r.floorY ?? 0) - y) > 0.75) continue;
-    if (Math.abs(x - r.x) > r.width / 2 || Math.abs(z - r.z) > r.depth / 2) continue;
-    const area = r.width * r.depth;
-    if (area < bestArea) {
-      bestArea = area;
-      best = r;
-    }
-  }
-  return best !== null;
-}
-
-const ENTRY_OFFSETS = [0.8, 1.25];
-
-/** 片側だけ屋内のドア（外壁の入口）。室内ドアは除外する。 */
-export function listExteriorEntries(rooms: readonly RoomDef[], doors: readonly EntrySample[]): EntryPortal[] {
-  const out: EntryPortal[] = [];
-  for (const door of doors) {
-    for (const dist of ENTRY_OFFSETS) {
-      const ax = door.centerX + door.normalX * dist;
-      const az = door.centerZ + door.normalZ * dist;
-      const bx = door.centerX - door.normalX * dist;
-      const bz = door.centerZ - door.normalZ * dist;
-      const aIn = isIndoorPoint(rooms, ax, az, door.sillY);
-      const bIn = isIndoorPoint(rooms, bx, bz, door.sillY);
-      if (aIn === bIn) continue;
-      const inside = aIn ? { x: ax, y: door.sillY, z: az } : { x: bx, y: door.sillY, z: bz };
-      const outside = aIn ? { x: bx, y: door.sillY, z: bz } : { x: ax, y: door.sillY, z: az };
-      out.push({ id: door.id, outside, inside, sillY: door.sillY });
-      break;
-    }
-  }
-  return out;
-}
-
-function pickEntryPortal(entries: readonly EntryPortal[], from: Vec3, goal: Vec3): EntryPortal | null {
-  const same = entries.filter((e) => Math.abs(e.sillY - from.y) < 1.1);
-  const pool = same.length > 0 ? same : entries;
-  let best: EntryPortal | null = null;
-  let bestScore = Infinity;
-  for (const e of pool) {
-    const score =
-      Math.hypot(e.outside.x - from.x, e.outside.z - from.z) +
-      Math.hypot(e.inside.x - goal.x, e.inside.z - goal.z) +
-      Math.abs(e.sillY - goal.y) * 4;
-    if (score < bestScore) {
-      bestScore = score;
-      best = e;
-    }
-  }
-  return best;
-}
-
-/**
- * 屋外にいる隊員が屋内の音・部屋へ向かうとき、外壁ドアの進入点を返す。
- * 直線距離で壁の向こうに「着いた」ことにしない。屋内に入ってから本来の目標へ進む。
- */
-export function entryRouteDest(
-  rooms: readonly RoomDef[],
-  entries: readonly EntryPortal[],
-  from: Vec3,
-  goal: Vec3,
-  preferPortalId?: string | null,
-): EntryRoute {
-  if (isIndoorPoint(rooms, from.x, from.z, from.y) || !isIndoorPoint(rooms, goal.x, goal.z, goal.y)) {
-    return { dest: goal, entryId: null, phase: 'direct' };
-  }
-  const preferred = preferPortalId
-    ? entries.find((e) => e.id === preferPortalId && Math.abs(e.sillY - from.y) < 1.1) ?? null
-    : null;
-  const portal = preferred ?? pickEntryPortal(entries, from, goal);
-  if (!portal) return { dest: goal, entryId: null, phase: 'direct' };
-  const dist = Math.hypot(portal.outside.x - from.x, portal.outside.z - from.z);
-  if (dist > 1.15) return { dest: portal.outside, entryId: portal.id, phase: 'approach' };
-  return { dest: portal.inside, entryId: portal.id, phase: 'cross' };
-}
 
 /**
  * 容疑者モードの敵 SWAT チーム。2 人 1 組で部屋を順に掃討し、音・目撃情報は無線で共有する。
@@ -1411,7 +1204,7 @@ export class SwatTeam {
   private readonly unsubs: (() => void)[] = [];
   private flashCd = 6;
   private droneCd = 0;
-  private flashesLeft = FLASH_PER_TEAM;
+  private flashesLeft = SWAT_FLASH_PER_TEAM;
   private flashRefill = 0;
   private shieldHintShown = false;
   /** 突入開始からの秒数と圧力(0〜1)。倒された隊員の数でも上がる */
@@ -1461,7 +1254,7 @@ export class SwatTeam {
   private playerRoomId: string | null = null;
   private playerRoomStaySec = 0;
   private gasCd = 8;
-  private gasLeft = GAS_PER_TEAM;
+  private gasLeft = SWAT_GAS_PER_TEAM;
   /** レーザー・ライト光芒（F11）のワークベクトル */
   private readonly muzzleOriginTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly muzzleDirTmp: Vec3 = { x: 0, y: 0, z: -1 };
@@ -1483,8 +1276,8 @@ export class SwatTeam {
   constructor(private readonly d: SwatTeamDeps) {
     this.root.name = 'swatTeam';
     this.root.add(this.c2BlastLight);
-    Object.assign(SWAT_COMBAT, BASE_COMBAT);
-    Object.assign(SWAT_MOBILITY, BASE_MOBILITY);
+    Object.assign(SWAT_COMBAT, BASE_SWAT_COMBAT);
+    Object.assign(SWAT_MOBILITY, BASE_SWAT_MOBILITY);
     Object.assign(SHIELD_COMBAT, BASE_SHIELD_COMBAT);
     this.rooms = d.rooms.filter((r) => !r.outdoor);
     this.reinforcementsEnabled = Boolean(d.reinforcements);
@@ -1515,7 +1308,7 @@ export class SwatTeam {
         ctx,
         d.bus,
         d.textures,
-        i === 0 && spawns.length >= 2,
+        isShieldRole(i, spawns.length),
       );
       this.hunters.push(h);
       this.root.add(h.body.group);
@@ -1562,7 +1355,7 @@ export class SwatTeam {
         if (e.duration > 0.3) this.triggerRush(e.pos, 'blind');
       }),
       d.bus.on('playerHit', (e) => {
-        if (e.hp > 0 && e.hp <= RUSH_LOW_HP) {
+        if (e.hp > 0 && e.hp <= SWAT_RUSH_LOW_HP) {
           const p = d.player.position;
           this.triggerRush({ x: p.x, y: p.y, z: p.z }, 'lowHp');
         }
@@ -1680,7 +1473,7 @@ export class SwatTeam {
 
     for (let k = 0; k < spawns.length; k++) {
       const idNum = this.nextHunterId++;
-      const shielded = k === 0 && spawns.length >= 2;
+      const shielded = isShieldRole(k, spawns.length);
       const h = new SwatHunter(
         `swat_${idNum}`,
         `${cellName}-${k + 1}`,
@@ -2049,8 +1842,8 @@ export class SwatTeam {
           this.d.windows ?? [],
           this.d.colliders,
           gas.gravity ?? 9.8,
-          GAS_MIN_DIST,
-          GAS_MAX_DIST,
+          SWAT_GAS_MIN_DIST,
+          SWAT_GAS_MAX_DIST,
         );
         if (!plan) continue;
         gas.throwFrom(origin, plan.velocity, h.id, plan.fuse);
@@ -2198,7 +1991,7 @@ export class SwatTeam {
       this.radio(by, `容疑者を視認！${this.roomName(pos)}だ！`, 'Contact! Suspect spotted!', true);
     }
     this.alertTeam(pos, true, 30, by);
-    if (this.d.player.hp !== undefined && this.d.player.hp > 0 && this.d.player.hp <= RUSH_LOW_HP) {
+    if (this.d.player.hp !== undefined && this.d.player.hp > 0 && this.d.player.hp <= SWAT_RUSH_LOW_HP) {
       this.triggerRush(pos, 'lowHp');
     }
   }
@@ -2213,7 +2006,7 @@ export class SwatTeam {
         h,
         dist: Math.hypot(h.body.px - pos.x, h.body.pz - pos.z) + Math.abs(h.body.footY - pos.y) * 3,
       }))
-      .filter((x) => x.dist <= RUSH_RADIUS)
+      .filter((x) => x.dist <= SWAT_RUSH_RADIUS)
       .sort((a, b) => a.dist - b.dist)
       .slice(0, 3);
     if (candidates.length === 0) return false;
@@ -2222,7 +2015,7 @@ export class SwatTeam {
       h.known = { x: pos.x, y: pos.y, z: pos.z };
       h.setState('rush');
     }
-    this.rushCd = RUSH_TEAM_COOLDOWN;
+    this.rushCd = SWAT_RUSH_TEAM_COOLDOWN;
     this.shareSighting(pos);
     const lines: Record<'blind' | 'reload' | 'pepper' | 'lowHp', [string, string]> = {
       blind: ['フラッシュ命中！ 今だ、一気に詰めろ！', 'Flash hit! Push in now!'],
@@ -2528,7 +2321,7 @@ export class SwatTeam {
   tryFlash(by: SwatHunter, target: Vec3): void {
     if (this.flashCd > 0 || this.flashesLeft <= 0 || this.sightingAge > 12 || this.hostageShieldUp()) return; // 人質が巻き込まれるので投げない
     const d = Math.hypot(target.x - by.body.px, target.z - by.body.pz);
-    if (d < 2.0 || d > FLASH_MAX_DIST + 2 || Math.abs(target.y - by.body.footY) > 0.75) return;
+    if (d < 2.0 || d > SWAT_FLASH_MAX_DIST + 2 || Math.abs(target.y - by.body.footY) > 0.75) return;
     const from = by.body.chestPos();
     const origin = { x: from.x, y: from.y + 0.25, z: from.z };
     const plan = planFlashThrow(
@@ -2538,8 +2331,8 @@ export class SwatTeam {
       this.d.windows ?? [],
       this.d.colliders,
       this.d.flashbang.gravity,
-      FLASH_MIN_DIST,
-      FLASH_MAX_DIST,
+      SWAT_FLASH_MIN_DIST,
+      SWAT_FLASH_MAX_DIST,
     );
     if (!plan) return;
     this.launchFlash(by, origin, plan.velocity, plan.fuse);
@@ -2573,7 +2366,7 @@ export class SwatTeam {
     this.flashRefill += dt;
     if (this.flashRefill >= FLASH_REFILL_SEC * lerp(1, 0.55, this.pressure)) {
       this.flashRefill = 0;
-      if (this.flashesLeft < FLASH_CARRY_MAX) this.flashesLeft++;
+      if (this.flashesLeft < SWAT_FLASH_CARRY_MAX) this.flashesLeft++;
     }
     this.updateIntel(dt);
   }
@@ -2583,7 +2376,7 @@ export class SwatTeam {
     this.pressure = t;
     this.reactionSec = lerp(BASE_REACTION_SEC, 0.16, t);
     const c = SWAT_COMBAT;
-    const b = BASE_COMBAT;
+    const b = BASE_SWAT_COMBAT;
     c.coverSecMin = lerp(b.coverSecMin, 0.25, t);
     c.coverSecMax = lerp(b.coverSecMax, 0.65, t);
     c.fireInterval = lerp(b.fireInterval, 0.14, t);
@@ -2601,7 +2394,7 @@ export class SwatTeam {
     sc.flinchSec = lerp(sb.flinchSec, 0.05, t);
     sc.decisionSec = c.decisionSec;
     const m = SWAT_MOBILITY;
-    const bm = BASE_MOBILITY;
+    const bm = BASE_SWAT_MOBILITY;
     m.repositionAfterLostSec = lerp(bm.repositionAfterLostSec, 0.5, t);
     m.flankChance = lerp(bm.flankChance, 0.85, t);
     const step = t >= 1 ? 4 : t >= 0.66 ? 3 : t >= 0.33 ? 2 : 1;
@@ -2886,7 +2679,7 @@ export class SwatTeam {
     const eye = by.body.footY + 1.55;
     const from = { x: by.body.px, y: eye, z: by.body.pz };
     const dist = Math.hypot(at.x - from.x, at.z - from.z);
-    if (dist > PEPPER_RANGE) return;
+    if (dist > SWAT_PEPPER_RANGE) return;
     this.pepperShots++;
     this.d.bus.emit('noise', { pos: from, radius: 14, kind: 'gunshot', source: 'ally' });
     if (this.radioCd <= 0 && Math.random() < 0.3) this.radio(by, '人質がいる、実弾は撃つな！ ペッパーで制圧する！', 'Hostage in line, pepperball only!');
@@ -3131,667 +2924,7 @@ export class SwatTeam {
   }
 }
 
-// ---------- 間接フラッシュバン投擲（ドア枠・窓・1バウンド壁反射） ----------
 
-export interface FlashDoorSample {
-  id: string;
-  centerX: number;
-  centerZ: number;
-  normalX: number;
-  normalZ: number;
-  sillY: number;
-  width: number;
-  height: number;
-  angle: number;
-  locked: boolean;
-}
-
-export interface FlashThrowPlan {
-  velocity: Vec3;
-  aimPoint: Vec3;
-  fuse: number;
-  kind: 'direct' | 'doorway' | 'window' | 'bank';
-}
-
-const FLASH_BANK_RESTITUTION = 0.45;
-const FLASH_BANK_FRICTION = 0.7;
-const FLASH_BANK_FAN_DEG = [-65, -50, -35, -20, -10, 10, 20, 35, 50, 65] as const;
-
-/** origin から target へ重力下で到達する初速ベクトルを算出する。 */
-export function computeBallisticVelocity(
-  origin: Vec3,
-  target: Vec3,
-  gravity: number,
-  speed = 9,
-  minT = 0.2,
-  maxT = 0.95,
-): Vec3 {
-  const dx = target.x - origin.x;
-  const dz = target.z - origin.z;
-  const dy = target.y - origin.y;
-  const t = Math.max(minT, Math.min(maxT, Math.hypot(dx, dz) / speed));
-  return {
-    x: dx / t,
-    y: (dy + 0.5 * gravity * t * t) / t,
-    z: dz / t,
-  };
-}
-
-/** 開いているドア開口部（鴨居より下）を通して別室の目標側へ投げ込む軌道を計画する。 */
-export function planDoorwayFlashThrow(
-  origin: Vec3,
-  target: Vec3,
-  doors: readonly FlashDoorSample[],
-  colliders: readonly Collider[],
-  gravity: number,
-  maxDist = 9,
-): FlashThrowPlan | null {
-  let bestScore = Infinity;
-  let bestPortal: Vec3 | null = null;
-  for (const door of doors) {
-    if (door.locked || door.angle < 25) continue;
-    if (Math.abs(door.sillY - target.y) > 0.85) continue;
-    const distToDoor = Math.hypot(door.centerX - origin.x, door.centerZ - origin.z);
-    if (distToDoor < 1.0 || distToDoor > maxDist) continue;
-    const distDoorToTarget = Math.hypot(target.x - door.centerX, target.z - door.centerZ);
-    if (distDoorToTarget > 8.0) continue;
-    const side = (origin.x - door.centerX) * door.normalX + (origin.z - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
-    const targetDot = (target.x - door.centerX) * door.normalX + (target.z - door.centerZ) * door.normalZ;
-    if (targetDot * side >= 0.3) continue;
-    const portalY = door.sillY + Math.min(1.05, Math.max(0.5, door.height - 0.35));
-    const portalPt: Vec3 = { x: door.centerX, y: portalY, z: door.centerZ };
-    const inPt: Vec3 = {
-      x: door.centerX - door.normalX * side * 1.8,
-      y: door.sillY + 0.7,
-      z: door.centerZ - door.normalZ * side * 1.8,
-    };
-    if (!hasLineOfSight(colliders, origin, portalPt)) continue;
-    if (!hasLineOfSight(colliders, portalPt, inPt)) continue;
-    const score = distToDoor + distDoorToTarget;
-    if (score < bestScore) {
-      bestScore = score;
-      bestPortal = portalPt;
-    }
-  }
-  if (!bestPortal) return null;
-  return {
-    velocity: computeBallisticVelocity(origin, bestPortal, gravity, 9.5, 0.18, 0.75),
-    aimPoint: bestPortal,
-    fuse: 1.5,
-    kind: 'doorway',
-  };
-}
-
-/** バリケードされていない窓開口部を通して室内へ投げ込む軌道を計画する。 */
-export function planWindowFlashThrow(
-  origin: Vec3,
-  target: Vec3,
-  windows: readonly WindowDef[],
-  colliders: readonly Collider[],
-  gravity: number,
-  maxDist = 9,
-): FlashThrowPlan | null {
-  let bestScore = Infinity;
-  let bestWin: Vec3 | null = null;
-  for (const w of windows) {
-    const floorY = w.y ?? 0;
-    if (Math.abs(floorY - target.y) > 0.85) continue;
-    const distToWin = Math.hypot(w.x - origin.x, w.z - origin.z);
-    if (distToWin < 1.0 || distToWin > maxDist) continue;
-    const distWinToTarget = Math.hypot(target.x - w.x, target.z - w.z);
-    if (distWinToTarget > 8.0) continue;
-    const nx = -Math.sin(w.yaw * DEG2RAD);
-    const nz = Math.cos(w.yaw * DEG2RAD);
-    const side = (origin.x - w.x) * nx + (origin.z - w.z) * nz >= 0 ? 1 : -1;
-    const targetDot = (target.x - w.x) * nx + (target.z - w.z) * nz;
-    if (targetDot * side >= 0.3) continue;
-    const winPt: Vec3 = { x: w.x, y: floorY + w.sill + w.height * 0.5, z: w.z };
-    const inPt: Vec3 = {
-      x: w.x - nx * side * 1.6,
-      y: floorY + Math.max(0.6, w.sill),
-      z: w.z - nz * side * 1.6,
-    };
-    if (!hasLineOfSight(colliders, origin, winPt)) continue;
-    if (!hasLineOfSight(colliders, winPt, inPt)) continue;
-    const score = distToWin + distWinToTarget;
-    if (score < bestScore) {
-      bestScore = score;
-      bestWin = winPt;
-    }
-  }
-  if (!bestWin) return null;
-  return {
-    velocity: computeBallisticVelocity(origin, bestWin, gravity, 10.0, 0.18, 0.75),
-    aimPoint: bestWin,
-    fuse: 1.5,
-    kind: 'window',
-  };
-}
-
-/** 水平方向の壁（kind==='wall'）に対する最寄りレイキャスト。外向き単位法線 (nx, nz) を返す。 */
-export function raycastWallXZ(
-  colliders: readonly Collider[],
-  origin: Vec3,
-  dirX: number,
-  dirZ: number,
-  maxDist: number,
-): { dist: number; point: Vec3; nx: number; nz: number } | null {
-  const len = Math.hypot(dirX, dirZ);
-  if (len < 1e-6) return null;
-  const dx = dirX / len;
-  const dz = dirZ / len;
-  let bestDist = maxDist;
-  let bestNx = 0;
-  let bestNz = 0;
-  let hit = false;
-  for (const c of colliders) {
-    if (c.kind !== 'wall') continue;
-    const a = c.aabb;
-    if (origin.y < a.min.y || origin.y > a.max.y) continue;
-    let txMin: number;
-    let txMax: number;
-    if (Math.abs(dx) < 1e-8) {
-      if (origin.x < a.min.x || origin.x > a.max.x) continue;
-      txMin = -Infinity;
-      txMax = Infinity;
-    } else {
-      const t1 = (a.min.x - origin.x) / dx;
-      const t2 = (a.max.x - origin.x) / dx;
-      txMin = Math.min(t1, t2);
-      txMax = Math.max(t1, t2);
-    }
-    let tzMin: number;
-    let tzMax: number;
-    if (Math.abs(dz) < 1e-8) {
-      if (origin.z < a.min.z || origin.z > a.max.z) continue;
-      tzMin = -Infinity;
-      tzMax = Infinity;
-    } else {
-      const t1 = (a.min.z - origin.z) / dz;
-      const t2 = (a.max.z - origin.z) / dz;
-      tzMin = Math.min(t1, t2);
-      tzMax = Math.max(t1, t2);
-    }
-    const tMin = Math.max(txMin, tzMin);
-    const tMax = Math.min(txMax, tzMax);
-    if (tMax < Math.max(0, tMin) || tMin <= 1e-4 || tMin >= bestDist) continue;
-    bestDist = tMin;
-    if (txMin > tzMin) {
-      bestNx = dx > 0 ? -1 : 1;
-      bestNz = 0;
-    } else {
-      bestNx = 0;
-      bestNz = dz > 0 ? -1 : 1;
-    }
-    hit = true;
-  }
-  if (!hit) return null;
-  return {
-    dist: bestDist,
-    point: { x: origin.x + dx * bestDist, y: origin.y, z: origin.z + dz * bestDist },
-    nx: bestNx,
-    nz: bestNz,
-  };
-}
-
-/** 1 バウンド壁反射で曲がり角・隣接室の目標へフラッシュバンを送り込む軌道を計画する。 */
-export function planWallBankFlashThrow(
-  origin: Vec3,
-  target: Vec3,
-  colliders: readonly Collider[],
-  gravity: number,
-  maxDist = 9,
-): FlashThrowPlan | null {
-  const baseAngle = Math.atan2(target.z - origin.z, target.x - origin.x);
-  let bestScore = -Infinity;
-  let bestPoint: Vec3 | null = null;
-  const targetAim: Vec3 = { x: target.x, y: target.y + 0.6, z: target.z };
-
-  for (const deg of FLASH_BANK_FAN_DEG) {
-    const ang = baseAngle + deg * DEG2RAD;
-    const dx = Math.cos(ang);
-    const dz = Math.sin(ang);
-    const hit = raycastWallXZ(colliders, origin, dx, dz, maxDist);
-    if (!hit || hit.dist < 1.2) continue;
-    const vn = dx * hit.nx + dz * hit.nz;
-    if (vn >= -0.25) continue;
-    const tx = dx - vn * hit.nx;
-    const tz = dz - vn * hit.nz;
-    const rx = -FLASH_BANK_RESTITUTION * vn * hit.nx + FLASH_BANK_FRICTION * tx;
-    const rz = -FLASH_BANK_RESTITUTION * vn * hit.nz + FLASH_BANK_FRICTION * tz;
-    const rLen = Math.hypot(rx, rz);
-    if (rLen < 1e-4) continue;
-    const bPt: Vec3 = {
-      x: hit.point.x + hit.nx * 0.12,
-      y: target.y + 1.0,
-      z: hit.point.z + hit.nz * 0.12,
-    };
-    const toTx = target.x - bPt.x;
-    const toTz = target.z - bPt.z;
-    const distAfter = Math.hypot(toTx, toTz);
-    if (distAfter < 0.8 || distAfter > 7.5) continue;
-    const dot = (rx * toTx + rz * toTz) / (rLen * distAfter);
-    if (dot < 0.78) continue;
-    if (!hasLineOfSight(colliders, origin, bPt)) continue;
-    if (!hasLineOfSight(colliders, bPt, targetAim)) continue;
-    const score = dot - distAfter * 0.04;
-    if (score > bestScore) {
-      bestScore = score;
-      bestPoint = bPt;
-    }
-  }
-  if (!bestPoint) return null;
-  return {
-    velocity: computeBallisticVelocity(origin, bestPoint, gravity, 11.0, 0.15, 0.75),
-    aimPoint: bestPoint,
-    fuse: 1.5,
-    kind: 'bank',
-  };
-}
-
-/** 直投 → ドア枠 → 窓 → 1バウンド壁反射の優先順でフラッシュバン投擲を計画する。 */
-export function planFlashThrow(
-  origin: Vec3,
-  target: Vec3,
-  doors: readonly FlashDoorSample[],
-  windows: readonly WindowDef[],
-  colliders: readonly Collider[],
-  gravity: number,
-  minDirectDist = FLASH_MIN_DIST,
-  maxDist = FLASH_MAX_DIST,
-): FlashThrowPlan | null {
-  const horiz = Math.hypot(target.x - origin.x, target.z - origin.z);
-  const directAim: Vec3 = { x: target.x, y: target.y + 0.4, z: target.z };
-  if (horiz >= minDirectDist && horiz <= maxDist && hasLineOfSight(colliders, origin, directAim)) {
-    return {
-      velocity: computeBallisticVelocity(origin, { x: target.x, y: target.y + 0.3, z: target.z }, gravity, 9, 0.35, 0.9),
-      aimPoint: directAim,
-      fuse: 1.6,
-      kind: 'direct',
-    };
-  }
-  const doorway = planDoorwayFlashThrow(origin, target, doors, colliders, gravity, maxDist);
-  if (doorway) return doorway;
-  const win = planWindowFlashThrow(origin, target, windows, colliders, gravity, maxDist);
-  if (win) return win;
-  return planWallBankFlashThrow(origin, target, colliders, gravity, maxDist);
-}
-
-// ---------- M2 純粋ヘルパー: F6（多方向同時突入） ----------
-
-/**
- * 地上階の高度一致（sillY）と屋外からの実経路到達可能性（reachableRouteLength, passable=undefined）で
- * 真に外周から歩いて到達できる入口ポータルだけを抽出し、スポーンからの経路長昇順で返す。
- */
-export function filterReachableExteriorEntries(
-  entries: readonly EntryPortal[],
-  spawn: Vec3,
-  colliders: readonly Collider[],
-  bounds: { width: number; depth: number },
-  radius = 0.35,
-): EntryPortal[] {
-  const scored: { portal: EntryPortal; len: number }[] = [];
-  for (const e of entries) {
-    if (Math.abs(e.sillY - spawn.y) >= 1.1) continue;
-    const len = reachableRouteLength(
-      { x: spawn.x, z: spawn.z },
-      { x: e.outside.x, z: e.outside.z },
-      spawn.y,
-      colliders,
-      bounds,
-      radius,
-    );
-    if (len === null) continue;
-    scored.push({ portal: e, len });
-  }
-  scored.sort((a, b) => a.len - b.len || a.portal.id.localeCompare(b.portal.id));
-  return scored.map((s) => s.portal);
-}
-
-/**
- * セル数と到達可能な外壁ポータル一覧から、各セルの担当ポータルを決定する。
- * - 0 入口: []（スタックをスキップ）
- * - 1 入口: 全セルを同一入口へ（house_compact 等のフォールバック）
- * - 2 入口以上: Red(0) に最寄り入口、後続セルには既割り当て入口からの最小距離が最大になる入口を貪欲に割り当てる。
- */
-export function assignCellPortals(cellCount: number, reachablePortals: readonly EntryPortal[]): EntryPortal[] {
-  if (cellCount <= 0 || reachablePortals.length === 0) return [];
-  if (reachablePortals.length === 1) {
-    return Array.from({ length: cellCount }, () => reachablePortals[0]!);
-  }
-  const assigned: EntryPortal[] = [reachablePortals[0]!];
-  const used = new Set<string>([reachablePortals[0]!.id]);
-  for (let c = 1; c < cellCount; c++) {
-    const candidates = reachablePortals.filter((p) => !used.has(p.id));
-    if (candidates.length === 0) {
-      assigned.push(reachablePortals[c % reachablePortals.length]!);
-      continue;
-    }
-    let best = candidates[0]!;
-    let bestMinDist = -1;
-    for (const cand of candidates) {
-      let minDist = Infinity;
-      for (const a of assigned) {
-        const d = Math.hypot(cand.outside.x - a.outside.x, cand.outside.z - a.outside.z);
-        if (d < minDist) minDist = d;
-      }
-      if (minDist > bestMinDist) {
-        bestMinDist = minDist;
-        best = cand;
-      }
-    }
-    assigned.push(best);
-    used.add(best.id);
-  }
-  return assigned;
-}
-
-/** EntryPortal と Door ジオメトリから layoutStackSlots() 用の StackSlotPortal を組み立てる（into は屋外→屋内）。 */
-export function buildStackSlotPortal(
-  portal: EntryPortal,
-  door: { centerX: number; centerZ: number; axisX: number; axisZ: number; width: number },
-): StackSlotPortal {
-  const dx = portal.inside.x - portal.outside.x;
-  const dz = portal.inside.z - portal.outside.z;
-  const len = Math.hypot(dx, dz) || 1;
-  return {
-    centerX: door.centerX,
-    centerZ: door.centerZ,
-    intoX: dx / len,
-    intoZ: dz / len,
-    axisX: door.axisX,
-    axisZ: door.axisZ,
-    width: door.width,
-  };
-}
-
-// ---------- M2 純粋ヘルパー: F7（役割分担による挟撃・ピンサー機動） ----------
-
-export interface PinningCellInfo {
-  cellIndex: number;
-  aliveCount: number;
-  hasShield: boolean;
-  engaged: boolean;
-  center: Vec3;
-}
-
-export interface FlankDoorSample {
-  id: string;
-  centerX: number;
-  centerZ: number;
-  normalX: number;
-  normalZ: number;
-  sillY: number;
-  locked: boolean;
-}
-
-export interface PincerFlankParams {
-  playerPos: Vec3;
-  frontalPos: Vec3;
-  flankerPos: Vec3;
-  rooms: readonly RoomDef[];
-  doors: readonly FlankDoorSample[];
-  stairs: readonly StairMark[];
-  colliders: readonly Collider[];
-  excludeDoorIds?: ReadonlySet<string>;
-}
-
-export interface PincerFlankGoal {
-  target: Vec3;
-  kind: 'altDoor' | 'oppositeRoom' | 'altFloorStair' | 'lateral';
-  doorId?: string;
-  roomId?: string;
-}
-
-/** 正面で釘付け役（ピンニング班）を担うセルを選ぶ。近距離または交戦中の盾持ちセルを最優先し、次点で接敵セル。 */
-export function selectPinningCell(
-  cells: readonly PinningCellInfo[],
-  contactCellIndex: number,
-  targetPos: Vec3,
-): number {
-  const alive = cells.filter((c) => c.aliveCount > 0);
-  if (alive.length === 0) return contactCellIndex;
-  const shieldCell = alive.find(
-    (c) =>
-      c.hasShield &&
-      (c.engaged ||
-        (Math.abs(c.center.y - targetPos.y) < 1.1 &&
-          Math.hypot(c.center.x - targetPos.x, c.center.z - targetPos.z) <= 12)),
-  );
-  if (shieldCell) return shieldCell.cellIndex;
-  if (alive.some((c) => c.cellIndex === contactCellIndex)) return contactCellIndex;
-  let nearest = alive[0]!;
-  let nearestDist = Infinity;
-  for (const c of alive) {
-    const d = Math.hypot(c.center.x - targetPos.x, c.center.z - targetPos.z) + Math.abs(c.center.y - targetPos.y) * 3;
-    if (d < nearestDist) {
-      nearestDist = d;
-      nearest = c;
-    }
-  }
-  return nearest.cellIndex;
-}
-
-function pointInRoom(room: RoomDef, x: number, z: number): boolean {
-  return Math.abs(x - room.x) <= room.width / 2 && Math.abs(z - room.z) <= room.depth / 2;
-}
-
-/** 指定した部屋（同フロア）に接している全ドアを返す。 */
-export function findRoomDoors(room: RoomDef, doors: readonly FlankDoorSample[]): FlankDoorSample[] {
-  const fy = room.floorY ?? 0;
-  const out: FlankDoorSample[] = [];
-  for (const d of doors) {
-    if (Math.abs(d.sillY - fy) >= 0.75) continue;
-    const ax = d.centerX + d.normalX * 0.85;
-    const az = d.centerZ + d.normalZ * 0.85;
-    const bx = d.centerX - d.normalX * 0.85;
-    const bz = d.centerZ - d.normalZ * 0.85;
-    if (pointInRoom(room, ax, az) || pointInRoom(room, bx, bz)) out.push(d);
-  }
-  return out;
-}
-
-/**
- * 挟撃（ピンサー機動）の迂回目標を優先順に算出する:
- * 1. プレイヤーの部屋へ通じる「正面班から最も遠い別ドア」
- * 2. 正面班と反対側の隣接室内部屋（行き止まり部屋対策）
- * 3. 別フロア階段アプローチ（正面班から最も遠い階段）
- * 4. 屋外・単室マップ用の側面/背面フォールバック
- */
-export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal | null {
-  const { playerPos, frontalPos, flankerPos, rooms, doors, stairs, colliders, excludeDoorIds } = params;
-  const indoorRooms = rooms.filter((r) => !r.outdoor);
-  const playerRoom =
-    indoorRooms.find((r) => Math.abs((r.floorY ?? 0) - playerPos.y) < 0.75 && pointInRoom(r, playerPos.x, playerPos.z)) ?? null;
-
-  const fdx = frontalPos.x - playerPos.x;
-  const fdz = frontalPos.z - playerPos.z;
-  const fLen = Math.hypot(fdx, fdz) || 1;
-  const fDirX = fdx / fLen;
-  const fDirZ = fdz / fLen;
-  const flankerIndoor = isIndoorPoint(indoorRooms, flankerPos.x, flankerPos.z, flankerPos.y);
-
-  // Priority 1: Alternate door into playerRoom
-  if (playerRoom) {
-    const roomDoors = findRoomDoors(playerRoom, doors);
-    if (roomDoors.length >= 2) {
-      let closestFrontalId = roomDoors[0]!.id;
-      let closestFrontalDist = Infinity;
-      for (const d of roomDoors) {
-        const df = Math.hypot(d.centerX - frontalPos.x, d.centerZ - frontalPos.z);
-        if (df < closestFrontalDist) {
-          closestFrontalDist = df;
-          closestFrontalId = d.id;
-        }
-      }
-      let bestDoor: FlankDoorSample | null = null;
-      let bestScore = -Infinity;
-      for (const d of roomDoors) {
-        if (d.id === closestFrontalId) continue;
-        if (excludeDoorIds?.has(d.id)) continue;
-        const df = Math.hypot(d.centerX - frontalPos.x, d.centerZ - frontalPos.z);
-        const ddx = d.centerX - playerPos.x;
-        const ddz = d.centerZ - playerPos.z;
-        const dLen = Math.hypot(ddx, ddz) || 1;
-        const dot = (ddx * fDirX + ddz * fDirZ) / dLen;
-        // 反対側が屋内なら屋内迂回ルートとして加点
-        const ax = d.centerX + d.normalX * 0.85;
-        const az = d.centerZ + d.normalZ * 0.85;
-        const bx = d.centerX - d.normalX * 0.85;
-        const bz = d.centerZ - d.normalZ * 0.85;
-        const aIn = pointInRoom(playerRoom, ax, az);
-        const outX = aIn ? bx : ax;
-        const outZ = aIn ? bz : az;
-        const oppIndoor = isIndoorPoint(indoorRooms, outX, outZ, d.sillY);
-        const score = df + (1 - dot) * 4 + (flankerIndoor && oppIndoor ? 3 : 0);
-        if (score > bestScore) {
-          bestScore = score;
-          bestDoor = d;
-        }
-      }
-      if (bestDoor) {
-        const ax = bestDoor.centerX + bestDoor.normalX * 0.75;
-        const az = bestDoor.centerZ + bestDoor.normalZ * 0.75;
-        const bx = bestDoor.centerX - bestDoor.normalX * 0.75;
-        const bz = bestDoor.centerZ - bestDoor.normalZ * 0.75;
-        const aIn = pointInRoom(playerRoom, ax, az);
-        const approachX = aIn ? bx : ax;
-        const approachZ = aIn ? bz : az;
-        const insideX = aIn ? bestDoor.centerX + bestDoor.normalX * 0.5 : bestDoor.centerX - bestDoor.normalX * 0.5;
-        const insideZ = aIn ? bestDoor.centerZ + bestDoor.normalZ * 0.5 : bestDoor.centerZ - bestDoor.normalZ * 0.5;
-        const useApproach = !blockedAtFiltered(colliders, approachX, approachZ, 0.3, bestDoor.sillY);
-        return {
-          target: { x: useApproach ? approachX : insideX, y: bestDoor.sillY, z: useApproach ? approachZ : insideZ },
-          kind: 'altDoor',
-          doorId: bestDoor.id,
-        };
-      }
-    }
-  }
-
-  // Priority 2: Opposite adjacent indoor room on the same floor
-  let bestRoom: RoomDef | null = null;
-  let bestRoomScore = -Infinity;
-  for (const r of indoorRooms) {
-    if (playerRoom && r.id === playerRoom.id) continue;
-    const fy = r.floorY ?? 0;
-    if (Math.abs(fy - playerPos.y) >= 0.75) continue;
-    const distP = Math.hypot(r.x - playerPos.x, r.z - playerPos.z);
-    if (distP < 2.5 || distP > 16) continue;
-    const rdx = r.x - playerPos.x;
-    const rdz = r.z - playerPos.z;
-    const dot = (rdx * fDirX + rdz * fDirZ) / distP;
-    const distF = Math.hypot(r.x - frontalPos.x, r.z - frontalPos.z);
-    const score = distF + (dot < 0.3 ? (1 - dot) * 5 : -4) - distP * 0.25;
-    if (score > bestRoomScore) {
-      bestRoomScore = score;
-      bestRoom = r;
-    }
-  }
-  if (bestRoom) {
-    return {
-      target: { x: bestRoom.x, y: bestRoom.floorY ?? 0, z: bestRoom.z },
-      kind: 'oppositeRoom',
-      roomId: bestRoom.id,
-    };
-  }
-
-  // Priority 3: Alternate floor stair approach
-  if (stairs.length > 0) {
-    let bestStairTarget: Vec3 | null = null;
-    let bestStairDist = -1;
-    for (const st of stairs) {
-      const touchesLow = Math.abs(st.baseY - playerPos.y) < 0.75;
-      const touchesHigh = Math.abs(st.topY - playerPos.y) < 0.75;
-      if (!touchesLow && !touchesHigh) continue;
-      const pt = touchesLow ? st.approachLow : st.approachHigh;
-      const y = touchesLow ? st.baseY : st.topY;
-      const df = Math.hypot(pt.x - frontalPos.x, pt.z - frontalPos.z);
-      if (df > bestStairDist) {
-        bestStairDist = df;
-        bestStairTarget = { x: pt.x, y, z: pt.z };
-      }
-    }
-    if (bestStairTarget) {
-      return { target: bestStairTarget, kind: 'altFloorStair' };
-    }
-  }
-
-  // Priority 4: Lateral / rear fallback (outdoor or single-room map)
-  const baseAngle = Math.atan2(fDirZ, fDirX);
-  for (const deg of [90, -90, 135, -135, 180]) {
-    const ang = baseAngle + deg * DEG2RAD;
-    const tx = playerPos.x + Math.cos(ang) * 4.5;
-    const tz = playerPos.z + Math.sin(ang) * 4.5;
-    if (!blockedAtFiltered(colliders, tx, tz, 0.32, playerPos.y)) {
-      return { target: { x: tx, y: playerPos.y, z: tz }, kind: 'lateral' };
-    }
-  }
-  return null;
-}
-
-// ---------- M2 純粋ヘルパー: F8（C2 爆破ブリーチ） ----------
-
-/** 圧力が閾値以上、または 2 枚目以降の施錠ドアなら C2 爆破ブリーチを使用する。 */
-export function shouldUseC2Breach(pressure: number, lockedDoorsEncountered: number): boolean {
-  return pressure >= C2_PRESSURE_THRESHOLD || lockedDoorsEncountered >= C2_MIN_LOCKED_DOORS;
-}
-
-/** C2 起爆時の安全な退避位置をドア法線のブリーチャー側（side）へ探索する。 */
-export function computeC2Standoff(
-  door: EntrySample,
-  side: number,
-  colliders: readonly Collider[],
-  fallback: Vec3,
-): Vec3 {
-  const latX = -door.normalZ;
-  const latZ = door.normalX;
-  for (const back of [2.6, 2.2, 1.8, 1.4]) {
-    for (const lat of [0, 0.55, -0.55]) {
-      const x = door.centerX + door.normalX * side * back + latX * lat;
-      const z = door.centerZ + door.normalZ * side * back + latZ * lat;
-      if (!blockedAtFiltered(colliders, x, z, 0.32, door.sillY)) {
-        return { x, y: door.sillY, z };
-      }
-    }
-  }
-  return { ...fallback };
-}
-
-export interface C2BlastResult {
-  inCone: boolean;
-  dist: number;
-  falloff: number;
-  damage: number;
-  stunScale: number;
-}
-
-/** C2 の指向性爆風コーン判定（ドアの反対側のみ致傷・スタン）。 */
-export function evaluateC2BlastCone(
-  blastOrigin: Vec3,
-  blastDir: Vec3,
-  targetPos: Vec3,
-  radius = C2_BLAST_RADIUS,
-  coneCos = Math.cos(C2_CONE_HALF_ANGLE_DEG * DEG2RAD),
-  maxDamage = C2_MAX_DAMAGE,
-): C2BlastResult {
-  const dx = targetPos.x - blastOrigin.x;
-  const dy = targetPos.y - blastOrigin.y;
-  const dz = targetPos.z - blastOrigin.z;
-  const dist = Math.hypot(dx, dy, dz);
-  if (radius <= 0 || dist > radius || Math.abs(dy) > 2.2) {
-    return { inCone: false, dist, falloff: 0, damage: 0, stunScale: 0 };
-  }
-  const horiz = Math.hypot(dx, dz);
-  const dot = horiz > 0.25 ? (dx * blastDir.x + dz * blastDir.z) / horiz : 1;
-  if (dot < coneCos) {
-    return { inCone: false, dist, falloff: 0, damage: 0, stunScale: 0 };
-  }
-  const falloff = Math.max(0, Math.min(1, 1 - (dist / radius) * 0.72));
-  const damage = Math.round(maxDamage * falloff);
-  const stunScale = Math.max(0.25, falloff);
-  return { inCone: true, dist, falloff, damage, stunScale };
-}
 
 // ---------- M2 純粋ヘルパー: F9（窓バリケードの積極破壊） ----------
 

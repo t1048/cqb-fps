@@ -1,5 +1,5 @@
 {
-  "moveSpeed": 2.75,
+  "moveSpeed": 2.35,
   "followDistance": 1.5,
   "followLateral": 0.78,
   "stackOffset": 0.48,
@@ -11,9 +11,9 @@
   "presenceBonusPerAlly": 0.25,
   "personalSpace": 0.68,
   "arriveDistance": 0.38,
-  "engageRange": 16,
-  "fireInterval": 0.42,
-  "damage": 18,
+  "engageRange": 18,
+  "fireInterval": 0.2,
+  "damage": 13,
   "warningInterval": 4.5,
   "flashDelay": 0.75,
   "bodyRadius": 0.3,
@@ -38,6 +38,8 @@
     "clear": "突入クリア",
     "flashClear": "閃光クリア",
     "breachClear": "強行突入",
+    "c2Clear": "C2爆破突入",
+    "gasClear": "ガス突入",
     "pieDoor": "扉開放警戒",
     "restrain": "対象確保"
   },

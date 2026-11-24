@@ -27,6 +27,23 @@ const ARRESTED_COLOR = 0x3060b0;
 const DEFAULT_HP = 100;
 const MAX_DT = 0.05;
 
+const GAS_BUILD_PER_SEC = 55;
+const GAS_DECAY_PER_SEC = 18;
+const GAS_MAX_SPREAD_PENALTY = 7.5;
+const GAS_MAX_SLOWDOWN = 0.42;
+const GAS_COUGH_THRESHOLD = 0.3;
+const GAS_COUGH_NOISE_RADIUS = 16;
+const GAS_MORALE_DRAIN_PER_SEC = 14;
+const GAS_FLUSH_THRESHOLD = 0.2;
+
+/** 容疑者位置における CS 催涙ガスサンプル */
+export interface GasSample {
+  /** 現在位置のガス濃度 (0..1) */
+  density: number;
+  /** ガス雲中心または高濃度方向の推定座標（あぶり出し退避用、不明時は null） */
+  origin: Vec3 | null;
+}
+
 /**
  * 容疑者。ステート名は MVP_SPEC §3 の enum、遷移基盤は汎用 StateMachine、士気は Morale。
  * 知覚(T3-2)で BARRICADED→ALERT→CONFRONTATION、士気(T3-3)で以下に遷移する（閾値は profile.thresholds）:
@@ -77,6 +94,14 @@ export class Suspect implements HitTarget {
   /** フラッシュバンで視界を失っている残り秒。この間は視認も発砲もしない。 */
   private blindLeft = 0;
   private warningLeft = 0;
+  /** ガス補正前の基準移動速度・基準拡散角（upgradeWeapon でも基準拡散角を更新） */
+  private readonly baseMoveSpeed: number;
+  private baseSpreadDeg: number;
+  /** CS 催涙ガス露出度 (0..100、完全非致死) */
+  private gasLevel = 0;
+  private gasCoughCd = 0;
+  private gasFlushTarget: Vec3 | null = null;
+  private gasFlushElapsed = 0;
 
   constructor(
     def: EntityDef,
@@ -97,7 +122,9 @@ export class Suspect implements HitTarget {
       footY: def.y ?? 0,
       textures,
     });
-    this.combat = profile.combat ? { ...profile.combat } : null; // 個体ごとの写し（籠城準備の武器改造で書き換える）
+    this.combat = profile.combat ? { ...profile.combat } : null; // 個体ごとの写し（籠城準備の武器改造・CSガス補正で書き換える）
+    this.baseMoveSpeed = this.combat?.moveSpeed ?? 0;
+    this.baseSpreadDeg = this.combat?.baseSpreadDeg ?? 0;
     this.mobility = profile.mobility ?? null;
     this.nav = ctx ? new SuspectNavigator(this.body, ctx) : null;
     if (this.mobility) {
@@ -211,30 +238,218 @@ export class Suspect implements HitTarget {
     return this.state === SuspectState.ENGAGE && this.engage ? `ENGAGE/${this.engage.label}` : this.state;
   }
 
-  /** 毎フレーム更新（士気の低下検知→遷移、自然回復、FSM）。終端ステートでは回復しない。 */
-  update(rawDt: number): void {
+  /** CS 催涙ガスの蓄積露出度 (0..100) */
+  get gasExposure(): number {
+    return this.gasLevel;
+  }
+
+  /** CS 催涙ガスで咳き込んでいるか */
+  get isCoughing(): boolean {
+    return this.gasLevel / 100 > GAS_COUGH_THRESHOLD;
+  }
+
+  /** フラッシュ/C2 等で視界喪失・怯み中か */
+  get isFlashed(): boolean {
+    return this.blindLeft > 0;
+  }
+
+  /** 現在の実効移動速度（ガス補正後） */
+  get currentMoveSpeed(): number {
+    return this.combat?.moveSpeed ?? 0;
+  }
+
+  /** 現在の実効拡散角（度、ガス補正後） */
+  get currentSpreadDeg(): number {
+    return this.combat?.baseSpreadDeg ?? 0;
+  }
+
+  /** 毎フレーム更新（士気の低下検知→遷移、自然回復、CSガス反応、FSM）。終端ステートでは回復しない。 */
+  update(rawDt: number, gas?: GasSample): void {
     const dt = Math.min(rawDt, MAX_DT);
     this.body.tick(dt);
     this.warningLeft = Math.max(0, this.warningLeft - dt);
     this.blindLeft = Math.max(0, this.blindLeft - dt);
+    const density = Math.max(0, Math.min(1, gas?.density ?? 0));
     const st = this.fsm.state;
-    if (st === SuspectState.DOWN || st === SuspectState.ARRESTED) return;
+    if (st === SuspectState.DOWN || st === SuspectState.ARRESTED) {
+      this.gasLevel = Math.max(0, this.gasLevel - GAS_DECAY_PER_SEC * dt);
+      this.gasFlushTarget = null;
+      this.gasFlushElapsed = 0;
+      this.syncGasCombatParams();
+      return;
+    }
     if (st === SuspectState.SURRENDER) {
+      this.gasLevel = Math.max(0, this.gasLevel - GAS_DECAY_PER_SEC * dt);
+      this.gasFlushTarget = null;
+      this.gasFlushElapsed = 0;
+      this.syncGasCombatParams();
       this.fsm.update(dt);
       this.checkFakeSurrender(dt);
       return;
     }
-    if (this.morale.value < this.prevMorale - 1e-6) this.evaluateDrop();
+    if (density > 0) {
+      this.gasLevel = Math.min(100, this.gasLevel + GAS_BUILD_PER_SEC * density * dt);
+    } else {
+      this.gasLevel = Math.max(0, this.gasLevel - GAS_DECAY_PER_SEC * dt);
+    }
+    this.syncGasCombatParams();
+    const gasK = this.gasLevel / 100;
+    if (density > 0) {
+      // 完全非致死: HP は一切減らさず士気低下のみで投降・あぶり出しを促す
+      this.morale.shift(-GAS_MORALE_DRAIN_PER_SEC * Math.max(0.35, density) * dt);
+    }
+    this.gasCoughCd = Math.max(0, this.gasCoughCd - dt);
+    if (gasK > GAS_COUGH_THRESHOLD && this.gasCoughCd <= 0) {
+      this.gasCoughCd = 2.4 + Math.random() * 1.4;
+      this.bus.emit('noise', {
+        pos: this.body.chestPos(),
+        radius: GAS_COUGH_NOISE_RADIUS,
+        kind: 'voice',
+        source: 'suspect',
+      });
+    }
+    if (
+      this.morale.value < this.prevMorale - 1e-6 ||
+      (density > 0 && this.managed && this.morale.value < this.profile.thresholds.surrenderBelow)
+    ) {
+      this.evaluateDrop();
+    }
     this.negoLock = Math.max(0, this.negoLock - dt);
-    if (this.state !== SuspectState.SURRENDER && this.state !== SuspectState.NEGOTIATION) this.morale.recover(dt);
+    if (
+      this.state !== SuspectState.SURRENDER &&
+      this.state !== SuspectState.NEGOTIATION &&
+      density <= 0 &&
+      this.gasLevel <= 0
+    ) {
+      this.morale.recover(dt);
+    }
     this.prevMorale = this.morale.value;
+    if (this.state === SuspectState.SURRENDER) {
+      this.gasFlushTarget = null;
+      this.gasFlushElapsed = 0;
+      return;
+    }
     this.senseTarget();
     this.checkShieldEntry(dt);
-    this.fsm.update(dt);
+    const flushing = this.updateGasFlush(dt, density, gasK, gas?.origin ?? null);
+    if (!flushing) {
+      this.fsm.update(dt);
+    }
     if (this.blindLeft > 0 && this.managed) {
       this.body.setPose('crouch');
       this.body.setShake(Math.sin(this.blindLeft * 28) * 0.12);
+    } else if (gasK > GAS_COUGH_THRESHOLD && this.managed && this.state !== SuspectState.HESITATE) {
+      this.body.setShake(Math.sin(this.gasLevel * 0.45 + this.gasCoughCd * 18) * 0.06 * gasK);
+    } else if (this.managed && this.state !== SuspectState.HESITATE) {
+      this.body.setShake(0);
     }
+  }
+
+  private syncGasCombatParams(): void {
+    if (!this.combat) return;
+    const k = this.gasLevel / 100;
+    this.combat.moveSpeed = this.baseMoveSpeed * (1 - GAS_MAX_SLOWDOWN * k);
+    this.combat.baseSpreadDeg = this.baseSpreadDeg + k * GAS_MAX_SPREAD_PENALTY;
+  }
+
+  private updateGasFlush(dt: number, density: number, gasK: number, origin: Vec3 | null): boolean {
+    if (this.blindLeft > 0 || !this.managed || this.state === SuspectState.HOSTAGE_SHIELD) {
+      return false;
+    }
+    if (density > 0 && gasK >= GAS_FLUSH_THRESHOLD && !this.gasFlushTarget) {
+      this.gasFlushTarget = this.pickGasEscapePoint(origin);
+      this.gasFlushElapsed = 0;
+      this.nav?.reset();
+      if (this.gasFlushTarget && this.state === SuspectState.BARRICADED) {
+        this.setState(SuspectState.ALERT);
+      }
+    }
+    if (!this.gasFlushTarget) return false;
+    if (density <= 0) {
+      this.gasFlushTarget = null;
+      this.gasFlushElapsed = 0;
+      this.nav?.reset();
+      return false;
+    }
+    this.gasFlushElapsed += dt;
+    const speed = Math.max(0.8, this.combat?.moveSpeed ?? 1.8);
+    if (this.nav) {
+      const res = this.nav.step(this.gasFlushTarget, speed, dt, {
+        canOpenDoors: true,
+        canUseStairs: !!this.mobility?.canUseStairs,
+        faceTravel: true,
+        arriveDist: 0.7,
+      });
+      if (res !== 'moving' || this.gasFlushElapsed >= 5.0) {
+        this.gasFlushTarget = null;
+        this.gasFlushElapsed = 0;
+        this.nav.reset();
+      }
+    } else {
+      stepToward(this.body, this.ctx?.colliders ?? [], this.gasFlushTarget.x, this.gasFlushTarget.z, speed * dt);
+      this.body.faceToward(this.gasFlushTarget.x, this.gasFlushTarget.z);
+      const dist = Math.hypot(this.gasFlushTarget.x - this.body.px, this.gasFlushTarget.z - this.body.pz);
+      if (dist <= 0.7 || this.gasFlushElapsed >= 5.0) {
+        this.gasFlushTarget = null;
+        this.gasFlushElapsed = 0;
+      }
+    }
+    return true;
+  }
+
+  private pickGasEscapePoint(origin: Vec3 | null): Vec3 | null {
+    const px = this.body.px;
+    const pz = this.body.pz;
+    const fy = this.body.footY;
+    const colliders = this.ctx?.colliders ?? [];
+    const rooms = this.ctx?.rooms;
+    if (rooms && rooms.length > 0) {
+      const cur = this.currentRoom();
+      const refX = origin?.x ?? px;
+      const refZ = origin?.z ?? pz;
+      const minSafeDist = origin ? 4.5 : 3.0;
+      let best: { pt: Vec3; dist: number } | null = null;
+      for (const r of rooms) {
+        if (r.outdoor) continue;
+        const rfy = r.floorY ?? 0;
+        if (!this.mobility?.canUseStairs && Math.abs(rfy - fy) > 0.65) continue;
+        if (cur && r.id === cur.id) continue;
+        if (Math.hypot(r.x - refX, r.z - refZ) < minSafeDist) continue;
+        if (blockedAtFiltered(colliders, r.x, r.z, 0.3, rfy)) continue;
+        const dist = Math.hypot(r.x - px, r.z - pz);
+        if (!best || dist < best.dist) {
+          best = { pt: { x: r.x, y: rfy, z: r.z }, dist };
+        }
+      }
+      if (best) return best.pt;
+    }
+
+    let awayAngle = this.body.yawRad + Math.PI;
+    if (origin) {
+      const dx = px - origin.x;
+      const dz = pz - origin.z;
+      if (Math.hypot(dx, dz) > 0.05) {
+        awayAngle = Math.atan2(dx, dz);
+      }
+    }
+    const offsets = [0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0, Math.PI];
+    const dists = [4.8, 3.6, 2.4];
+    for (const d of dists) {
+      for (const off of offsets) {
+        const a = awayAngle + off;
+        const tx = px + Math.sin(a) * d;
+        const tz = pz + Math.cos(a) * d;
+        if (this.ctx?.bounds) {
+          if (Math.abs(tx) > this.ctx.bounds.width / 2 - 0.5 || Math.abs(tz) > this.ctx.bounds.depth / 2 - 0.5) {
+            continue;
+          }
+        }
+        if (!blockedAtFiltered(colliders, tx, tz, 0.3, fy)) {
+          return { x: tx, y: fy, z: tz };
+        }
+      }
+    }
+    return null;
   }
 
   /** 突入前交渉の結果を反映する: 士気の増減（正 = 強気） */
@@ -248,7 +463,8 @@ export class Suspect implements HitTarget {
   upgradeWeapon(damageMul: number, spreadMul: number): void {
     if (!this.combat) return;
     this.combat.shotDamage = Math.round(this.combat.shotDamage * damageMul);
-    this.combat.baseSpreadDeg *= spreadMul;
+    this.baseSpreadDeg *= spreadMul;
+    this.syncGasCombatParams();
   }
 
   /** 突入前交渉で説得に応じた: その場で投降（拘束待ち） */
@@ -260,7 +476,7 @@ export class Suspect implements HitTarget {
 
   /** フラッシュ直撃。士気低下は MoraleSystem が行い、こちらは視界喪失。 */
   onFlashed(seconds: number): void {
-    if (!this.alive) return;
+    if (!this.alive || !Number.isFinite(seconds) || seconds <= 0) return;
     this.blindLeft = Math.max(this.blindLeft, seconds);
   }
 
@@ -686,6 +902,8 @@ export class Suspect implements HitTarget {
     } else {
       this.setState(SuspectState.ENGAGE);
     }
+    this.evaluateDrop();
+    this.prevMorale = this.morale.value;
   }
 
   /** 知覚の対象か（未発見/警戒中のみ。それ以外のステートは戦闘系ステートが管理） */

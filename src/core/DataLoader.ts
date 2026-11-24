@@ -1538,7 +1538,7 @@ export function validateNegotiation(raw: unknown, source = 'negotiation'): Negot
   };
 }
 
-const SQUAD_ORDERS: readonly SquadOrder[] = [
+export const SQUAD_ORDERS: readonly SquadOrder[] = [
   'follow',
   'hold',
   'move',
@@ -1547,6 +1547,8 @@ const SQUAD_ORDERS: readonly SquadOrder[] = [
   'clear',
   'flashClear',
   'breachClear',
+  'c2Clear',
+  'gasClear',
   'pieDoor',
   'restrain',
 ] as const;

@@ -195,7 +195,7 @@ export class CommandMenu {
 
     this.ctxEl.className = 'cqb-cmd-ctx';
     this.footEl.className = 'cqb-cmd-foot';
-    this.footEl.textContent = '[1-8 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止';
+    this.footEl.textContent = '[1-9 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止';
     this.menuEl.append(head, this.ctxEl, this.listEl, this.footEl);
     document.body.appendChild(this.menuEl);
 
@@ -514,16 +514,18 @@ export class CommandMenu {
 
     if (ctx.restrainTarget) {
       add('restrain', `対象を確保（${ctx.restrainTarget.label}）`, true);
-    }
-    if (ctx.door) {
+    } else if (ctx.door) {
       add('stack', 'スタックアップ（扉脇で待機）', true);
       add('clear', ctx.door.locked ? 'オープン＆クリア（蹴破り突入）' : 'オープン＆クリア（2名突入制圧）', true);
       add('flashClear', 'フラッシュ＆クリア（閃光→突入）', true);
+      add('gasClear', 'ガス＆クリア（催涙ガス→突入）', true);
+      add('c2Clear', 'C2＆クリア（爆破ブリーチ突入）', true);
       add('breachClear', 'ブリーチ＆クリア（強行突入）', true);
       add('pieDoor', '扉開放・外から警戒', !ctx.door.locked);
     } else if (ctx.areaTarget) {
       add('clear', '突入＆クリア（2名突入制圧）', true);
       add('flashClear', 'フラッシュ＆クリア（閃光→突入）', true);
+      add('gasClear', 'ガス＆クリア（催涙ガス→突入）', true);
       add('stack', 'スタックアップ（入口脇で待機）', true);
       if (ctx.groundPoint) {
         add('move', `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`, true);
