@@ -14,7 +14,7 @@ import {
 import { HumanoidBody } from '../ai/HumanoidBody';
 import { noiseRayOriginY } from '../ai/Perception';
 import { shieldBlocks } from '../ai/ShieldGuard';
-import { blockedAtFiltered } from '../ai/SquadRoute';
+import { blockedAtFiltered, reachableRouteLength } from '../ai/SquadRoute';
 import { layoutStackSlots } from '../ai/stackSlots';
 import {
   BASE_SHIELD_COMBAT,
@@ -79,6 +79,7 @@ import {
   shouldUseC2Breach,
   type C2BlastResult,
   type EntryPortal,
+  type EntryReach,
   type EntryRoute,
   type EntrySample,
   type FlankDoorSample,
@@ -280,6 +281,12 @@ const SEPARATION_DIST = 0.7;
 const SEPARATION_SPEED = 1.6;
 /** 組（セル）ごとのコールサイン接頭辞 */
 const CELL_NAMES = ['Red', 'Blue', 'Gold', 'Green'];
+/** 行き詰まった入口を再選択から外す秒数 */
+const PORTAL_BLOCK_SEC = 8;
+/** 入口までの経路長キャッシュ（位置は 2m 単位、数件だけ保持） */
+const ROUTE_CACHE_TTL = 1;
+const ROUTE_CACHE_MAX = 6;
+const ENTRY_WALK_RADIUS = 0.3;
 
 /**
  * 隊員数をツーマンセル／スリーマンセルに分ける。基本は 2 人組で、奇数なら 1 組だけ 3 人組。
@@ -421,6 +428,8 @@ class SwatHunter implements HitTarget {
   disarmSec = 0;
   readonly checkedTraps = new Set<string>();
   private readonly skipDoors = new Set<string>();
+  /** 行き詰まった外壁入口 → 残り除外秒 */
+  private readonly blockedPortals = new Map<string, number>();
   private blockedCount = 0;
   private blockedWindow = 0;
   private scanPhase = Math.random() * Math.PI * 2;
@@ -587,6 +596,7 @@ class SwatHunter implements HitTarget {
     this.stateTime += dt;
     this.blockedWindow = Math.max(0, this.blockedWindow - dt);
     if (this.blockedWindow <= 0) this.blockedCount = 0;
+    this.tickBlockedPortals(dt);
     if (this.state === 'staging') return;
     if (this.blindLeft > 0) {
       this.blindLeft = Math.max(0, this.blindLeft - dt);
@@ -768,7 +778,15 @@ class SwatHunter implements HitTarget {
       return;
     }
     const speed = this.shielded ? SWAT_SHIELD_RUSH_SPEED : lerp(SWAT_RUSH_SPEED_MIN, SWAT_RUSH_SPEED_MAX, this.team.currentPressure);
-    const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, goal, this.assignedPortal?.id);
+    const route = this.team.routeFrom(
+      this.body.px,
+      this.body.pz,
+      this.body.footY,
+      goal,
+      this.assignedPortal?.id,
+      'attack',
+      this.blockedPortals,
+    );
     if (route.phase !== 'direct') {
       this.followEntry(route, dt, speed / this.combat.moveSpeed);
     } else {
@@ -817,7 +835,15 @@ class SwatHunter implements HitTarget {
       return;
     }
     if (!this.sees && !this.pepperThreat) this.team.tryShootBarricade(this, dt);
-    const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, t, this.assignedPortal?.id);
+    const route = this.team.routeFrom(
+      this.body.px,
+      this.body.pz,
+      this.body.footY,
+      t,
+      this.assignedPortal?.id,
+      'attack',
+      this.blockedPortals,
+    );
     if (route.phase !== 'direct') {
       // 屋外から足音へ直進せず、入口ドアを経由してから追う
       this.followEntry(route, dt, HUNT_SPEED);
@@ -913,8 +939,28 @@ class SwatHunter implements HitTarget {
     });
     if (res === 'blocked') {
       this.noteBlocked();
+      this.noteEntryBlocked(route.entryId);
       if (door) this.tryBeginBreach(route.dest, door.id);
     }
+  }
+
+  private tickBlockedPortals(dt: number): void {
+    if (this.blockedPortals.size === 0) return;
+    for (const [id, left] of this.blockedPortals) {
+      const next = left - dt;
+      if (next <= 0) this.blockedPortals.delete(id);
+      else this.blockedPortals.set(id, next);
+    }
+  }
+
+  /** 到達できる別入口があるときだけ、行き詰まった入口をしばらく外す。 */
+  private noteEntryBlocked(entryId: string | null): void {
+    if (!entryId || this.blockedPortals.has(entryId)) return;
+    const from = { x: this.body.px, y: this.body.footY, z: this.body.pz };
+    if (!this.team.hasAlternateEntry(from, entryId, this.blockedPortals)) return;
+    this.blockedPortals.set(entryId, PORTAL_BLOCK_SEC);
+    this.entryPhase = null;
+    this.nav.reset();
   }
 
   private updateSweep(dt: number): void {
@@ -974,7 +1020,15 @@ class SwatHunter implements HitTarget {
       return;
     }
     if (!this.sees && !this.pepperThreat) this.team.tryShootBarricade(this, dt);
-    const route = this.team.routeFrom(this.body.px, this.body.pz, this.body.footY, goal, this.assignedPortal?.id);
+    const route = this.team.routeFrom(
+      this.body.px,
+      this.body.pz,
+      this.body.footY,
+      goal,
+      this.assignedPortal?.id,
+      'hold',
+      this.blockedPortals,
+    );
     if (route.phase !== 'direct') {
       this.followEntry(route, dt, SWEEP_SPEED);
       return;
@@ -1281,6 +1335,9 @@ export class SwatTeam {
   /** 一度掃討し終えた部屋。再捜索でマスを戻しても、再び「未クリアなので隣室へ出ない」にはしない */
   private readonly sweptRooms = new Set<string>();
   private entryCache: EntryPortal[] | null = null;
+  /** 屋外位置（2m 格子）から歩ける外壁入口。経路探索を毎フレーム回さない */
+  private routeClock = 0;
+  private readonly portalReachCache: { key: string; at: number; scored: EntryReach[] }[] = [];
   /** pickCell 中に hunt へ切り替えたい隊員（sweep 更新中の再入を避けるため次フレームで遷移） */
   private readonly pendingHunt = new Set<SwatHunter>();
   private cells: CoverCell[] | null = null;
@@ -1641,9 +1698,59 @@ export class SwatTeam {
     return this.d.doors.doors.find((door) => door.id === id) ?? null;
   }
 
-  /** 屋外なら入口ドア経由、屋内なら目標そのもの */
-  routeFrom(x: number, z: number, y: number, goal: Vec3, preferPortalId?: string | null): EntryRoute {
-    return entryRouteDest(this.d.rooms, this.portals(), { x, y, z }, goal, preferPortalId);
+  /**
+   * 屋外なら到達できる入口ドア経由、屋内なら目標そのもの。
+   * attack は担当ドアに縛られず、目標へ最も早く着く入口を選ぶ。
+   */
+  routeFrom(
+    x: number,
+    z: number,
+    y: number,
+    goal: Vec3,
+    preferPortalId?: string | null,
+    mode: 'hold' | 'attack' = 'hold',
+    blacklist?: { has(id: string): boolean },
+  ): EntryRoute {
+    const from = { x, y, z };
+    if (isIndoorPoint(this.d.rooms, x, z, y) || !isIndoorPoint(this.d.rooms, goal.x, goal.z, goal.y)) {
+      return entryRouteDest(this.d.rooms, this.portals(), from, goal, preferPortalId);
+    }
+    let reachable = this.reachablePortalLengths(from);
+    if (blacklist) reachable = reachable.filter((r) => !blacklist.has(r.id));
+    return entryRouteDest(this.d.rooms, this.portals(), from, goal, preferPortalId, { reachable, mode });
+  }
+
+  /** ブラックリストを除いて、今の入口以外に歩ける外壁入口があるか */
+  hasAlternateEntry(from: Vec3, exceptId: string, blacklist?: { has(id: string): boolean }): boolean {
+    const scored = this.reachablePortalLengths(from);
+    return scored.some((s) => s.id !== exceptId && !blacklist?.has(s.id));
+  }
+
+  /** 現在地から屋外側まで歩ける入口と経路長。位置を 2m で量子化して短時間キャッシュする。 */
+  private reachablePortalLengths(from: Vec3): EntryReach[] {
+    const key = `${Math.round(from.x / 2)}:${Math.round(from.z / 2)}:${Math.round(from.y)}`;
+    const hit = this.portalReachCache.find((c) => c.key === key);
+    if (hit && this.routeClock - hit.at < ROUTE_CACHE_TTL) return hit.scored;
+    const scored: EntryReach[] = [];
+    for (const e of this.portals()) {
+      if (Math.abs(e.sillY - from.y) >= 1.1) continue;
+      const length = reachableRouteLength(
+        { x: from.x, z: from.z },
+        { x: e.outside.x, z: e.outside.z },
+        from.y,
+        this.d.colliders,
+        this.d.bounds,
+        ENTRY_WALK_RADIUS,
+      );
+      if (length === null) continue;
+      scored.push({ id: e.id, length });
+    }
+    const entry = { key, at: this.routeClock, scored };
+    const idx = this.portalReachCache.findIndex((c) => c.key === key);
+    if (idx >= 0) this.portalReachCache[idx] = entry;
+    else this.portalReachCache.push(entry);
+    if (this.portalReachCache.length > ROUTE_CACHE_MAX) this.portalReachCache.shift();
+    return scored;
   }
 
   private portals(): EntryPortal[] {
@@ -1855,6 +1962,7 @@ export class SwatTeam {
     this.barricadeRadioCd = Math.max(0, this.barricadeRadioCd - dt);
     this.waveCooldown = Math.max(0, this.waveCooldown - dt);
     this.sightingAge += dt;
+    this.routeClock += dt;
 
     if (this.radioSpeakGap <= 0 && this.radioQueue.length > 0) {
       const next = this.radioQueue.shift()!;
@@ -2194,6 +2302,8 @@ export class SwatTeam {
             stairs: this.d.stairs,
             colliders: this.d.colliders,
             excludeDoorIds: usedFlankDoors,
+            bounds: this.d.bounds,
+            entries: this.portals(),
           });
           if (flank?.doorId) usedFlankDoors.add(flank.doorId);
           for (const h of members) {

@@ -79,6 +79,24 @@ export function listExteriorEntries(rooms: readonly RoomDef[], doors: readonly E
   return out;
 }
 
+export interface EntryReach {
+  id: string;
+  /** 現在地から屋外側までの歩行距離（m） */
+  length: number;
+}
+
+export interface EntryRouteOptions {
+  /** 歩いて届く入口。渡したときだけ到達フィルタと経路長スコアを使う（空配列なら届く入口なし） */
+  reachable?: readonly EntryReach[];
+  /** attack は担当ドアを無視し、目標へ最も早く着く入口を選ぶ */
+  mode?: 'hold' | 'attack';
+}
+
+/** 屋外迂回が最寄り入口より明らかに長いとみなす倍率と、その下限（m） */
+const FLANK_DETOUR_RATIO = 1.75;
+const FLANK_DETOUR_MIN = 18;
+const ENTRY_WALK_RADIUS = 0.3;
+
 function pickEntryPortal(entries: readonly EntryPortal[], from: Vec3, goal: Vec3): EntryPortal | null {
   const same = entries.filter((e) => Math.abs(e.sillY - from.y) < 1.1);
   const pool = same.length > 0 ? same : entries;
@@ -97,9 +115,41 @@ function pickEntryPortal(entries: readonly EntryPortal[], from: Vec3, goal: Vec3
   return best;
 }
 
+function portalRouteScore(portal: EntryPortal, goal: Vec3, walkLength: number): number {
+  return walkLength + Math.hypot(portal.inside.x - goal.x, portal.inside.z - goal.z) + Math.abs(portal.sillY - goal.y) * 4;
+}
+
+/** 到達可能な入口のうち、歩行距離＋屋内の残り距離が最短のものを選ぶ。 */
+function pickReachableEntry(
+  entries: readonly EntryPortal[],
+  from: Vec3,
+  goal: Vec3,
+  lengths: ReadonlyMap<string, number>,
+): EntryPortal | null {
+  let best: EntryPortal | null = null;
+  let bestScore = Infinity;
+  for (const e of entries) {
+    const len = lengths.get(e.id);
+    if (len === undefined || Math.abs(e.sillY - from.y) >= 1.1) continue;
+    const score = portalRouteScore(e, goal, len);
+    if (score < bestScore || (score === bestScore && best && e.id < best.id)) {
+      bestScore = score;
+      best = e;
+    }
+  }
+  return best;
+}
+
+function routePhase(from: Vec3, portal: EntryPortal): EntryRoute {
+  const dist = Math.hypot(portal.outside.x - from.x, portal.outside.z - from.z);
+  if (dist > 1.15) return { dest: portal.outside, entryId: portal.id, phase: 'approach' };
+  return { dest: portal.inside, entryId: portal.id, phase: 'cross' };
+}
+
 /**
  * 屋外にいる隊員が屋内の音・部屋へ向かうとき、外壁ドアの進入点を返す。
  * 直線距離で壁の向こうに「着いた」ことにしない。屋内に入ってから本来の目標へ進む。
+ * reachable を渡すと、歩いて届く入口だけを経路長で選ぶ。渡さない既存呼び出しは直線距離のまま。
  */
 export function entryRouteDest(
   rooms: readonly RoomDef[],
@@ -107,18 +157,31 @@ export function entryRouteDest(
   from: Vec3,
   goal: Vec3,
   preferPortalId?: string | null,
+  options?: EntryRouteOptions,
 ): EntryRoute {
   if (isIndoorPoint(rooms, from.x, from.z, from.y) || !isIndoorPoint(rooms, goal.x, goal.z, goal.y)) {
     return { dest: goal, entryId: null, phase: 'direct' };
+  }
+  if (options?.reachable) {
+    const lengths = new Map<string, number>();
+    for (const r of options.reachable) lengths.set(r.id, r.length);
+    const pool = entries.filter((e) => lengths.has(e.id) && Math.abs(e.sillY - from.y) < 1.1);
+    const preferred =
+      options.mode === 'attack'
+        ? null
+        : preferPortalId
+          ? pool.find((e) => e.id === preferPortalId) ?? null
+          : null;
+    const portal = preferred ?? pickReachableEntry(pool, from, goal, lengths);
+    if (!portal) return { dest: goal, entryId: null, phase: 'direct' };
+    return routePhase(from, portal);
   }
   const preferred = preferPortalId
     ? entries.find((e) => e.id === preferPortalId && Math.abs(e.sillY - from.y) < 1.1) ?? null
     : null;
   const portal = preferred ?? pickEntryPortal(entries, from, goal);
   if (!portal) return { dest: goal, entryId: null, phase: 'direct' };
-  const dist = Math.hypot(portal.outside.x - from.x, portal.outside.z - from.z);
-  if (dist > 1.15) return { dest: portal.outside, entryId: portal.id, phase: 'approach' };
-  return { dest: portal.inside, entryId: portal.id, phase: 'cross' };
+  return routePhase(from, portal);
 }
 
 // ---------- 間接フラッシュバン・催涙ガス投擲（ドア枠・窓・1バウンド壁反射） ----------
@@ -524,6 +587,10 @@ export interface PincerFlankParams {
   stairs: readonly StairMark[];
   colliders: readonly Collider[];
   excludeDoorIds?: ReadonlySet<string>;
+  /** 渡したときだけ、歩いて届かない迂回と長すぎる屋外迂回を却下する */
+  bounds?: { width: number; depth: number };
+  /** 屋外隊員が屋内目標へ入るときの外壁入口。届く入口が無い屋内迂回は捨てる */
+  entries?: readonly EntryPortal[];
 }
 
 export interface PincerFlankGoal {
@@ -581,12 +648,92 @@ export function findRoomDoors(room: RoomDef, doors: readonly FlankDoorSample[]):
   return out;
 }
 
+function flankEntryLengths(params: PincerFlankParams): { id: string; length: number }[] | null {
+  if (!params.bounds || !params.entries) return null;
+  const from = params.flankerPos;
+  const out: { id: string; length: number }[] = [];
+  for (const e of params.entries) {
+    if (Math.abs(e.sillY - from.y) >= 1.1) continue;
+    const length = reachableRouteLength(
+      { x: from.x, z: from.z },
+      { x: e.outside.x, z: e.outside.z },
+      from.y,
+      params.colliders,
+      params.bounds,
+      ENTRY_WALK_RADIUS,
+    );
+    if (length !== null) out.push({ id: e.id, length });
+  }
+  return out;
+}
+
+/**
+ * bounds があるとき、同階で歩いて届かない点は却下する。
+ * 屋外から屋内への迂回は、歩ける外壁入口があるときだけ採用する。
+ * 屋外どうしの迂回が最寄り入口より明らかに長いときも却下し、最短入口で接敵させる。
+ */
+function flankTargetUsable(
+  params: PincerFlankParams,
+  target: Vec3,
+  indoorRooms: readonly RoomDef[],
+  entryLengths: { id: string; length: number }[] | null,
+): boolean {
+  if (!params.bounds) return true;
+  const from = params.flankerPos;
+  if (Math.abs(target.y - from.y) >= 1.1) return true;
+  const fromIndoor = isIndoorPoint(indoorRooms, from.x, from.z, from.y);
+  const goalIndoor = isIndoorPoint(indoorRooms, target.x, target.z, target.y);
+  if (!fromIndoor && goalIndoor) {
+    if (entryLengths) return entryLengths.length > 0;
+    return (
+      reachableRouteLength(
+        { x: from.x, z: from.z },
+        { x: target.x, z: target.z },
+        from.y,
+        params.colliders,
+        params.bounds,
+        ENTRY_WALK_RADIUS,
+      ) !== null
+    );
+  }
+  const len = reachableRouteLength(
+    { x: from.x, z: from.z },
+    { x: target.x, z: target.z },
+    from.y,
+    params.colliders,
+    params.bounds,
+    ENTRY_WALK_RADIUS,
+  );
+  if (len === null) return false;
+  if (!fromIndoor && !goalIndoor && entryLengths && entryLengths.length > 0) {
+    let nearest = Infinity;
+    for (const e of entryLengths) if (e.length < nearest) nearest = e.length;
+    if (len > Math.max(FLANK_DETOUR_MIN, nearest * FLANK_DETOUR_RATIO)) return false;
+  }
+  return true;
+}
+
+function altDoorTarget(door: FlankDoorSample, playerRoom: RoomDef, colliders: readonly Collider[]): Vec3 {
+  const ax = door.centerX + door.normalX * 0.75;
+  const az = door.centerZ + door.normalZ * 0.75;
+  const bx = door.centerX - door.normalX * 0.75;
+  const bz = door.centerZ - door.normalZ * 0.75;
+  const aIn = pointInRoom(playerRoom, ax, az);
+  const approachX = aIn ? bx : ax;
+  const approachZ = aIn ? bz : az;
+  const insideX = aIn ? door.centerX + door.normalX * 0.5 : door.centerX - door.normalX * 0.5;
+  const insideZ = aIn ? door.centerZ + door.normalZ * 0.5 : door.centerZ - door.normalZ * 0.5;
+  const useApproach = !blockedAtFiltered(colliders, approachX, approachZ, 0.3, door.sillY);
+  return { x: useApproach ? approachX : insideX, y: door.sillY, z: useApproach ? approachZ : insideZ };
+}
+
 /**
  * 挟撃（ピンサー機動）の迂回目標を優先順に算出する:
  * 1. 目標の部屋へ通じる「正面班から最も遠い別ドア」
  * 2. 正面班と反対側の隣接室内部屋（行き止まり部屋対策）
  * 3. 別フロア階段アプローチ（正面班から最も遠い階段）
  * 4. 屋外・単室マップ用の側面/背面フォールバック
+ * bounds を渡すと、閉じた中庭や到達できない建物の外への迂回は次候補へ落とす。無ければ null（最短入口で接敵）。
  */
 export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal | null {
   const { playerPos, frontalPos, flankerPos, rooms, doors, stairs, colliders, excludeDoorIds } = params;
@@ -600,8 +747,10 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
   const fDirX = fdx / fLen;
   const fDirZ = fdz / fLen;
   const flankerIndoor = isIndoorPoint(indoorRooms, flankerPos.x, flankerPos.z, flankerPos.y);
+  const entryLengths = flankEntryLengths(params);
+  const usable = (target: Vec3): boolean => flankTargetUsable(params, target, indoorRooms, entryLengths);
 
-  // Priority 1: Alternate door into playerRoom
+  // Priority 1: Alternate door into playerRoom（スコア順。届かない中庭側は次のドアへ）
   if (playerRoom) {
     const roomDoors = findRoomDoors(playerRoom, doors);
     if (roomDoors.length >= 2) {
@@ -614,8 +763,7 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
           closestFrontalId = d.id;
         }
       }
-      let bestDoor: FlankDoorSample | null = null;
-      let bestScore = -Infinity;
+      const ranked: { door: FlankDoorSample; score: number }[] = [];
       for (const d of roomDoors) {
         if (d.id === closestFrontalId) continue;
         if (excludeDoorIds?.has(d.id)) continue;
@@ -624,7 +772,6 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
         const ddz = d.centerZ - playerPos.z;
         const dLen = Math.hypot(ddx, ddz) || 1;
         const dot = (ddx * fDirX + ddz * fDirZ) / dLen;
-        // 反対側が屋内なら屋内迂回ルートとして加点
         const ax = d.centerX + d.normalX * 0.85;
         const az = d.centerZ + d.normalZ * 0.85;
         const bx = d.centerX - d.normalX * 0.85;
@@ -634,34 +781,19 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
         const outZ = aIn ? bz : az;
         const oppIndoor = isIndoorPoint(indoorRooms, outX, outZ, d.sillY);
         const score = df + (1 - dot) * 4 + (flankerIndoor && oppIndoor ? 3 : 0);
-        if (score > bestScore) {
-          bestScore = score;
-          bestDoor = d;
-        }
+        ranked.push({ door: d, score });
       }
-      if (bestDoor) {
-        const ax = bestDoor.centerX + bestDoor.normalX * 0.75;
-        const az = bestDoor.centerZ + bestDoor.normalZ * 0.75;
-        const bx = bestDoor.centerX - bestDoor.normalX * 0.75;
-        const bz = bestDoor.centerZ - bestDoor.normalZ * 0.75;
-        const aIn = pointInRoom(playerRoom, ax, az);
-        const approachX = aIn ? bx : ax;
-        const approachZ = aIn ? bz : az;
-        const insideX = aIn ? bestDoor.centerX + bestDoor.normalX * 0.5 : bestDoor.centerX - bestDoor.normalX * 0.5;
-        const insideZ = aIn ? bestDoor.centerZ + bestDoor.normalZ * 0.5 : bestDoor.centerZ - bestDoor.normalZ * 0.5;
-        const useApproach = !blockedAtFiltered(colliders, approachX, approachZ, 0.3, bestDoor.sillY);
-        return {
-          target: { x: useApproach ? approachX : insideX, y: bestDoor.sillY, z: useApproach ? approachZ : insideZ },
-          kind: 'altDoor',
-          doorId: bestDoor.id,
-        };
+      ranked.sort((a, b) => b.score - a.score || a.door.id.localeCompare(b.door.id));
+      for (const { door } of ranked) {
+        const target = altDoorTarget(door, playerRoom, colliders);
+        if (!usable(target)) continue;
+        return { target, kind: 'altDoor', doorId: door.id };
       }
     }
   }
 
   // Priority 2: Opposite adjacent indoor room on the same floor
-  let bestRoom: RoomDef | null = null;
-  let bestRoomScore = -Infinity;
+  const rankedRooms: { room: RoomDef; score: number }[] = [];
   for (const r of indoorRooms) {
     if (playerRoom && r.id === playerRoom.id) continue;
     const fy = r.floorY ?? 0;
@@ -673,38 +805,32 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
     const dot = (rdx * fDirX + rdz * fDirZ) / distP;
     const distF = Math.hypot(r.x - frontalPos.x, r.z - frontalPos.z);
     const score = distF + (dot < 0.3 ? (1 - dot) * 5 : -4) - distP * 0.25;
-    if (score > bestRoomScore) {
-      bestRoomScore = score;
-      bestRoom = r;
-    }
+    rankedRooms.push({ room: r, score });
   }
-  if (bestRoom) {
-    return {
-      target: { x: bestRoom.x, y: bestRoom.floorY ?? 0, z: bestRoom.z },
-      kind: 'oppositeRoom',
-      roomId: bestRoom.id,
-    };
+  rankedRooms.sort((a, b) => b.score - a.score || a.room.id.localeCompare(b.room.id));
+  for (const { room } of rankedRooms) {
+    const target = { x: room.x, y: room.floorY ?? 0, z: room.z };
+    if (!usable(target)) continue;
+    return { target, kind: 'oppositeRoom', roomId: room.id };
   }
 
-  // Priority 3: Alternate floor stair approach
-  if (stairs.length > 0) {
-    let bestStairTarget: Vec3 | null = null;
-    let bestStairDist = -1;
-    for (const st of stairs) {
-      const touchesLow = Math.abs(st.baseY - playerPos.y) < 0.75;
-      const touchesHigh = Math.abs(st.topY - playerPos.y) < 0.75;
-      if (!touchesLow && !touchesHigh) continue;
-      const pt = touchesLow ? st.approachLow : st.approachHigh;
-      const y = touchesLow ? st.baseY : st.topY;
-      const df = Math.hypot(pt.x - frontalPos.x, pt.z - frontalPos.z);
-      if (df > bestStairDist) {
-        bestStairDist = df;
-        bestStairTarget = { x: pt.x, y, z: pt.z };
-      }
-    }
-    if (bestStairTarget) {
-      return { target: bestStairTarget, kind: 'altFloorStair' };
-    }
+  // Priority 3: Alternate floor stair approach（正面班から遠い順）
+  const rankedStairs: { target: Vec3; dist: number }[] = [];
+  for (const st of stairs) {
+    const touchesLow = Math.abs(st.baseY - playerPos.y) < 0.75;
+    const touchesHigh = Math.abs(st.topY - playerPos.y) < 0.75;
+    if (!touchesLow && !touchesHigh) continue;
+    const pt = touchesLow ? st.approachLow : st.approachHigh;
+    const y = touchesLow ? st.baseY : st.topY;
+    rankedStairs.push({
+      target: { x: pt.x, y, z: pt.z },
+      dist: Math.hypot(pt.x - frontalPos.x, pt.z - frontalPos.z),
+    });
+  }
+  rankedStairs.sort((a, b) => b.dist - a.dist);
+  for (const stair of rankedStairs) {
+    if (!usable(stair.target)) continue;
+    return { target: stair.target, kind: 'altFloorStair' };
   }
 
   // Priority 4: Lateral / rear fallback (outdoor or single-room map)
@@ -713,9 +839,10 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
     const ang = baseAngle + deg * DEG2RAD;
     const tx = playerPos.x + Math.cos(ang) * 4.5;
     const tz = playerPos.z + Math.sin(ang) * 4.5;
-    if (!blockedAtFiltered(colliders, tx, tz, 0.32, playerPos.y)) {
-      return { target: { x: tx, y: playerPos.y, z: tz }, kind: 'lateral' };
-    }
+    if (blockedAtFiltered(colliders, tx, tz, 0.32, playerPos.y)) continue;
+    const target = { x: tx, y: playerPos.y, z: tz };
+    if (!usable(target)) continue;
+    return { target, kind: 'lateral' };
   }
   return null;
 }
