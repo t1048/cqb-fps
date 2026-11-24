@@ -12,7 +12,7 @@ export const SCENERY_PROPS: ReadonlySet<string> = new Set([
   'bed', 'hbed', 'piano', 'stretcher', 'ivstand', 'curtain', 'medcab', 'bar', 'sofa', 'table', 'low_table',
   'teller', 'vault', 'bench', 'column', 'desk', 'chair', 'partition', 'shelf', 'metal_rack', 'tool_shelf',
   'pallet', 'container', 'crates', 'toilet', 'sink', 'stall', 'rail', 'wardrobe', 'fridge', 'bathtub',
-  'counter', 'tv_board', 'beam', 'lamp', 'engawa', 'post',
+  'counter', 'tv_board', 'beam', 'lamp', 'engawa', 'post', 'planter', 'island', 'banquet_table',
 ]);
 
 type Builder = (g: THREE.Group, def: BoxDef, mat: SceneMat) => void;
@@ -386,6 +386,22 @@ function counter(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   box(g, wood, w, h * 0.18, 0.04, 0, h * 0.88, -d * 0.48);
 }
 
+function planter(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
+  const { width: w, height: h, depth: d } = def;
+  const wood = mat('wood', 0x8a6f52);
+  const darkWood = mat('wood', 0x5c4632);
+  const soil = mat('wood', 0x4a3828);
+  const foliage = mat('linen', 0x5f7d4f);
+  const foliageDark = mat('linen', 0x49663e);
+  box(g, wood, w * 0.92, h * 0.52, d * 0.92, 0, h * 0.26, 0);
+  box(g, darkWood, w, h * 0.1, d, 0, h * 0.55, 0);
+  box(g, soil, w * 0.82, h * 0.06, d * 0.82, 0, h * 0.62, 0);
+  cyl(g, foliageDark, Math.min(w, d) * 0.16, h * 0.34, 0, h * 0.78, 0);
+  box(g, foliage, w * 0.52, h * 0.3, d * 0.52, -w * 0.12, h * 0.82, -d * 0.08);
+  box(g, foliageDark, w * 0.42, h * 0.24, d * 0.42, w * 0.16, h * 0.78, d * 0.14);
+  box(g, foliage, w * 0.3, h * 0.2, d * 0.3, w * 0.05, h * 0.92, -d * 0.16);
+}
+
 function engawa(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { width: w, height: h, depth: d } = def;
   const wood = mat('wood', 0xffffff);
@@ -431,6 +447,7 @@ const BUILDERS: Record<string, Builder> = {
   bed, hbed, piano, stretcher, ivstand, curtain, medcab, bar, sofa, table, low_table: table, teller, vault, bench,
   column, desk, chair, partition, shelf, metal_rack: shelf, tool_shelf: shelf, pallet, container, crates: container,
   toilet, sink, stall, rail, wardrobe, fridge, bathtub, counter, tv_board: desk, beam, lamp, engawa, post,
+  planter, island: counter, banquet_table: table,
 };
 
 /** 小道具メッシュ。未知の prop は null（呼び出し側が箱のまま描く）。原点は足元中心。 */

@@ -525,6 +525,20 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
     return len;
   };
 
+  /** 既配置室と X 軸辺・Z 軸辺の両方で接するか（§2.5 輪郭バリエーション用） */
+  const orthogonalContactWithPlaced = (c: Rect, lv: StoryLevel): boolean => {
+    let onX = false;
+    let onZ = false;
+    for (const r of levelRects(lv)) {
+      const e = sharedEdge(c, r);
+      if (!e) continue;
+      if (e.axis === 'x') onX = true;
+      else onZ = true;
+      if (onX && onZ) return true;
+    }
+    return false;
+  };
+
   /**
    * 非 1F 階のコア群（その階の部屋が木で辿り着くコア番号）。2 コア時に同階の島を検出するのに使う。
    * parentOf は placeGlued より後に宣言されるが、呼び出しは配置ループ内（宣言後）なので参照できる。
@@ -607,6 +621,7 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
         if (m.level === 0) {
           const b = bbox([...levelRects(0), c]) as Rect;
           score = (rectArea(b) * (1 + 0.3 * rng.next())) / (1 + 0.1 * contact);
+          if (orthogonalContactWithPlaced(c, m.level)) score *= 0.85;
         } else {
           score = rng.next() / (1 + 0.1 * contact);
           // 2 コア時: 別のコア由来の部屋群に扉が置けるほど接する位置を強く優先（同階が島に分かれないように）

@@ -79,9 +79,11 @@
       { "from": "corridor", "to": "garage", "style": "door", "weight": 1.2 },
       { "from": "corridor", "to": "basement_utility", "style": "door", "weight": 3 },
       { "from": "corridor", "to": "terrace", "style": "exterior_door", "weight": 2 },
+      { "from": "corridor", "to": "courtyard", "style": "exterior_door", "weight": 2 },
       { "from": "living_hub", "to": "study_office", "style": "door", "weight": 2 },
       { "from": "living_hub", "to": "wing_private", "style": "door", "weight": 2 },
       { "from": "living_hub", "to": "terrace", "style": "exterior_door", "weight": 1.5 },
+      { "from": "living_hub", "to": "courtyard", "style": "exterior_door", "weight": 2 },
       { "from": "stair_core", "to": "basement_utility", "style": "door", "weight": 2.5 },
       { "from": "stair_core", "to": "wing_private", "style": "door", "weight": 2 },
       { "from": "stair_core", "to": "study_office", "style": "door", "weight": 2 },
@@ -197,7 +199,7 @@
       "depth": { "min": 7.75, "max": 10.0 },
       "exteriorRequirement": "interior_ok",
       "roofStyle": "stackable",
-      "doubleHeightChance": 0.15,
+      "doubleHeightChance": 0.22,
       "spawnWeight": 3,
       "floorMaterial": "wood",
       "furniture": [
@@ -368,6 +370,97 @@
       "spawnWeight": 1,
       "furniture": [
         { "id": "crates", "width": 1.0, "depth": 0.8, "height": 1.0, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } }
+      ]
+    },
+    {
+      "id": "living_atrium",
+      "name": "吹き抜けリビング",
+      "category": "living_hub",
+      "allowedLevels": [0],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 1.6,
+      "width": { "min": 9.5, "max": 12.0 },
+      "depth": { "min": 8.5, "max": 11.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0.35,
+      "spawnWeight": 3,
+      "floorMaterial": "wood",
+      "furniture": [
+        { "id": "sofa", "width": 2.2, "depth": 0.9, "height": 0.85, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "low_table", "width": 1.2, "depth": 0.6, "height": 0.45, "place": "center", "chance": 0.9, "count": { "min": 1, "max": 1 } },
+        { "id": "tv_board", "width": 1.8, "depth": 0.45, "height": 0.55, "place": "wall", "chance": 0.9, "count": { "min": 1, "max": 1 } }
+      ],
+      "subRooms": [
+        {
+          "id": "living",
+          "name": "リビング",
+          "shareWeight": 0.62,
+          "minSide": 4.5,
+          "private": false,
+          "connectStyle": "arch",
+          "spawnWeight": 3,
+          "floorMaterial": "wood",
+          "furniture": [
+            { "id": "sofa", "width": 2.2, "depth": 0.9, "height": 0.85, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+            { "id": "tv_board", "width": 1.8, "depth": 0.45, "height": 0.55, "place": "wall", "chance": 0.9, "count": { "min": 1, "max": 1 } }
+          ]
+        },
+        {
+          "id": "kitchen",
+          "name": "キッチン",
+          "shareWeight": 0.38,
+          "minSide": 4.0,
+          "private": false,
+          "connectStyle": "arch",
+          "spawnWeight": 2,
+          "floorMaterial": "tile",
+          "furniture": [
+            { "id": "counter", "width": 2.0, "depth": 0.65, "height": 0.9, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+            { "id": "fridge", "width": 0.75, "depth": 0.7, "height": 1.8, "place": "corner", "chance": 0.9, "count": { "min": 1, "max": 1 } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "inner_court",
+      "name": "内包中庭",
+      "category": "courtyard",
+      "allowedLevels": [0],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 1.2,
+      "outdoor": true,
+      "width": { "min": 5.5, "max": 8.0 },
+      "depth": { "min": 5.5, "max": 8.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "open_sky",
+      "doubleHeightChance": 0,
+      "spawnWeight": 0,
+      "furniture": [
+        { "id": "planter", "width": 0.7, "depth": 0.7, "height": 0.85, "place": "corner", "chance": 0.7, "count": { "min": 1, "max": 2 } },
+        { "id": "bench", "width": 1.4, "depth": 0.55, "height": 0.8, "place": "wall", "chance": 0.6, "count": { "min": 1, "max": 1 } }
+      ]
+    },
+    {
+      "id": "vault_cellar",
+      "name": "地下保管庫",
+      "category": "basement_utility",
+      "allowedLevels": [-1],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 1.6,
+      "width": { "min": 5.0, "max": 7.0 },
+      "depth": { "min": 5.0, "max": 7.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 1.8,
+      "floorMaterial": "concrete",
+      "furniture": [
+        { "id": "crates", "width": 1.0, "depth": 0.8, "height": 1.0, "place": "corner", "chance": 0.9, "count": { "min": 1, "max": 2 } },
+        { "id": "safe", "width": 0.9, "depth": 0.8, "height": 1.5, "place": "wall", "chance": 0.85, "count": { "min": 1, "max": 1 } }
       ]
     }
   ],

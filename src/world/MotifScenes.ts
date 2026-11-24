@@ -19,6 +19,14 @@ interface Spec {
   place: 'wall' | 'center';
 }
 
+export const ATRIUM_GALLERY_TARGET = 1.8;
+export const ATRIUM_GALLERY_MIN = 1.65;
+export const ATRIUM_HOLE_MIN_SIDE = 2.4;
+export const ATRIUM_MAX_AREA_RATIO = 0.4;
+export const ATRIUM_VOID_MIN_SIDE = 2.0;
+export const ATRIUM_SNAP = 0.25;
+export const ATRIUM_DOOR_CLEAR_MARGIN = 0.45;
+
 const HALL_NAME: Record<MotifId, string> = {
   hospital: 'メインホール',
   clubhouse: 'メインラウンジ',
@@ -72,6 +80,7 @@ const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
     ],
     private: [{ prop: 'sofa', width: 1.8, depth: 0.85, height: 0.82, place: 'wall' }],
     secure: [{ prop: 'shelf', width: 1.3, depth: 0.42, height: 1.7, place: 'wall' }],
+    circ: [{ prop: 'planter', width: 0.7, depth: 0.7, height: 0.55, place: 'wall' }],
   },
   bank: {
     social: [
@@ -110,7 +119,10 @@ const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
   },
   house: {
     social: [{ prop: 'low_table', width: 1.2, depth: 0.72, height: 0.35, place: 'center' }],
-    outdoor: [{ prop: 'engawa', width: 2.2, depth: 0.72, height: 0.32, place: 'wall' }],
+    outdoor: [
+      { prop: 'engawa', width: 2.2, depth: 0.72, height: 0.32, place: 'wall' },
+      { prop: 'planter', width: 0.7, depth: 0.7, height: 0.55, place: 'wall' },
+    ],
   },
   plain: {},
 };
@@ -441,97 +453,168 @@ function carveAtrium(rooms: RoomDef[], floors: BoxDef[], covers: BoxDef[], map: 
   }
 }
 
+type Interval = [number, number];
+
+function subtractIntervals(base: readonly Interval[], cuts: readonly Interval[]): Interval[] {
+  let free: Interval[] = base.map(([a, b]): Interval => [a, b]).filter(([a, b]) => b - a > 1e-9);
+  for (const [c0, c1] of cuts) {
+    const next: Interval[] = [];
+    for (const [f0, f1] of free) {
+      if (c1 <= f0 || c0 >= f1) { next.push([f0, f1]); continue; }
+      if (c0 > f0) next.push([f0, Math.min(c0, f1)]);
+      if (c1 < f1) next.push([Math.max(c1, f0), f1]);
+    }
+    free = next.filter(([a, b]) => b - a > 1e-9);
+  }
+  free.sort((a, b) => a[0] - b[0]);
+  return free;
+}
+
+function doorKeepRect(d: DoorDef): Rect {
+  const width = d.width ?? 1.2;
+  const leaf = d.double ? width / 2 : width;
+  const reach = leaf + ATRIUM_DOOR_CLEAR_MARGIN;
+  const along = width / 2 + 0.3;
+  const yaw = ((d.yaw % 180) + 180) % 180;
+  const wallAlongX = yaw < 45 || yaw > 135;
+  return wallAlongX
+    ? { x0: d.x - along, z0: d.z - reach, x1: d.x + along, z1: d.z + reach }
+    : { x0: d.x - reach, z0: d.z - along, x1: d.x + reach, z1: d.z + along };
+}
+
 function carveOneAtrium(rooms: RoomDef[], floors: BoxDef[], covers: BoxDef[], map: GeneratedMapRaw, hall: RoomDef): boolean {
   const hallY = hall.floorY ?? 0;
   const upper = rooms.filter((r) => !r.outdoor && !r.id.includes('stair') && !r.id.startsWith('core') && (r.floorY ?? 0) > hallY + 2);
   if (upper.length === 0) return false;
   const hallRect = rectOf(hall);
-  let best: { room: RoomDef; hole: Rect } | undefined;
+  const minOverlap = 2 * ATRIUM_GALLERY_MIN + ATRIUM_HOLE_MIN_SIDE;
+  interface Candidate { room: RoomDef; hole: Rect; upperRect: Rect; upY: number }
+  const candidates: Candidate[] = [];
   for (const r of upper) {
-    const o = overlap(hallRect, rectOf(r));
-    if (!o) continue;
-    if (o.x1 - o.x0 < 3.2 || o.z1 - o.z0 < 3.2) continue;
-    const hole = inset(o, 0.9);
-    if (hole.x1 - hole.x0 < 1.6 || hole.z1 - hole.z0 < 1.6) continue;
-    const area = (hole.x1 - hole.x0) * (hole.z1 - hole.z0);
-    if (!best || area > (best.hole.x1 - best.hole.x0) * (best.hole.z1 - best.hole.z0)) best = { room: r, hole };
-  }
-  if (!best) return false;
-  const hole = best.hole;
-  const upY = best.room.floorY ?? 0;
-  const keep: Rect[] = [];
-  for (const st of map.stairs ?? []) {
-    keep.push(xzOf({
-      x: st.x,
-      z: st.z,
-      y: st.y ?? 0,
-      width: st.width + 0.5,
-      depth: st.steps * st.run + 0.5,
-      height: 1,
-      yaw: st.yaw,
-    }));
-  }
-  for (const c of covers) if (sameFloor(c.y ?? 0, upY)) keep.push(xzOf(c));
-  for (const e of map.entities) {
-    if (!sameFloor(e.y ?? 0, upY)) continue;
-    keep.push({ x0: e.x - 0.45, z0: e.z - 0.45, x1: e.x + 0.45, z1: e.z + 0.45 });
-  }
-  const voids = subtractRects(hole, keep).filter((v) => v.x1 - v.x0 >= 1.35 && v.z1 - v.z0 >= 1.35);
-  if (voids.length === 0) return false;
-
-  const next: BoxDef[] = [];
-  for (const f of floors) {
-    const surface = (f.y ?? 0) + f.height;
-    if (Math.abs(surface - upY) > 0.35 || !rectsOverlap(xzOf(f), hole)) {
-      next.push(f);
-      continue;
+    const upperRect = rectOf(r);
+    const o = overlap(hallRect, upperRect);
+    if (!o || o.x1 - o.x0 < minOverlap || o.z1 - o.z0 < minOverlap) continue;
+    let hole: Rect | undefined;
+    let g = ATRIUM_GALLERY_TARGET;
+    for (;;) {
+      const cand = inset(o, g);
+      if (cand.x1 - cand.x0 >= ATRIUM_HOLE_MIN_SIDE && cand.z1 - cand.z0 >= ATRIUM_HOLE_MIN_SIDE) { hole = cand; break; }
+      if (g <= ATRIUM_GALLERY_MIN + 1e-9) break;
+      g = Math.max(ATRIUM_GALLERY_MIN, g - ATRIUM_SNAP);
     }
-    const base: Rect = xzOf(f);
-    for (const piece of subtractRects(base, voids)) {
-      const w = piece.x1 - piece.x0;
-      const d = piece.z1 - piece.z0;
-      if (w < 0.18 || d < 0.18) continue;
-      next.push({
-        ...f,
-        x: round3((piece.x0 + piece.x1) / 2),
-        z: round3((piece.z0 + piece.z1) / 2),
-        width: round3(w),
-        depth: round3(d),
-      });
+    if (!hole) continue;
+    const roomArea = r.width * r.depth;
+    let rejected = false;
+    while ((hole.x1 - hole.x0) * (hole.z1 - hole.z0) > ATRIUM_MAX_AREA_RATIO * roomArea) {
+      hole = inset(hole, ATRIUM_SNAP / 2);
+      if (hole.x1 - hole.x0 < ATRIUM_HOLE_MIN_SIDE || hole.z1 - hole.z0 < ATRIUM_HOLE_MIN_SIDE) { rejected = true; break; }
     }
+    if (rejected) continue;
+    candidates.push({ room: r, hole, upperRect, upY: r.floorY ?? 0 });
   }
+  if (candidates.length === 0) return false;
 
-  const railH = 1.05;
-  const rails: { x: number; z: number; width: number; depth: number }[] = [
-    { x: (hole.x0 + hole.x1) / 2, z: hole.z0 - 0.05, width: hole.x1 - hole.x0, depth: 0.08 },
-    { x: (hole.x0 + hole.x1) / 2, z: hole.z1 + 0.05, width: hole.x1 - hole.x0, depth: 0.08 },
-    { x: hole.x0 - 0.05, z: (hole.z0 + hole.z1) / 2, width: 0.08, depth: hole.z1 - hole.z0 },
-    { x: hole.x1 + 0.05, z: (hole.z0 + hole.z1) / 2, width: 0.08, depth: hole.z1 - hole.z0 },
-  ];
-  const upperRect = rectOf(best.room);
-  for (const rail of rails) {
-    const box: BoxDef = {
-      x: round3(rail.x),
-      z: round3(rail.z),
-      y: round3(upY),
-      width: round3(rail.width),
-      depth: round3(rail.depth),
-      height: railH,
-      prop: 'rail',
-    };
-    const foot = xzOf(box);
-    const gallery =
-      foot.x0 >= upperRect.x0 - 0.05 &&
-      foot.x1 <= upperRect.x1 + 0.05 &&
-      foot.z0 >= upperRect.z0 - 0.05 &&
-      foot.z1 <= upperRect.z1 + 0.05;
-    if (!gallery) continue;
-    if (blocked(covers, box, map, 0)) continue;
-    covers.push(box);
+  interface Attempt { cand: Candidate; hole: Rect; voidRect: Rect; keep: Rect[]; doorKeeps: Rect[]; stairKeeps: Rect[]; coverKeeps: { rect: Rect; height: number }[] }
+  const attempts: Attempt[] = [];
+  for (const cand of candidates) {
+    const { hole, upY } = cand;
+    const keep: Rect[] = [];
+    const stairKeeps: Rect[] = [];
+    for (const st of map.stairs ?? []) {
+      const rect = xzOf({ x: st.x, z: st.z, y: st.y ?? 0, width: st.width + 0.5, depth: st.steps * st.run + 0.5, height: 1, yaw: st.yaw });
+      stairKeeps.push(rect); keep.push(rect);
+    }
+    const coverKeeps: { rect: Rect; height: number }[] = [];
+    for (const c of covers) if (sameFloor(c.y ?? 0, upY)) { const rect = xzOf(c); coverKeeps.push({ rect, height: c.height }); keep.push(rect); }
+    const doorKeeps: Rect[] = [];
+    for (const d of map.doors) {
+      if (!sameFloor(d.y ?? 0, upY)) continue;
+      const rect = doorKeepRect(d); doorKeeps.push(rect); keep.push(rect);
+    }
+    const spawn = map.playerSpawn;
+    if (sameFloor(spawn.y, upY)) keep.push({ x0: spawn.x - 1.0, z0: spawn.z - 1.0, x1: spawn.x + 1.0, z1: spawn.z + 1.0 });
+    for (const a of map.allies) if (sameFloor(a.y ?? 0, upY)) keep.push({ x0: a.x - 0.9, z0: a.z - 0.9, x1: a.x + 0.9, z1: a.z + 0.9 });
+    for (const e of map.entities) if (sameFloor(e.y ?? 0, upY)) keep.push({ x0: e.x - 0.6, z0: e.z - 0.6, x1: e.x + 0.6, z1: e.z + 0.6 });
+    const voids = subtractRects(hole, keep).filter((v) => v.x1 - v.x0 >= ATRIUM_VOID_MIN_SIDE && v.z1 - v.z0 >= ATRIUM_VOID_MIN_SIDE);
+    if (voids.length === 0) continue;
+    let voidRect = voids[0]!;
+    for (const v of voids) if ((v.x1 - v.x0) * (v.z1 - v.z0) > (voidRect.x1 - voidRect.x0) * (voidRect.z1 - voidRect.z0)) voidRect = v;
+    attempts.push({ cand, hole, voidRect, keep, doorKeeps, stairKeeps, coverKeeps });
   }
-  if (!covers.some((c) => c.prop === 'rail' && sameFloor(c.y ?? 0, upY))) return false;
-  floors.splice(0, floors.length, ...next);
-  return true;
+  attempts.sort((a, b) => (b.voidRect.x1 - b.voidRect.x0) * (b.voidRect.z1 - b.voidRect.z0) - (a.voidRect.x1 - a.voidRect.x0) * (a.voidRect.z1 - a.voidRect.z0) || a.voidRect.x0 - b.voidRect.x0 || a.voidRect.z0 - b.voidRect.z0);
+
+  for (const att of attempts) {
+    const { hole, voidRect, doorKeeps, stairKeeps, coverKeeps } = att;
+    const { upperRect, upY } = att.cand;
+    const next: BoxDef[] = [];
+    for (const f of floors) {
+      const surface = (f.y ?? 0) + f.height;
+      if (Math.abs(surface - upY) > 0.35 || !rectsOverlap(xzOf(f), hole)) { next.push(f); continue; }
+      const base: Rect = xzOf(f);
+      for (const piece of subtractRects(base, [voidRect])) {
+        const w = piece.x1 - piece.x0; const d = piece.z1 - piece.z0;
+        if (w < 0.18 || d < 0.18) continue;
+        next.push({ ...f, x: round3((piece.x0 + piece.x1) / 2), z: round3((piece.z0 + piece.z1) / 2), width: round3(w), depth: round3(d) });
+      }
+    }
+    const floorRects: Rect[] = [];
+    for (const f of next) if (Math.abs((f.y ?? 0) + f.height - upY) <= 0.35) floorRects.push(xzOf(f));
+
+    interface Edge { axis: 'x' | 'z'; coord: number; lo: number; hi: number; band: Rect; outward: -1 | 1 }
+    const v = voidRect;
+    const edges: Edge[] = [
+      { axis: 'x', coord: v.z0, lo: v.x0, hi: v.x1, band: { x0: v.x0, z0: v.z0 - 0.3, x1: v.x1, z1: v.z0 }, outward: -1 },
+      { axis: 'x', coord: v.z1, lo: v.x0, hi: v.x1, band: { x0: v.x0, z0: v.z1, x1: v.x1, z1: v.z1 + 0.3 }, outward: 1 },
+      { axis: 'z', coord: v.x0, lo: v.z0, hi: v.z1, band: { x0: v.x0 - 0.3, z0: v.z0, x1: v.x0, z1: v.z1 }, outward: -1 },
+      { axis: 'z', coord: v.x1, lo: v.z0, hi: v.z1, band: { x0: v.x1, z0: v.z0, x1: v.x1 + 0.3, z1: v.z1 }, outward: 1 },
+    ];
+    const pending: BoxDef[] = [];
+    let failed = false;
+    let hasRequired = false;
+    for (const edge of edges) {
+      if (!floorRects.some((fr) => rectsOverlap(fr, edge.band))) continue;
+      hasRequired = true;
+      const cutsFor = (rects: readonly Rect[], pad: number): Interval[] => {
+        const out: Interval[] = [];
+        for (const k of rects) {
+          if (edge.axis === 'x') {
+            if (k.z0 > edge.coord + 0.15 || k.z1 < edge.coord - 0.15) continue;
+            const lo = Math.max(edge.lo, k.x0 - pad); const hi = Math.min(edge.hi, k.x1 + pad);
+            if (hi > lo) out.push([lo, hi]);
+          } else {
+            if (k.x0 > edge.coord + 0.15 || k.x1 < edge.coord - 0.15) continue;
+            const lo = Math.max(edge.lo, k.z0 - pad); const hi = Math.min(edge.hi, k.z1 + pad);
+            if (hi > lo) out.push([lo, hi]);
+          }
+        }
+        return out;
+      };
+      const passage: Interval[] = [...cutsFor(doorKeeps, 0.1), ...cutsFor(stairKeeps, 0)];
+      const tallRects = coverKeeps.filter((c) => c.height >= 0.9).map((c) => c.rect);
+      const remaining = subtractIntervals([[edge.lo, edge.hi]], passage);
+      const railIntervals = subtractIntervals(remaining, cutsFor(tallRects, 0));
+      for (const [a, b] of railIntervals) {
+        if (b - a < 0.5) continue;
+        const ea = a <= edge.lo + 1e-9 ? a - 0.08 : a;
+        const eb = b >= edge.hi - 1e-9 ? b + 0.08 : b;
+        const mid = (ea + eb) / 2; const len = eb - ea;
+        const box: BoxDef = edge.axis === 'x'
+          ? { x: round3(mid), z: round3(edge.coord + edge.outward * 0.05), y: round3(upY), width: round3(len), depth: 0.08, height: 1.05, prop: 'rail' }
+          : { x: round3(edge.coord + edge.outward * 0.05), z: round3(mid), y: round3(upY), width: 0.08, depth: round3(len), height: 1.05, prop: 'rail' };
+        const foot = xzOf(box);
+        if (foot.x0 < upperRect.x0 - 0.06 || foot.x1 > upperRect.x1 + 0.06 || foot.z0 < upperRect.z0 - 0.06 || foot.z1 > upperRect.z1 + 0.06) { failed = true; break; }
+        if (doorKeeps.some((k) => rectsOverlap(foot, k))) { failed = true; break; }
+        if (covers.some((c) => sameFloor(c.y ?? 0, upY) && rectsOverlap(foot, xzOf(c)))) { failed = true; break; }
+        pending.push(box);
+      }
+      if (failed) break;
+    }
+    if (failed || !hasRequired) continue;
+    floors.splice(0, floors.length, ...next);
+    for (const box of pending) covers.push(box);
+    return true;
+  }
+  return false;
 }
 
 function overlap(a: Rect, b: Rect): Rect | null {
@@ -567,7 +650,7 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
     placeToiletFixtures(covers, map, toilet);
   }
 
-  const limit: Record<string, number> = { bed: 3, hbed: 3, piano: 1, bar: 1, sofa: 2, teller: 1, vault: 1, stretcher: 1, medcab: 1, container: 2, shelf: 2, desk: 3, chair: 4, partition: 2, low_table: 3, engawa: 2 };
+  const limit: Record<string, number> = { bed: 3, hbed: 3, piano: 1, bar: 1, sofa: 2, teller: 1, vault: 1, stretcher: 1, medcab: 1, container: 2, shelf: 2, desk: 3, chair: 4, partition: 2, low_table: 3, engawa: 2, planter: 2 };
   for (const room of rooms) {
     if (room.id.includes('stair') || room === toilet) continue;
     if (room.outdoor && motif.id !== 'house') continue;

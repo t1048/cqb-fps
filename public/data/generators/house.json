@@ -203,7 +203,7 @@
       "depth": { "min": 8.75, "max": 11.25 },
       "exteriorRequirement": "interior_ok",
       "roofStyle": "stackable",
-      "doubleHeightChance": 0.2,
+      "doubleHeightChance": 0.28,
       "spawnWeight": 3.5,
       "floorMaterial": "wood",
       "furniture": [
@@ -256,7 +256,7 @@
       "depth": { "min": 6.25, "max": 8.0 },
       "exteriorRequirement": "interior_ok",
       "roofStyle": "stackable",
-      "doubleHeightChance": 0,
+      "doubleHeightChance": 0.18,
       "spawnWeight": 2.5,
       "floorMaterial": "wood",
       "furniture": [
@@ -507,6 +507,94 @@
       "spawnWeight": 1.0,
       "furniture": [
         { "id": "crates", "width": 1.1, "depth": 0.8, "height": 1.0, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } }
+      ]
+    },
+    {
+      "id": "gallery_hall",
+      "name": "2F ギャラリー回廊",
+      "category": "corridor",
+      "allowedLevels": [1],
+      "minCount": 0,
+      "maxCount": 2,
+      "weight": 1.4,
+      "width": { "min": 3.5, "max": 4.5 },
+      "depth": { "min": 8.0, "max": 13.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 0.35,
+      "furniture": [
+        { "id": "console", "width": 1.0, "depth": 0.35, "height": 0.85, "place": "wall", "chance": 0.5, "count": { "min": 1, "max": 1 } },
+        { "id": "bench", "width": 1.5, "depth": 0.6, "height": 0.8, "place": "wall", "chance": 0.5, "count": { "min": 1, "max": 1 } }
+      ]
+    },
+    {
+      "id": "penthouse_suite",
+      "name": "ペントハウス",
+      "category": "wing_private",
+      "allowedLevels": [1],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 1.3,
+      "width": { "min": 8.0, "max": 10.5 },
+      "depth": { "min": 7.0, "max": 9.0 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 2.6,
+      "floorMaterial": "carpet",
+      "furniture": [
+        { "id": "bed", "width": 2.1, "depth": 1.6, "height": 0.6, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+        { "id": "wardrobe", "width": 1.4, "depth": 0.6, "height": 1.95, "place": "wall", "chance": 0.85, "count": { "min": 1, "max": 1 } }
+      ],
+      "subRooms": [
+        {
+          "id": "bed",
+          "name": "主寝室",
+          "shareWeight": 0.65,
+          "minSide": 4.5,
+          "private": false,
+          "connectStyle": "door",
+          "spawnWeight": 2.6,
+          "floorMaterial": "carpet",
+          "furniture": [
+            { "id": "bed", "width": 2.1, "depth": 1.6, "height": 0.6, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+            { "id": "wardrobe", "width": 1.4, "depth": 0.6, "height": 1.95, "place": "wall", "chance": 0.85, "count": { "min": 1, "max": 1 } }
+          ]
+        },
+        {
+          "id": "ensuite",
+          "name": "専用浴室",
+          "shareWeight": 0.35,
+          "minSide": 3.75,
+          "private": true,
+          "connectStyle": "door",
+          "spawnWeight": 0.6,
+          "floorMaterial": "tile",
+          "furniture": [
+            { "id": "bathtub", "width": 1.6, "depth": 0.8, "height": 0.6, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "garage_cellar",
+      "name": "地下ガレージ・作業庫",
+      "category": "basement_utility",
+      "allowedLevels": [-1],
+      "minCount": 0,
+      "maxCount": 1,
+      "weight": 1.5,
+      "width": { "min": 7.0, "max": 9.5 },
+      "depth": { "min": 6.0, "max": 8.5 },
+      "exteriorRequirement": "interior_ok",
+      "roofStyle": "stackable",
+      "doubleHeightChance": 0,
+      "spawnWeight": 1.6,
+      "floorMaterial": "concrete",
+      "furniture": [
+        { "id": "tool_shelf", "width": 1.6, "depth": 0.55, "height": 1.85, "place": "wall", "chance": 0.85, "count": { "min": 1, "max": 1 } },
+        { "id": "crates", "width": 1.1, "depth": 0.8, "height": 1.0, "place": "corner", "chance": 0.85, "count": { "min": 1, "max": 2 } }
       ]
     }
   ],
