@@ -441,6 +441,7 @@ class App {
           swatCount: () => team.total,
         }),
         () => this.startMission(),
+        this.audio,
       );
     } else {
       this.negotiationPhase = new NegotiationPhase(
@@ -464,6 +465,7 @@ class App {
           },
         }),
         () => this.startMission(),
+        this.audio,
       );
       this.mission = new Mission(
         this.entities,
