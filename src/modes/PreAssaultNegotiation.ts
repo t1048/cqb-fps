@@ -2,10 +2,17 @@ import type { Civilian } from '../ai/Civilian';
 import type { Suspect } from '../ai/Suspect';
 import { SuspectState } from '../core/events';
 import { t, tRoomName } from '../core/i18n';
+import { extractSpokenQuote } from '../core/phoneVoice';
 import type { NegotiationLine, NegotiationOption, NegotiationScenario } from '../ui/NegotiationPhase';
 
 const pick = <T>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+
+/** 字幕は UI 言語、読み上げは常に英語の引用。 */
+function say(tone: 'me' | 'them', ja: string, en: string): NegotiationLine {
+  const voice = extractSpokenQuote(en);
+  return voice ? { text: t(ja, en), tone, voice } : { text: t(ja, en), tone };
+}
 
 // ======================================================================
 // 容疑者モード: 自分（立てこもり犯）が SWAT の交渉人と取引する
@@ -91,8 +98,16 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
   const threatChance = (): number => clamp(0.35 + ctx.hostages().length * 0.05, 0, 1);
   const needHostage = (): string | null =>
     ctx.hostages().length === 0 ? t('交換できる人質がいない', 'No hostages left to trade') : null;
-  const trade = (gain: string, apply: () => void, dp: number, theirLine: string): NegotiationLine[] => {
+  const trade = (
+    gainJa: string,
+    gainEn: string,
+    apply: () => void,
+    dp: number,
+    theirJa: string,
+    theirEn: string,
+  ): NegotiationLine[] => {
     const h = ctx.hostages()[0]!;
+    const gain = t(gainJa, gainEn);
     ctx.releaseHostage(h);
     released.push(h.id);
     apply();
@@ -101,14 +116,12 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
     const hasAllies = activeAllies().length > 0;
     if (hasAllies) shiftMorale(-10);
     return [
-      {
-        text: t(
-          `あなた「人質を 1 人解放する。代わりに${gain}をよこせ」`,
-          `You: "I'll release one hostage. In return, give me ${gain}."`,
-        ),
-        tone: 'me',
-      },
-      { text: theirLine, tone: 'them' },
+      say(
+        'me',
+        `あなた「人質を 1 人解放する。代わりに${gainJa}をよこせ」`,
+        `You: "I'll release one hostage. In return, give me ${gainEn}."`,
+      ),
+      say('them', theirJa, theirEn),
       {
         text: t(
           `人質 1 名を解放 → ${gain}を入手（残りの人質 ${ctx.hostages().length} 名）`,
@@ -150,30 +163,25 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       run: () => {
         const chance = stallChance();
         stallCount++;
+        const demand = pick([
+          { ja: '逃走用の車を用意しろ。満タンでだ', en: 'Get me a getaway car, full tank.' },
+          { ja: '弁護士とテレビ局を呼べ', en: 'Bring a lawyer and the press out here.' },
+          { ja: 'ヘリを屋上に回せ、話はそれからだ', en: 'Put a chopper on the roof, then we talk.' },
+        ]);
         const lines: NegotiationLine[] = [
-          {
-            text: t(
-              `あなた「${pick(['逃走用の車を用意しろ。満タンでだ', '弁護士とテレビ局を呼べ', 'ヘリを屋上に回せ、話はそれからだ'])}」`,
-              `You: "${pick([
-                'Get me a getaway car, full tank.',
-                'Bring a lawyer and the press out here.',
-                'Put a chopper on the roof, then we talk.',
-              ])}"`,
-            ),
-            tone: 'me',
-          },
+          say('me', `あなた「${demand.ja}」`, `You: "${demand.en}"`),
         ];
         if (Math.random() < chance) {
           ctx.addPrep(25);
           spend(-12);
           shiftMorale(4);
-          lines.push({
-            text: t(
+          lines.push(
+            say(
+              'them',
               '交渉人「……わかった、手配に時間がかかる。少し待ってくれ」',
               'Negotiator: "...Understood, it takes time to arrange. Hold tight."',
             ),
-            tone: 'them',
-          });
+          );
           lines.push({
             text: t(
               `時間稼ぎ成功: 突入まで ${Math.round(ctx.prepSec())} 秒${activeAllies().length > 0 ? '（その間に仲間が窓の補強・武器の改造・トラップ作りを進める）' : ''}`,
@@ -183,13 +191,13 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
           });
         } else {
           spend(-30);
-          lines.push({
-            text: t(
+          lines.push(
+            say(
+              'them',
               '交渉人「時間稼ぎなのはわかっている。いい加減にしろ」',
               'Negotiator: "We know you\'re stalling. Cut the games."',
             ),
-            tone: 'them',
-          });
+          );
           lines.push({
             text: t('見抜かれた: 交渉人の忍耐が大きく低下', "Bluff called: Negotiator's patience dropped sharply"),
             tone: 'bad',
@@ -213,13 +221,12 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
         needHostage() ?? (ctx.hasArmor() ? t('すでに防弾チョッキを受け取った', 'Already received body armor') : null),
       run: () =>
         trade(
-          t('防弾チョッキ', 'Body Armor'),
+          '防弾チョッキ',
+          'Body Armor',
           () => ctx.giveArmor(70),
           +8,
-          t(
-            '交渉人「……いいだろう。玄関前に置く。人質を先に出せ」',
-            'Negotiator: "...Fine. Leaving it by the front door. Send the hostage out first."',
-          ),
+          '交渉人「……いいだろう。玄関前に置く。人質を先に出せ」',
+          'Negotiator: "...Fine. Leaving it by the front door. Send the hostage out first."',
         ),
     },
     {
@@ -236,13 +243,12 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       disabledReason: needHostage,
       run: () =>
         trade(
-          t('予備マガジン 2 本', '2 Spare Magazines'),
+          '予備マガジン 2 本',
+          '2 Spare Magazines',
           () => ctx.giveMagazines(2),
           +5,
-          t(
-            '交渉人「弾を渡すのは本意じゃないが……人質の安全が優先だ」',
-            'Negotiator: "I hate handing over ammo... but the hostage\'s life comes first."',
-          ),
+          '交渉人「弾を渡すのは本意じゃないが……人質の安全が優先だ」',
+          'Negotiator: "I hate handing over ammo... but the hostage\'s life comes first."',
         ),
     },
     {
@@ -259,13 +265,12 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       disabledReason: needHostage,
       run: () =>
         trade(
-          t('準備時間 +40 秒', 'Prep Time +40s'),
+          '準備時間 +40 秒',
+          'Prep Time +40s',
           () => ctx.addPrep(40),
           +15,
-          t(
-            '交渉人「誠意は受け取った。こちらも待とう」',
-            'Negotiator: "Good faith noted. We\'ll hold off for now."',
-          ),
+          '交渉人「誠意は受け取った。こちらも待とう」',
+          'Negotiator: "Good faith noted. We\'ll hold off for now."',
         ),
     },
     {
@@ -294,30 +299,25 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       run: () => {
         const gain = rallyGain();
         rallyCount++;
+        const boast = pick([
+          { ja: '俺たちは本気だ。全員で最後までやる', en: "We're not bluffing. We see this through together!" },
+          { ja: '仲間の家族と話をさせろ。それまで一歩も引かない', en: "Let my crew call their families. We don't budge till then!" },
+          { ja: '聞こえたか、お前ら！ 警察は手出しできねえ！', en: "Hear that, boys?! The cops can't touch us!" },
+        ]);
         const lines: NegotiationLine[] = [
-          {
-            text: t(
-              `あなた「${pick(['俺たちは本気だ。全員で最後までやる', '仲間の家族と話をさせろ。それまで一歩も引かない', '聞こえたか、お前ら！ 警察は手出しできねえ！'])}」`,
-              `You: "${pick([
-                "We're not bluffing. We see this through together!",
-                "Let my crew call their families. We don't budge till then!",
-                "Hear that, boys?! The cops can't touch us!",
-              ])}"`,
-            ),
-            tone: 'me',
-          },
+          say('me', `あなた「${boast.ja}」`, `You: "${boast.en}"`),
         ];
         if (Math.random() < rallyChance()) {
           shiftMorale(gain);
           spend(-10);
           gains.push(t('仲間の士気↑', 'Crew Morale ↑'));
-          lines.push({
-            text: t(
+          lines.push(
+            say(
+              'them',
               '交渉人「……落ち着いてくれ。誰の家族だ？ 連絡を取ってみる」',
               'Negotiator: "...Calm down. Whose family? Let me try to reach them."',
             ),
-            tone: 'them',
-          });
+          );
           lines.push({
             text: t(
               `仲間「よし……やってやる！」 — 仲間の士気 +${gain}（平均 ${Math.round(teamMorale())}）`,
@@ -328,13 +328,9 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
         } else {
           shiftMorale(Math.round(gain / 3));
           spend(-20);
-          lines.push({
-            text: t(
-              '交渉人「虚勢を張っても状況は変わらない」',
-              'Negotiator: "Bluster won\'t change your situation."',
-            ),
-            tone: 'them',
-          });
+          lines.push(
+            say('them', '交渉人「虚勢を張っても状況は変わらない」', 'Negotiator: "Bluster won\'t change your situation."'),
+          );
           lines.push({
             text: t(
               `仲間の士気 +${Math.round(gain / 3)} / 交渉人の忍耐が大きく低下`,
@@ -368,20 +364,15 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
             : null,
       run: () => {
         const lines: NegotiationLine[] = [
-          {
-            text: t(
-              'あなた「建物の周りの連中を下げろ。さもないと人質がどうなるか分かってるな」',
-              'You: "Pull your guys off the perimeter, or the hostages pay for it."',
-            ),
-            tone: 'me',
-          },
+          say(
+            'me',
+            'あなた「建物の周りの連中を下げろ。さもないと人質がどうなるか分かってるな」',
+            'You: "Pull your guys off the perimeter, or the hostages pay for it."',
+          ),
         ];
         if (Math.random() < threatChance() && ctx.withdrawSwat()) {
           spend(-25);
-          lines.push({
-            text: t('交渉人「……落ち着け。一部を下げる」', 'Negotiator: "...Easy. I\'ll pull some back."'),
-            tone: 'them',
-          });
+          lines.push(say('them', '交渉人「……落ち着け。一部を下げる」', 'Negotiator: "...Easy. I\'ll pull some back."'));
           lines.push({
             text: t(
               `突入班が 1 名減った（SWAT ${ctx.swatCount()} 名）`,
@@ -392,10 +383,7 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
           gains.push(t('SWAT -1 名', 'SWAT -1'));
         } else {
           spend(-45);
-          lines.push({
-            text: t('交渉人「脅しには屈しない」', 'Negotiator: "We don\'t cave to threats."'),
-            tone: 'them',
-          });
+          lines.push(say('them', '交渉人「脅しには屈しない」', 'Negotiator: "We don\'t cave to threats."'));
           lines.push({
             text: t('脅迫失敗: 交渉人の忍耐が激減', "Threat failed: Negotiator's patience plummeted"),
             tone: 'bad',
@@ -413,13 +401,11 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       'Bargain with the SWAT negotiator before the breach. Buying time lets your crew fortify windows, mod weapons, and rig traps. Bold demands raise crew morale. Trading hostages gets gear, but shakes your crew and reduces human shields (SWAT can still break shields with pepperballs). If patience hits 0, SWAT breaches immediately.',
     ),
     intro: [
-      {
-        text: t(
-          '交渉人「こちらは警察だ。建物は完全に包囲されている。まずは話をしよう」',
-          'Negotiator: "This is the police. The building is surrounded. Let\'s talk first."',
-        ),
-        tone: 'them',
-      },
+      say(
+        'them',
+        '交渉人「こちらは警察だ。建物は完全に包囲されている。まずは話をしよう」',
+        'Negotiator: "This is the police. The building is surrounded. Let\'s talk first."',
+      ),
       {
         text: t(
           `状況: 人質 ${ctx.hostages().length} 名 / 突入班 SWAT ${ctx.swatCount()} 名 / 突入まで ${Math.round(ctx.prepSec())} 秒`,
@@ -468,6 +454,7 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
           ]
         : []),
     ],
+    cast: { me: 'suspect', them: 'negotiator' },
     turnsLeft: () => (broken ? 0 : turns),
     isOver: () => broken,
     options,
@@ -525,10 +512,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         ctx.executeHostage(h);
         results.push(t('人質 1 名が殺害された', '1 hostage executed'));
         return [
-          {
-            text: t('犯人「もう我慢ならねえ！」 — 銃声が響いた', 'Suspect: "I\'ve had enough!" — A gunshot rings out.'),
-            tone: 'them',
-          },
+          say('them', '犯人「もう我慢ならねえ！」 — 銃声が響いた', 'Suspect: "I\'ve had enough!" — A gunshot rings out.'),
           {
             text: t(
               '交渉決裂: 人質 1 名が殺害された。直ちに突入せよ',
@@ -578,17 +562,12 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
       run: () => {
         for (const s of active()) s.adjustMorale(4);
         return [
-          {
-            text: t(
-              'あなた「食料と水を玄関前に置く。誰も傷つけないでくれ」',
-              'You: "Leaving food and water by the front door. Don\'t hurt anyone."',
-            ),
-            tone: 'me',
-          },
-          {
-            text: t('犯人「……わかった。変な真似はするなよ」', 'Suspect: "...Alright. Don\'t try anything funny."'),
-            tone: 'them',
-          },
+          say(
+            'me',
+            'あなた「食料と水を玄関前に置く。誰も傷つけないでくれ」',
+            'You: "Leaving food and water by the front door. Don\'t hurt anyone."',
+          ),
+          say('them', '犯人「……わかった。変な真似はするなよ」', 'Suspect: "...Alright. Don\'t try anything funny."'),
           {
             text: t('緊張 -15 / 信頼 +20（犯人の士気 +4）', 'Tension -15 / Trust +20 (Suspect Morale +4)'),
             tone: 'info',
@@ -615,22 +594,17 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
       run: () => {
         const chance = releaseChance();
         const lines: NegotiationLine[] = [
-          {
-            text: t(
-              'あなた「誠意を見せてくれ。せめて 1 人、人質を解放してほしい」',
-              'You: "Show us good faith. Let at least one hostage walk out."',
-            ),
-            tone: 'me',
-          },
+          say(
+            'me',
+            'あなた「誠意を見せてくれ。せめて 1 人、人質を解放してほしい」',
+            'You: "Show us good faith. Let at least one hostage walk out."',
+          ),
         ];
         if (Math.random() < chance) {
           const h = ctx.hostages()[0]!;
           ctx.releaseHostage(h);
           results.push(t('人質 1 名を解放', '1 hostage released'));
-          lines.push({
-            text: t('犯人「……1 人だけだ。出ていけ」', 'Suspect: "...Just one. Get out of here."'),
-            tone: 'them',
-          });
+          lines.push(say('them', '犯人「……1 人だけだ。出ていけ」', 'Suspect: "...Just one. Get out of here."'));
           lines.push({
             text: t(
               `人質 1 名が建物から退避した（残り ${ctx.hostages().length} 名）`,
@@ -640,10 +614,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
           });
           return [...lines, ...spend(+5, -10)];
         }
-        lines.push({
-          text: t('犯人「調子に乗るな。人質は渡さねえ」', 'Suspect: "Don\'t push your luck. Nobody\'s leaving."'),
-          tone: 'them',
-        });
+        lines.push(say('them', '犯人「調子に乗るな。人質は渡さねえ」', 'Suspect: "Don\'t push your luck. Nobody\'s leaving."'));
         lines.push({
           text: t('要求は拒否された（緊張 +15）', 'Demand refused (Tension +15)'),
           tone: 'bad',
@@ -673,20 +644,17 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         const target = persuadeTarget()!;
         const chance = persuadeChance(target);
         const lines: NegotiationLine[] = [
-          {
-            text: t(
-              'あなた「今ならまだやり直せる。武器を置いて出てきてくれ」',
-              'You: "It\'s not too late. Drop your weapon and come out."',
-            ),
-            tone: 'me',
-          },
+          say(
+            'me',
+            'あなた「今ならまだやり直せる。武器を置いて出てきてくれ」',
+            'You: "It\'s not too late. Drop your weapon and come out."',
+          ),
         ];
         if (Math.random() < chance && target.forceSurrender()) {
           results.push(t('犯人 1 名が投降', '1 suspect surrendered'));
-          lines.push({
-            text: t('犯人の一人「……もう嫌だ。俺は降りる」', 'A Suspect: "...I can\'t do this anymore. I\'m out."'),
-            tone: 'them',
-          });
+          lines.push(
+            say('them', '犯人の一人「……もう嫌だ。俺は降りる」', 'A Suspect: "...I can\'t do this anymore. I\'m out."'),
+          );
           const room = tRoomName(ctx.roomName(target));
           lines.push({
             text: t(
@@ -697,10 +665,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
           });
           return [...lines, ...spend(+10, 0)];
         }
-        lines.push({
-          text: t('犯人「説教は聞き飽きた」', 'Suspect: "Save the lecture."'),
-          tone: 'them',
-        });
+        lines.push(say('them', '犯人「説教は聞き飽きた」', 'Suspect: "Save the lecture."'));
         lines.push({
           text: t('説得は失敗した（緊張 +10 / 信頼 -5）', 'Persuasion failed (Tension +10 / Trust -5)'),
           tone: 'bad',
@@ -726,25 +691,23 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
       run: () => {
         const chance = intelChance();
         const lines: NegotiationLine[] = [
-          {
-            text: t(
-              'あなた「みんな無事か？ そっちには何人いるんだ？」',
-              'You: "Is everyone okay in there? How many of you are there?"',
-            ),
-            tone: 'me',
-          },
+          say(
+            'me',
+            'あなた「みんな無事か？ そっちには何人いるんだ？」',
+            'You: "Is everyone okay in there? How many of you are there?"',
+          ),
         ];
         if (Math.random() < chance) {
           const list = active();
           const rooms = [...new Set(list.map((s) => tRoomName(ctx.roomName(s))))];
           results.push(t('内部情報を入手', 'Interior intel gathered'));
-          lines.push({
-            text: t(
+          lines.push(
+            say(
+              'them',
               '犯人「余計な詮索はするな……おい、窓から離れろ！」 — 背後の声を聞き取った',
               'Suspect: "Stop snooping... Hey, get away from the window!" — Background voices overheard.',
             ),
-            tone: 'them',
-          });
+          );
           lines.push({
             text: t(
               `情報: 抵抗を続ける犯人 ${list.length} 名。気配がある場所 — ${rooms.join('、') || '不明'}`,
@@ -754,10 +717,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
           });
           return [...lines, ...spend(+5, 0)];
         }
-        lines.push({
-          text: t('犯人「何を探ってやがる」', 'Suspect: "What are you fishing for?"'),
-          tone: 'them',
-        });
+        lines.push(say('them', '犯人「何を探ってやがる」', 'Suspect: "What are you fishing for?"'));
         lines.push({
           text: t('情報は得られなかった（緊張 +10）', 'No intel gained (Tension +10)'),
           tone: 'bad',
@@ -782,20 +742,16 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         for (const s of active()) s.adjustMorale(-15);
         results.push(t('最後通告で犯人の士気低下', 'Ultimatum lowered suspect morale'));
         return [
-          {
-            text: t(
-              'あなた「建物は完全に包囲した。10 分以内に出てこなければ突入する」',
-              'You: "The building is completely surrounded. Come out in 10 minutes or we breach."',
-            ),
-            tone: 'me',
-          },
-          {
-            text: t(
-              '犯人「脅しやがって……！」 — 動揺が伝わってくる',
-              'Suspect: "Don\'t threaten me...!" — You hear panic in their voice.',
-            ),
-            tone: 'them',
-          },
+          say(
+            'me',
+            'あなた「建物は完全に包囲した。10 分以内に出てこなければ突入する」',
+            'You: "The building is completely surrounded. Come out in 10 minutes or we breach."',
+          ),
+          say(
+            'them',
+            '犯人「脅しやがって……！」 — 動揺が伝わってくる',
+            'Suspect: "Don\'t threaten me...!" — You hear panic in their voice.',
+          ),
           {
             text: t('犯人の士気 -15 / 緊張 +30', 'Suspect Morale -15 / Tension +30'),
             tone: 'info',
@@ -813,13 +769,11 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
       'Negotiate by phone before breaching. Build trust to free hostages or persuade surrenders, or intimidate to weaken morale. If tension hits 100, a hostage is executed.',
     ),
     intro: [
-      {
-        text: t(
-          '犯人「誰だ！ 近づいたら人質を撃つぞ！」',
-          'Suspect: "Who is this?! Come any closer and I shoot the hostages!"',
-        ),
-        tone: 'them',
-      },
+      say(
+        'them',
+        '犯人「誰だ！ 近づいたら人質を撃つぞ！」',
+        'Suspect: "Who is this?! Come any closer and I shoot the hostages!"',
+      ),
       {
         text: t(`状況: 人質 ${ctx.hostages().length} 名`, `Status: ${ctx.hostages().length} Hostages`),
         tone: 'info',
@@ -849,6 +803,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         hint: t('救出できれば加点', 'Bonus points for each hostage rescued'),
       },
     ],
+    cast: { me: 'negotiator', them: 'suspect' },
     turnsLeft: () => (broken ? 0 : turns),
     isOver: () => broken,
     options,

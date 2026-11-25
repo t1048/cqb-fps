@@ -1,5 +1,6 @@
 /** 突入前交渉フェーズの汎用 UI（モード別のシナリオは modes/PreAssaultNegotiation.ts）。 */
 import { t } from '../core/i18n';
+import { utterancesForLines, type CallCast, type CallHeat, type CallRole } from '../core/phoneVoice';
 
 export interface NegotiationMeter {
   label: string;
@@ -44,12 +45,22 @@ export interface NegotiationLine {
   tone: 'me' | 'them' | 'good' | 'bad' | 'info';
   /** 決裂・人質殺害など見込みに無い重大結果（オート交渉の結果ポップアップに原文を出す） */
   critical?: boolean;
+  /** 英語の読み上げ。UI が日本語でもこちらを話す */
+  voice?: string;
+}
+
+/** 通話の読み上げ。AudioEngine がこの形を満たす。 */
+export interface NegotiationVoice {
+  playPhoneLine(role: CallRole, text: string, heat: CallHeat): void;
+  cancelPhoneLine(): void;
 }
 
 export interface NegotiationScenario {
   title: string;
   subtitle: string;
   intro: NegotiationLine[];
+  /** me / them が通話のどちら側か */
+  cast: CallCast;
   meters(): NegotiationMeter[];
   /** 残りターン */
   turnsLeft(): number;
@@ -172,6 +183,7 @@ export class NegotiationPhase {
     parent: HTMLElement,
     private readonly scenario: NegotiationScenario,
     private readonly onFinish: () => void,
+    private readonly voice: NegotiationVoice | null = null,
   ) {
     if (!document.getElementById(STYLE_ID)) {
       const style = document.createElement('style');
@@ -227,6 +239,7 @@ export class NegotiationPhase {
     this.root.style.display = 'flex';
     window.addEventListener('keydown', this.onKey);
     (this.tip ? this.autoBtn : this.finishBtn).focus();
+    this.speakLines(this.scenario.intro);
   }
 
   hide(): void {
@@ -234,6 +247,7 @@ export class NegotiationPhase {
     this.visible = false;
     this.root.style.display = 'none';
     window.removeEventListener('keydown', this.onKey);
+    this.voice?.cancelPhoneLine();
   }
 
   /**
@@ -280,9 +294,10 @@ export class NegotiationPhase {
     this.logEl.scrollTop = this.logEl.scrollHeight;
   }
 
-  private choose(i: number): void {
+  private choose(i: number, queueVoice = false): void {
     const opt = this.scenario.options[i];
     if (!opt || this.scenario.isOver() || this.scenario.turnsLeft() <= 0 || opt.disabledReason() !== null) return;
+    if (!queueVoice) this.voice?.cancelPhoneLine();
     const sep = document.createElement('div');
     sep.style.cssText = 'border-top:1px dashed #2a3c52;margin:8px 0';
     this.logEl.appendChild(sep);
@@ -294,7 +309,16 @@ export class NegotiationPhase {
       this.logEl.appendChild(sep2);
       for (const s of this.scenario.summary()) this.pushLine({ text: s, tone: 'info' });
     }
+    this.speakLines(this.lastLines);
     this.render();
+  }
+
+  /** 表示中の字幕はそのまま、英語の台詞だけを順に読む。 */
+  private speakLines(lines: readonly NegotiationLine[]): void {
+    if (!this.voice) return;
+    for (const u of utterancesForLines(lines, this.scenario.cast)) {
+      this.voice.playPhoneLine(u.role, u.text, u.heat);
+    }
   }
 
   private renderMeters(): void {
@@ -385,6 +409,7 @@ export class NegotiationPhase {
   private auto = (): void => {
     if (this.disposed || !this.visible || this.popup) return;
     this.dismissTip();
+    this.voice?.cancelPhoneLine();
     const good: string[] = [];
     const bad: string[] = [];
     const rounds = Math.min(AUTO_ROUNDS, this.scenario.turnsLeft());
@@ -398,7 +423,7 @@ export class NegotiationPhase {
       const fx = opt.effects?.() ?? {};
       const chance = opt.chance?.() ?? null;
       const before = this.logEl.childElementCount;
-      this.choose(pick);
+      this.choose(pick, true);
       if (this.logEl.childElementCount === before) break;
       used.add(pick);
       const name = `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`;
