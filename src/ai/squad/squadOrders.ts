@@ -44,15 +44,15 @@ export function toggleEntryMode(ctx: SquadContext): EntryMode {
   ctx.entryMode = ctx.entryMode === 'dynamic' ? 'stealth' : 'dynamic';
   const isStealth = ctx.entryMode === 'stealth';
   ctx.ack = isStealth
-    ? t('突入モード: ステルス（半開き・パイ切り・慎重進入）', 'Entry Mode: Stealth (Peek, Pie & Deliberate)')
-    : t('突入モード: ダイナミック（強行突入）', 'Entry Mode: Dynamic (Forced Entry)');
+    ? t('入り方: 静かに', 'Entry: slow')
+    : t('入り方: 強行', 'Entry: dynamic');
   ctx.ackLeft = 2.0;
   const lead = ctx.allies.find((a) => !a.down);
   if (lead) {
     ctx.emitRadio(
       lead,
-      isStealth ? '了解、ステルス進入モードに切り替える。慎重に切るぞ' : '了解、ダイナミック突入モードに切り替える！',
-      isStealth ? 'Switching to stealth deliberate entry.' : 'Switching to dynamic entry!',
+      isStealth ? '了解。静かに入る' : '了解。強行で入る',
+      isStealth ? 'Copy. Slow and quiet.' : 'Copy. Going dynamic.',
     );
   }
   return ctx.entryMode;
@@ -209,13 +209,13 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     const lead = assignPortalGroup(ctx, targets, portal, targetRoom, order);
     const alreadyOpen = !portal.door || portal.door.angle >= ctx.cfg.doorOpenAngle;
     const radioMap: Record<string, [string, string]> = {
-      stack: [alreadyOpen ? '了解、入口脇へスタックする' : '了解、ドア脇へスタックする', 'Roger, stacking up on the entry.'],
-      clear: [alreadyOpen ? '了解、突入しクリアする！' : '了解、ドアを開放し突入する！', alreadyOpen ? 'Copy, moving in and clearing!' : 'Copy, opening and clearing.'],
-      flashClear: ['了解、閃光弾で突入する！', 'Copy, bang and clear!'],
-      breachClear: ['了解、ブリーチ突入する！', 'Copy, breaching and clearing!'],
-      c2Clear: ['了解、C2爆破で突入する！', 'Copy, C2 breach and clear!'],
-      gasClear: ['了解、催涙ガスで突入する！', 'Copy, gas and clear!'],
-      pieDoor: ['了解、ドアを開けて外から警戒する', 'Roger, pieing the door.'],
+      stack: [alreadyOpen ? '了解。入口に付く' : '了解。ドアに付く', 'Copy. Stacking.'],
+      clear: [alreadyOpen ? '了解。入る' : '了解。開けて入る', alreadyOpen ? 'Copy. Going in.' : 'Copy. Opening and going.'],
+      flashClear: ['了解。バンして入る', 'Copy. Bang and clear.'],
+      breachClear: ['了解。蹴って入る', 'Copy. Breach and clear.'],
+      c2Clear: ['了解。爆薬を付ける', 'Copy. Explosive breach.'],
+      gasClear: ['了解。ガスを入れて入る', 'Copy. Gas and clear.'],
+      pieDoor: ['了解。外から押さえる', 'Copy. Holding the door.'],
     };
     const [jaText, enText] = radioMap[order] ?? ['了解', 'Roger that.'];
     ctx.emitRadio(lead, jaText, enText);
@@ -233,9 +233,9 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.moveTarget = { x: pos.x, y: g.y, z: pos.z, yawRad: g.yawRad };
       ally.watchYaw = g.yawRad + (targets.length > 1 ? (idx % 2 === 0 ? -0.25 : 0.25) : 0);
       ally.phase = 'move';
-      ally.progress = t('指定位置へ移動中', 'Moving to Position');
+      ally.progress = t('その地点へ移動している', 'Moving there');
     });
-    ctx.emitRadio(targets[0]!, '了解、指定地点へ移動し警戒する', 'Copy, moving to position.');
+    ctx.emitRadio(targets[0]!, '了解。そこへ行く', 'Copy. Moving.');
     return;
   }
 
@@ -247,9 +247,9 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.holdPos = { x: ally.body.px, y: ally.body.footY, z: ally.body.pz };
       ally.watchYaw = ctx.player.yawRad;
       ally.phase = 'overwatch';
-      ally.progress = t('射線ロック中', 'Holding Security');
+      ally.progress = t('その方向を見ている', 'Watching that way');
     });
-    ctx.emitRadio(targets[0]!, '了解、この射線をロックする', 'Roger, holding security.');
+    ctx.emitRadio(targets[0]!, '了解。その方向を見る', 'Copy. On that sector.');
     return;
   }
 
@@ -267,8 +267,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     });
     ctx.emitRadio(
       targets[0]!,
-      targetId ? '了解、対象を確保する' : '了解、周囲の確保対象を確認する',
-      targetId ? 'Copy, moving to restrain.' : 'Roger, checking area for restraints.',
+      targetId ? '了解。確保する' : '了解。確保できる者を探す',
+      targetId ? 'Copy. Cuffing.' : 'Copy. Looking for someone to cuff.',
     );
     return;
   }
@@ -281,9 +281,9 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.holdPos = { x: ally.body.px, y: ally.body.footY, z: ally.body.pz };
       ally.watchYaw = ally.body.yawRad;
       ally.phase = 'hold';
-      ally.progress = t('現在地で警戒待機', 'Holding Position');
+      ally.progress = t('ここで待っている', 'Holding here');
     });
-    ctx.emitRadio(targets[0]!, '了解、ここで待機する', 'Copy, holding position.');
+    ctx.emitRadio(targets[0]!, '了解。ここで待つ', 'Copy. Holding.');
     return;
   }
 
@@ -295,7 +295,7 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     ally.phase = 'follow';
     ally.progress = t('追従中', 'Following');
   });
-  ctx.emitRadio(targets[0]!, '了解、隊列に戻る', 'Roger, falling in.');
+  ctx.emitRadio(targets[0]!, '了解。付く', 'Copy. On you.');
 }
 
 export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {

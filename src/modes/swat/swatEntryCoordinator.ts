@@ -154,7 +154,7 @@ export class SwatEntryCoordinator {
     if (!anchor || isIndoorPoint(this.host.d.rooms, anchor.body.px, anchor.body.pz, anchor.body.footY)) {
       this.entryPhase = 'entered';
       for (const h of living) h.setState('sweep');
-      this.host.radio(anchor, '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.');
+      this.host.radio(anchor, '全隊、ゴー。武装している', 'All teams, go. He\'s armed.');
       return;
     }
 
@@ -167,7 +167,7 @@ export class SwatEntryCoordinator {
     if (reachable.length === 0) {
       this.entryPhase = 'entered';
       for (const h of living) h.setState('sweep');
-      this.host.radio(anchor, '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.');
+      this.host.radio(anchor, '全隊、ゴー。武装している', 'All teams, go. He\'s armed.');
       return;
     }
 
@@ -194,7 +194,7 @@ export class SwatEntryCoordinator {
         h.setState('sweep');
       }
       this.entryPhase = 'entered';
-      this.host.radio(anchor, '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.', true);
+      this.host.radio(anchor, '全隊、ゴー。武装している', 'All teams, go. He\'s armed.', true);
       return;
     }
 
@@ -267,9 +267,9 @@ export class SwatEntryCoordinator {
     this.entryCountdown = 0;
     this.reportedStackCells.clear();
     if (reachable.length >= 2 && orderedCells.length >= 2) {
-      this.host.radio(anchor, '全班、各入口へ展開してスタックしろ。', 'All teams, split to assigned entries and stack up.', true);
+      this.host.radio(anchor, '各入口にスタック', 'Split up. Stack on your doors.', true);
     } else {
-      this.host.radio(anchor, '全班、正面ドア前にスタックしろ。', 'All teams, stack up on the front entry.', true);
+      this.host.radio(anchor, '正面にスタック', 'Stack on the front.', true);
     }
   }
 
@@ -334,8 +334,8 @@ export class SwatEntryCoordinator {
           const dir = describePortalDirection(portalPos, mapCenter);
           this.host.queueRadio(
             lead,
-            `${lead.cellName}班、${dir.ja}配置完了。`,
-            `${lead.cellName} team, set on ${dir.en}.`,
+            `${lead.cellName}、${dir.ja}に付いた`,
+            `${lead.cellName}, set on the ${dir.en}.`,
           );
         }
       }
@@ -343,7 +343,7 @@ export class SwatEntryCoordinator {
       if (allReady || this.entryStackElapsed >= STACK_TIMEOUT_SEC) {
         this.entryPhase = 'countdown';
         this.host.trimRadioQueueToOne();
-        this.host.queueRadio(stacking[0], '全班配置完了。3、2、1、ブリーチ！', 'All teams set. 3, 2, 1, breach!');
+        this.host.queueRadio(stacking[0], '着いた。3、2、1、ブリーチ', 'All set. 3, 2, 1, breach.');
         this.entryCountdown = Math.min(
           3.1,
           Math.max(ENTRY_COUNTDOWN_SEC, this.host.radioSpeakGap + this.host.radioQueueLength * RADIO_STAGGER_SEC + 0.15),

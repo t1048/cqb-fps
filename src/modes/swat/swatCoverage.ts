@@ -277,8 +277,8 @@ export class SwatCoverage {
       const guess = { x: p.x + Math.cos(a) * rr, y: p.y, z: p.z + Math.sin(a) * rr };
       this.host.radio(
         h,
-        '全区画クリア、容疑者なし。ドローンが熱源を探知、その付近を再捜索する。',
-        'No suspect. Drone has a heat signature, moving.',
+        '見終わった。誰もいない。熱源がある、もう一度見る',
+        'Nothing. Drone has heat. Going back.',
         true,
       );
       for (const x of this.host.hunters) {

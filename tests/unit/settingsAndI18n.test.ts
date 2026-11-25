@@ -132,7 +132,7 @@ describe('i18n & shareLinks', () => {
     expect(tWeaponName('auto_pistol', '改造フルオート拳銃（改）')).toBe('Modded Auto Pistol (Mod)');
     expect(tStageName('random_house', '標準')).toBe('Standard');
     expect(tMotifLabel('hospital', '病院')).toBe('Clinic / Hospital');
-    expect(tOrderLabel('flash_clear', 'フラッシュ＆クリア')).toBe('Flash & Clear');
+    expect(tOrderLabel('flash_clear', 'フラッシュ＆クリア')).toBe('Throw a Bang');
     expect(tRoeLabel('arrest', '逮捕')).toBe('Suspect Arrested');
     expect(tRoomName('玄関ホール')).toBe('Entry Hall');
     expect(tRoomName('渡り廊下')).toBe('Skybridge Hallway');

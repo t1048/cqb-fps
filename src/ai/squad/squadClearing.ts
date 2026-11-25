@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CivilianState, SuspectState } from '../../core/events';
-import { t } from '../../core/i18n';
+import { isEn, t, tRoomName } from '../../core/i18n';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import { pathSegmentClear, squadRoute } from '../SquadRoute';
@@ -113,8 +113,8 @@ export function setPostClearActive(ctx: SquadContext, active: boolean): void {
     ctx.postClearAnnounced = true;
     ctx.emitRadio(
       living[0]!,
-      '全脅威制圧。残余の拘束・人質確保・証拠品押収を実施する！',
-      'All threats neutralized. Securing remaining targets and evidence.',
+      '脅威は片付いた。確保に入る',
+      'Threats down. Securing.',
     );
   }
 }
@@ -143,7 +143,7 @@ export function updateSweeping(ctx: SquadContext, ally: AllyUnit, dt: number): v
       return;
     } else {
       // 相棒が拘束中は後方から銃を向けて援護カバー
-      ally.progress = t('拘束援護カバー', 'Covering Restraint');
+      ally.progress = t('確保を見ている', 'Covering the cuff');
       if (!ally.engaging) {
         body.aimAt(task.x, portal.sillY + 1.32, task.z, dt, Math.PI * 2 * dt);
       }
@@ -156,7 +156,7 @@ export function updateSweeping(ctx: SquadContext, ally: AllyUnit, dt: number): v
   // 2. 見落とし死角のクリアリング（2名いる場合は #1 のみが探索し #2 は PoD で扉・奥をカバー）
   const isSearcher = ally.roleIndex === 0 || ally.groupSize === 1;
   if (!isSearcher) {
-    ally.progress = t('支配点で援護警戒', 'Holding Domination');
+    ally.progress = t('入口を押さえている', 'Holding the door');
     // PoD 保持（静止）。タイムアウトで手前に止まった場合のみ PoD まで歩く
     if (!ally.engaging) holdAtPod(ctx, ally, portal, dt);
     if (!ally.engaging && ally.podLook) {
@@ -235,7 +235,7 @@ export function updateSweeping(ctx: SquadContext, ally: AllyUnit, dt: number): v
   cellTargetTmp.y = targetCell.y + 0.35;
   cellTargetTmp.z = targetCell.z;
   if (hasLineOfSight(ctx.colliders, eye, cellTargetTmp)) {
-    ally.progress = t('死角クリア中', 'Clearing Blind Spot');
+    ally.progress = t('死角を見ている', 'Checking the corner');
     // 重要: 床(0.18m)ではなく常に胸〜目線高(1.38m)を向く！
     if (!ally.engaging) {
       body.aimAt(targetCell.x, targetCell.y + 1.38, targetCell.z, dt, Math.PI * 2.4 * dt);
@@ -244,7 +244,7 @@ export function updateSweeping(ctx: SquadContext, ally: AllyUnit, dt: number): v
   }
 
   if (ally.vantage) {
-    ally.progress = t('遮蔽裏へ展開中', 'Moving to Vantage');
+    ally.progress = t('遮蔽へ移動している', 'Moving to cover');
     const d = Math.hypot(ally.vantage.x - body.px, ally.vantage.z - body.pz);
     if (d <= 0.25) {
       ally.skipped.add(targetCell);
@@ -287,8 +287,13 @@ export function enterSecured(ctx: SquadContext, ally: AllyUnit, room: RoomDef, p
   const key = `${room.id}:${portal.id}`;
   if (!ctx.announcedRooms.has(key)) {
     ctx.announcedRooms.add(key);
-    const extra = exits.length > 0 ? `（別扉${exits.length}か所あり）` : '';
-    ctx.emitRadio(ally, `${room.name}、クリア！${extra}`, 'Room clear!');
+    const another = exits.length > 0;
+    const roomEn = isEn() ? tRoomName(room.name) : 'Room';
+    ctx.emitRadio(
+      ally,
+      another ? `${room.name}、クリア。別のドアがある` : `${room.name}、クリア`,
+      another ? `${roomEn}, clear. Another door.` : `${roomEn}, clear.`,
+    );
   }
 }
 
@@ -300,7 +305,7 @@ export function updateRestraining(ctx: SquadContext, ally: AllyUnit, dt: number)
     ally.phase = 'hold';
     ally.holdPos = { x: ally.body.px, y: ally.body.footY, z: ally.body.pz };
     ally.watchYaw = ally.body.yawRad;
-    ally.progress = t('確保完了・待機', 'Secured / Holding');
+    ally.progress = t('確保した。待っている', 'Holding');
     return;
   }
 
@@ -315,7 +320,7 @@ export function updateRestraining(ctx: SquadContext, ally: AllyUnit, dt: number)
       const cz = task.z + (dz / dist) * 2.1;
       navigateTo(ctx, ally, cx, cz, task.y, dt, true, true);
     }
-    ally.progress = t('確保を援護カバー中', 'Covering Restraint');
+    ally.progress = t('確保を見ている', 'Covering the cuff');
     if (!ally.engaging) ally.body.aimAt(task.x, task.y + 1.35, task.z, dt, Math.PI * 2 * dt);
     return;
   }
@@ -356,10 +361,10 @@ export function performRestrainTask(ctx: SquadContext, ally: AllyUnit, task: Res
     ally.holdTime = 0;
     ally.progress =
       task.kind === 'suspect'
-        ? t('逮捕へ接近中', 'Moving to Arrest')
+        ? t('拘束に向かっている', 'Moving to cuff')
         : task.kind === 'civilian'
-          ? t('保護へ接近中', 'Moving to Secure')
-          : t('証拠回収へ接近中', 'Moving to Evidence');
+          ? t('民間人に向かっている', 'Moving to the civilian')
+          : t('武器を拾いに行っている', 'Moving to the weapon');
     navigateTo(ctx, ally, goalX, goalZ, task.y, dt, true, true);
     return;
   }
@@ -367,10 +372,10 @@ export function performRestrainTask(ctx: SquadContext, ally: AllyUnit, task: Res
   ally.assignment = task.id;
   ally.progress =
     task.kind === 'suspect'
-      ? t('容疑者を拘束中', 'Restraining Suspect')
+      ? t('拘束している', 'Cuffing')
       : task.kind === 'civilian'
-        ? t('民間人を保護中', 'Securing Civilian')
-        : t('証拠武器を回収中', 'Securing Evidence');
+        ? t('民間人を出している', 'Moving the civilian')
+        : t('武器を回収している', 'Taking the weapon');
   ally.body.aimAt(task.x, task.y + 0.9, task.z, dt, Math.PI * 3 * dt);
   ally.holdTime += dt;
   if (ally.holdTime < holdNeed) return;
@@ -384,12 +389,12 @@ export function performRestrainTask(ctx: SquadContext, ally: AllyUnit, task: Res
         ctx.bus.emit('evidence', { targetId: s.id, pos: wp });
       }
       ctx.bus.emit('arrest', { targetId: s.id, evidenceCollected: s.evidenceCollected });
-      ctx.emitRadio(ally, '容疑者を拘束、武器を押収した！', 'Suspect restrained, weapon secured.');
+      ctx.emitRadio(ally, '拘束した', 'Cuffed.');
     }
   } else if (task.kind === 'civilian') {
     const c = ctx.entities.civilians.get(task.id);
     if (c && c.secure()) {
-      ctx.emitRadio(ally, '民間人を安全に確保した！', 'Civilian is safe and secure.');
+      ctx.emitRadio(ally, '民間人、出した', 'Civilian secure.');
     }
   } else {
     const s = ctx.entities.suspects.get(task.id);
@@ -397,7 +402,7 @@ export function performRestrainTask(ctx: SquadContext, ally: AllyUnit, task: Res
     if (s && wp && s.hasUncollectedEvidence) {
       s.collectEvidence();
       ctx.bus.emit('evidence', { targetId: s.id, pos: wp });
-      ctx.emitRadio(ally, '証拠の武器を回収した', 'Evidence secured.');
+      ctx.emitRadio(ally, '武器、回収した', 'Weapon secured.');
     }
   }
   ally.assignment = null;
