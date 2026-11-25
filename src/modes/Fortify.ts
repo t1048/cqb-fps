@@ -184,8 +184,8 @@ export class Fortify {
             this.setBoarded(b, !b.boarded);
             this.d.subtitle.show(
               b.boarded
-                ? t('窓を塞いだ', 'Window\'s boarded.')
-                : t('板を外した', 'Boards are off.'),
+                ? t('窓を板で塞いだ — この窓越しには撃てない・見えない', 'Window boarded up — blocks sightlines and gunfire')
+                : t('板を外した', 'Boards removed'),
               1.6,
             );
             this.d.bus.emit('noise', { pos: { x: b.cx, y: b.floorY, z: b.cz }, radius: 9, kind: 'door', source: 'suspect' });
@@ -374,8 +374,8 @@ export class Fortify {
         if (Math.hypot(p.x - b.cx, p.z - b.cz) < 14) {
           this.d.subtitle.show(
             b.def.interior
-              ? t('窓口の板が破られた', 'The boards on the interior window are down.')
-              : t('窓の板が破られた', 'The boards are down.'),
+              ? t('窓口のバリケードが撃ち破られた！', 'Interior window barricade shot through!')
+              : t('窓のバリケードが撃ち破られた！', 'Window barricade shot through!'),
             1.6,
           );
         }
@@ -473,8 +473,8 @@ export class Fortify {
     this.traps.set(door.id, { doorId: door.id, mesh: g });
     this.d.subtitle.show(
       t(
-        `ドアに仕掛けた。残り ${this.trapKits}`,
-        `Door's rigged. ${this.trapKits} left.`,
+        `ドアにブービートラップを仕掛けた（残り部材 ${this.trapKits}）— SWAT が開けると爆発する`,
+        `Booby trap rigged on door (${this.trapKits} kits left) — detonates when SWAT opens`,
       ),
       2.2,
     );
@@ -590,8 +590,8 @@ export class Fortify {
       this.trapKits++;
       this.d.subtitle.show(
         t(
-          `罠がもう一つできた。残り ${this.trapKits}`,
-          `Another trap is ready. ${this.trapKits} left.`,
+          `仲間「トラップをもう 1 個こしらえた」（部材 ${this.trapKits}）`,
+          `Ally: "Rigged up another trap kit!" (${this.trapKits} kits)`,
         ),
         1.6,
       );
@@ -618,8 +618,8 @@ export class Fortify {
     );
     this.d.subtitle.show(
       t(
-        '銃を調整した。当たりやすくなった',
-        'Guns are tuned. They hit harder.',
+        '仲間「全員の銃を改造した！ 精度も威力も上がったぞ」— 武器アップグレード',
+        'Ally: "Modified all our guns! Better accuracy and firepower!" — Weapons Upgraded',
       ),
       2.4,
     );

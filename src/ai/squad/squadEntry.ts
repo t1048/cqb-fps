@@ -199,7 +199,7 @@ export function assignPortalGroup(
           : t('突入待機', 'Standing By');
     } else {
       ally.phase = 'stacking';
-      ally.progress = t('ドアに付いている', 'Moving to the door');
+      ally.progress = t('スタック位置へ移動', 'Moving to Stack');
     }
   });
   return sorted[0]!;
@@ -280,7 +280,7 @@ export function updatePortalGroups(ctx: SquadContext, dt: number): void {
     if (g.order === 'stack') {
       if (g.allSettled && !ctx.announcedStacks.has(id)) {
         ctx.announcedStacks.add(id);
-        ctx.emitRadio(stacking[0]!, '付いた', 'Set.');
+        ctx.emitRadio(stacking[0]!, 'スタック完了、突入準備よし！', 'Stacked up, ready to make entry.');
       }
       continue;
     }
@@ -592,7 +592,7 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
     plan?.velocity ?? computeBallisticVelocity(origin, target, ctx.tearGas.gravity, 9, 0.25, 0.75);
   ctx.tearGas.throwFrom(origin, velocity, thrower.id, plan?.fuse ?? 1.5);
   ctx.gasLeft = Math.max(0, ctx.gasLeft - 1);
-  ctx.emitRadio(thrower, 'ガス、入れる', 'Gas out.');
+  ctx.emitRadio(thrower, 'CSガス投入！', 'Deploying CS gas!');
 }
 
 export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos: Vec3): boolean {
@@ -625,7 +625,7 @@ export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos:
   ctx.flashbang.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
   ctx.flashesLeft--;
   ctx.flashCd = FLASH_TEAM_COOLDOWN;
-  ctx.emitRadio(ally, 'フラッシュ', 'Flash out.');
+  ctx.emitRadio(ally, 'フラッシュ投擲！', 'Flash out!');
   return true;
 }
 
@@ -652,7 +652,7 @@ export function tryAutonomousGas(ctx: SquadContext): void {
     ctx.tearGas.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
     ctx.gasLeft--;
     ctx.gasCd = GAS_TEAM_COOLDOWN;
-    ctx.emitRadio(ally, 'ガス、入れる', 'Gas out.');
+    ctx.emitRadio(ally, '催涙ガスで炙り出す！', 'Deploying tear gas to flush them out!');
     return;
   }
   if (attempted) {
@@ -670,8 +670,8 @@ export function beginC2Sequence(ctx: SquadContext, lead: AllyUnit, portal: Entry
   lead.c2Standoff = null;
   lead.c2IsLead = true;
   lead.body.setPose('crouch');
-  lead.progress = t('爆薬を付けている', 'Setting the charge');
-  ctx.emitRadio(lead, 'チャージ。下がれ', 'Charge. Get back.');
+  lead.progress = t('C2爆薬設置中', 'Planting C2');
+  ctx.emitRadio(lead, 'C2爆薬を設置する！ 退避しろ！', 'Planting C2! Stand clear!');
 
   // 同じポータルの仲間も安全な退避距離へ下がる
   for (const u of ctx.allies) {
@@ -685,7 +685,7 @@ export function beginC2Sequence(ctx: SquadContext, lead: AllyUnit, portal: Entry
         y: u.body.footY,
         z: u.body.pz,
       });
-      u.progress = t('下がっている', 'Standing off');
+      u.progress = t('C2起爆退避中', 'C2 Standoff');
     }
   }
 }
@@ -736,7 +736,7 @@ export function detonateC2(ctx: SquadContext, lead: AllyUnit, portal: EntryPorta
     lead.id,
   );
 
-  ctx.emitRadio(lead, '起爆。入れ', 'Breach. Go.');
+  ctx.emitRadio(lead, 'C2起爆！突入する！', 'Breach! Breach! Moving in!');
   for (const u of ctx.allies) {
     if (u.down || u.entryPortal?.id !== portal.id) continue;
     if (u.phase === 'c2_standoff' || u.phase === 'c2_plant' || u.phase === 'door_prep') {
@@ -805,7 +805,7 @@ export function updateStackingPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   }
   if (!updateStackSettle(ctx, ally, portal, slot, dt)) {
     ally.stackWaitTimer = 0;
-    ally.progress = t('ドアに付いている', 'Moving to the door');
+    ally.progress = t('スタック位置へ移動', 'Moving to Stack');
     return;
   }
   if (!ally.engaging) {
@@ -854,9 +854,9 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
 
   if (door) {
     if (ally.order === 'pieDoor' && door.locked) {
-      ally.progress = t('施錠されている', 'Locked');
+      ally.progress = t('施錠のため開けません', 'Door Locked');
       if (isDoorLead) {
-        ctx.emitRadio(ally, '施錠だ', 'Locked.');
+        ctx.emitRadio(ally, 'ドアが施錠されている！ブリーチ指示を！', 'Door is locked, awaiting breach order!');
       }
       ally.phase = 'hold';
       ally.watchYaw = ally.body.yawRad;
@@ -883,7 +883,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       if (isDoorLead) {
         if (door.angle < peekReadyAngle && !door.isMoving) {
           door.command(door.peekAngle, false, body.px, body.pz);
-          ctx.emitRadio(ally, '少し開ける', 'Cracking.');
+          ctx.emitRadio(ally, '扉を少し開けて内部を確認する…', 'Cracking the door, checking inside...');
         }
         if (door.angle >= peekReadyAngle) {
           ally.peekHold += dt;
@@ -903,9 +903,9 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
             door.command(door.maxAngle, false, body.px, body.pz);
           }
         }
-        ally.progress = t('隙間を見ている', 'Looking through the crack');
+        ally.progress = t('扉半開き確認中', 'Peeking Door');
       } else {
-        ally.progress = t('入口を見ている', 'Watching the door');
+        ally.progress = t('扉開放援護中', 'Covering Door');
       }
       return;
     }
@@ -919,7 +919,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
     }
 
     if (door.angle < ctx.cfg.doorOpenAngle) {
-      ally.progress = door.locked ? t('蹴る準備', 'Set to kick') : t('ドアを開けている', 'Opening the door');
+      ally.progress = door.locked ? t('ブリーチ準備', 'Prepping Breach') : t('ドア開放中', 'Opening Door');
       return;
     }
   }
@@ -930,7 +930,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       (u) => !u.down && u.entryPortal?.id === portal.id && u.phase === 'pieing',
     );
     if (someonePieing) {
-      ally.progress = t('入口を見ている', 'Watching the door');
+      ally.progress = t('パイ切り援護中', 'Covering Pie');
       return;
     }
     if (isDoorLead && ally.targetRoom) {
@@ -945,11 +945,12 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
         ally.pieElapsed = 0;
         ally.stealthEntry = ally.order === 'clear';
         ally.phase = 'pieing';
+        ctx.emitRadio(ally, 'パイを切って室内を確認する', 'Slicing the pie...');
         return;
       }
     }
     if (ally.order === 'pieDoor') {
-      ally.progress = t('外から見ている', 'Holding outside');
+      ally.progress = t('ドア外から警戒中', 'Covering Threshold');
       if (!ally.engaging) {
         const lookSide = ally.roleIndex === 0 ? -0.9 : 0.9;
         body.aimAt(
@@ -975,7 +976,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
         u.flashed = true;
         u.phase = 'flash_wait';
         u.phaseTimer = ctx.cfg.flashDelay + 0.08;
-        u.progress = t('フラッシュ、下がっている', 'Bang, backing off');
+        u.progress = t('閃光弾投擲・退避', 'Throwing Flashbang');
       }
     }
     return;
@@ -992,7 +993,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
         u.gassed = true;
         u.phase = 'gas_wait';
         u.phaseTimer = 1.65;
-        u.progress = t('ガス、待っている', 'Gas, waiting');
+        u.progress = t('CSガス投入・待機', 'Deploying CS Gas');
       }
     }
     return;
@@ -1004,8 +1005,8 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   if (isDoorLead) {
     ctx.emitRadio(
       ally,
-      ally.order === 'breachClear' ? '蹴る' : '入る',
-      ally.order === 'breachClear' ? 'Breach.' : 'Going.',
+      ally.order === 'breachClear' ? 'ブリーチ！突入する！' : '突入、クリアする！',
+      ally.order === 'breachClear' ? 'Breaching, moving in!' : 'Moving in, clearing room!',
     );
   }
 }
@@ -1021,14 +1022,14 @@ export function updatePieingPhase(ctx: SquadContext, ally: AllyUnit, dt: number)
   ally.pieElapsed += dt;
   // パイ切り中に敵を視認したら室外からそのまま交戦（Limited Penetration）
   if (ally.engaging) {
-    ally.progress = t('外から撃っている', 'Shooting from outside');
+    ally.progress = t('室外から交戦中', 'Engaging from Threshold');
     return;
   }
   const idx = Math.min(ally.pieIdx, ally.pieSteps.length - 1);
   const step = ally.pieSteps[idx]!;
   const d = Math.hypot(step.pos.x - body.px, step.pos.z - body.pz);
   if (d > 0.26) {
-    ally.progress = t('角を見ている', 'Working the corner');
+    ally.progress = t('スライシング・ザ・パイ', 'Slicing the Pie');
     navigateTo(
       ctx,
       ally,
@@ -1048,8 +1049,8 @@ export function updatePieingPhase(ctx: SquadContext, ally: AllyUnit, dt: number)
     ally.pieHold += dt;
     ally.progress =
       ally.pieIdx >= ally.pieSteps.length
-        ? t('外から見ている', 'Holding outside')
-        : t('角を見ている', 'Checking the corner');
+        ? t('ドア外から警戒中', 'Covering Threshold')
+        : t('クリア角確認中', 'Checking Angles');
     if (ally.pieIdx < ally.pieSteps.length && ally.pieHold >= PIE_STEP_HOLD_SEC) {
       ally.pieIdx++;
       ally.pieHold = 0;
@@ -1057,7 +1058,7 @@ export function updatePieingPhase(ctx: SquadContext, ally: AllyUnit, dt: number)
   }
   if (ally.pieIdx >= ally.pieSteps.length || ally.pieElapsed >= PIE_TIMEOUT_SEC) {
     if (ally.order === 'pieDoor') {
-      ally.progress = t('外から見ている', 'Holding outside');
+      ally.progress = t('ドア外から警戒中', 'Covering Threshold');
       return;
     }
     // パイ切り完了: グループ全員をステルス進入（entering）へ移行
@@ -1068,7 +1069,7 @@ export function updatePieingPhase(ctx: SquadContext, ally: AllyUnit, dt: number)
         u.phaseTimer = 0;
       }
     }
-    ctx.emitRadio(ally, '入る', 'Going.');
+    ctx.emitRadio(ally, '室外確認クリア、静かに進入する', 'Threshold clear, moving in quiet.');
   }
 }
 
@@ -1089,7 +1090,7 @@ export function updateC2PlantPhase(ctx: SquadContext, ally: AllyUnit, dt: number
   }
   body.faceToward(door.centerX, door.centerZ);
   body.setPose('crouch');
-  ally.progress = t('爆薬を付けている', 'Setting the charge');
+  ally.progress = t('C2爆薬設置中', 'Planting C2');
   ally.c2Timer += dt;
   if (ally.c2Timer >= SWAT_C2_PLANT_SEC) {
     body.setPose('stand');
@@ -1122,7 +1123,7 @@ export function updateC2StandoffPhase(ctx: SquadContext, ally: AllyUnit, dt: num
   if (!ally.engaging) {
     body.aimAt(door.centerX, door.sillY + 1.38, door.centerZ, dt, Math.PI * 2 * dt);
   }
-  ally.progress = t('下がっている', 'Standing off');
+  ally.progress = t('C2起爆退避中', 'C2 Standoff');
   if (!ally.c2IsLead) {
     if (door.angle >= ctx.cfg.doorOpenAngle) {
       ally.phase = 'entering';
@@ -1152,11 +1153,11 @@ export function updateFlashWaitPhase(ctx: SquadContext, ally: AllyUnit, dt: numb
     ally.body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
   }
   ally.phaseTimer -= dt;
-  ally.progress = t('炸裂を待っている', 'Waiting on the bang');
+  ally.progress = t('閃光起爆待ち', 'Waiting for Flash');
   if (ally.phaseTimer <= 0) {
     ally.phase = 'entering';
     ally.phaseTimer = 0;
-    if (ally.roleIndex === 0) ctx.emitRadio(ally, 'ゴー', 'Go.');
+    if (ally.roleIndex === 0) ctx.emitRadio(ally, 'フラッシュ炸裂！突入！', 'Flash out, go, go, go!');
   }
 }
 
@@ -1166,11 +1167,11 @@ export function updateGasWaitPhase(ctx: SquadContext, ally: AllyUnit, dt: number
     ally.body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
   }
   ally.phaseTimer -= dt;
-  ally.progress = t('ガスを待っている', 'Waiting on the gas');
+  ally.progress = t('CSガス展開待ち', 'Waiting for Gas');
   if (ally.phaseTimer <= 0) {
     ally.phase = 'entering';
     ally.phaseTimer = 0;
-    if (ally.roleIndex === 0) ctx.emitRadio(ally, 'マスク。ゴー', 'Masks. Go.');
+    if (ally.roleIndex === 0) ctx.emitRadio(ally, 'ガス展開完了！マスク確認、突入！', 'Gas deployed! Masks on, moving in!');
   }
 }
 
@@ -1186,7 +1187,7 @@ export function updateEnteringPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   if (ally.entryStartT < 0) {
     if (!entryGateOpen(ctx, ally)) {
       ally.entryGateWait += dt;
-      ally.progress = t(`${ally.entryOrder + 1}番、待っている`, `#${ally.entryOrder + 1}, holding`);
+      ally.progress = t(`${ally.entryOrder + 1}番手突入待ち`, `Entry #${ally.entryOrder + 1} Standby`);
       if (!ally.engaging) {
         body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
       }
@@ -1235,7 +1236,7 @@ export function updateEnteringPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   const d = Math.hypot(dest.x - body.px, dest.z - body.pz);
   const timedOut = ally.phaseTimer >= ENTRY_TIMEOUT_SEC || ally.stalled >= ENTRY_STALL_SEC;
   if (!(isLast && d <= ENTRY_POD_ARRIVE) && !timedOut) {
-    ally.progress = t('入っている', 'Moving in');
+    ally.progress = t('室内に突入展開', 'Making Entry');
     const entrySpeed = ally.stealthEntry ? ally.combat.moveSpeed * STEALTH_ENTRY_SPEED_MUL : undefined;
     navigateTo(ctx, ally, dest.x, dest.z, portal.sillY, dt, false, false, null, entrySpeed, isLast);
     if (!ally.engaging) {

@@ -81,7 +81,7 @@ export class TearGasEffect {
     if (density > 0) {
       if (!this.warned && this.level < 8) {
         this.warned = true;
-        this.subtitle.show(t('催涙だ。ここから出る', 'Gas. Get out.'), 1.8);
+        this.subtitle.show(t('催涙ガスだ！ この部屋から離れろ！', 'Tear gas! Get out of this room!'), 1.8);
       }
       this.level = Math.min(100, this.level + BUILD_PER_SEC * density * dt);
     } else {

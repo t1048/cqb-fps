@@ -42,7 +42,7 @@ export class PepperEffect {
     const first = this.level < 5;
     this.level = Math.min(100, this.level + PER_HIT);
     this.player.addViewKick(0.01, (Math.random() - 0.5) * 0.05);
-    if (first) this.subtitle.show(t('胡椒だ。目がやられた', 'Pepper. Can\'t see.'), 1.4);
+    if (first) this.subtitle.show(t('ペッパーボールを浴びた！ 目が…！', 'Hit by pepperball! My eyes...!'), 1.4);
   }
 
   update(rawDt: number): void {

@@ -253,8 +253,8 @@ export class SuspectMission {
             d.locked = !d.locked;
             this.subtitle.show(
               d.locked
-                ? t('施錠した', 'Locked.')
-                : t('解錠した', 'Unlocked.'),
+                ? t('ドアを施錠した（SWAT はブリーチが必要）', 'Door locked (SWAT must breach)')
+                : t('ドアの施錠を解除した', 'Door unlocked'),
               1.6,
             );
           }
@@ -342,14 +342,14 @@ export class SuspectMission {
       if (this.input.wasPressed('warningCall') && this.elapsed > 0.5) this.assaultAt = this.elapsed;
       if (this.elapsed >= this.assaultAt) {
         this.team.beginAssault();
-        this.subtitle.show(t('入ってくる', 'They\'re coming in.'), 2.5);
+        this.subtitle.show(t('SWAT が突入を開始した！', 'SWAT has initiated the breach!'), 2.5);
       }
     } else if (this.player.alive && this.input.isDown('warningCall')) {
       // Space 長押し: 両手を上げて投降
       this.surrenderHold += dt;
       this.showGauge(t('両手を上げて投降...', 'Surrendering (hands up)...'), this.surrenderHold / SURRENDER_HOLD_SEC);
       if (this.surrenderHold >= SURRENDER_HOLD_SEC) {
-        this.subtitle.show(t('手を上げる。撃たないでくれ', 'Hands up. Don\'t shoot.'), 2.0);
+        this.subtitle.show(t('容疑者「わかった、投降する！撃つな！」', 'Suspect: "Okay, I surrender! Don\'t shoot!"'), 2.0);
         this.conclude('arrested', 1.2);
       }
     } else {
@@ -365,7 +365,7 @@ export class SuspectMission {
     else if (this.team.hasStarted && this.team.aliveCount === 0 && !this.team.hasPendingReinforcements) {
       this.conclude('repelled', 2.0);
     } else if (this.team.hasStarted && this.holdLeft <= 0) {
-      this.subtitle.show(t('下がる。外周は残す', 'Falling back. Perimeter stays.'), 2.0);
+      this.subtitle.show(t('SWAT「撤退だ！包囲を維持しろ！」', 'SWAT: "Fall back! Maintain the perimeter!"'), 2.0);
       this.conclude('survived', 2.0);
     }
     this.renderHud();

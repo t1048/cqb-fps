@@ -317,11 +317,11 @@ class App {
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {
       const reply =
         from === 'SURRENDER' && to === 'ENGAGE'
-          ? t('下がれ', 'Stay back.')
+          ? t('隙を見せたな！', 'Got an opening!')
           : to === 'HESITATE'
-            ? t('待ってくれ', 'Wait.')
+            ? t('待ってくれ……', 'Wait, hold on...')
             : to === 'SURRENDER'
-              ? t('わかった。撃たないでくれ', 'Okay. Don\'t shoot.')
+              ? t('わかった、手を上げる！', 'Okay, hands up!')
               : '';
       const suspect = this.entities.suspects.get(id);
       if (!reply || !suspect) return;

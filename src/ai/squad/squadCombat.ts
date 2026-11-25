@@ -379,7 +379,7 @@ export function updateRoomCoverHold(ctx: SquadContext, ally: AllyUnit, dt: numbe
   if (ally.phase === 'entering' && ally.entryCrossT < 0) {
     ally.entryCrossT = ctx.simTime;
   }
-  ally.progress = t('隠れて呼びかけている', 'Calling him out');
+  ally.progress = t('壁カバー・投降勧告中', 'Cover / Calling Surrender');
 
   const dist = Math.hypot(hold.hide.x - ally.body.px, hold.hide.z - ally.body.pz);
   if (ally.settled) {
@@ -421,8 +421,8 @@ export function updateRoomCoverHold(ctx: SquadContext, ally: AllyUnit, dt: numbe
         ctx.coverRadioCd = 6.0;
         ctx.emitRadio(
           ally,
-          '壁の向こうにいる。呼びかける',
-          'Behind cover. Calling him out.',
+          '奥のエリアに容疑者！壁に隠れてカバー、投降を勧告する！',
+          'Suspect in next area! Taking cover and calling for surrender!',
         );
       }
     }
@@ -500,7 +500,7 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
       ally.engage.enter(ally.known);
       if (ctx.contactRadioCd <= 0) {
         ctx.contactRadioCd = 6.0;
-        ctx.emitRadio(ally, '接触', 'Contact.');
+        ctx.emitRadio(ally, '敵性対象を視認！交戦する！', 'Contact! Engaging hostile!');
       }
       tryTriggerPincer(ctx, ally, ally.known);
     }
@@ -577,7 +577,7 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   // リロード開始の戦術無線コール
   const curLabel = ally.engage.label;
   if (curLabel === 'reload' && ally.prevEngageLabel !== 'reload') {
-    ctx.emitRadio(ally, 'リロード。カバーしてくれ', 'Reloading. Cover.');
+    ctx.emitRadio(ally, 'リロード中、カバーを頼む！', 'Reloading! Cover me!');
   }
   ally.prevEngageLabel = curLabel;
 
@@ -630,7 +630,7 @@ export function firePepper(ctx: SquadContext, ally: AllyUnit, target: { id: stri
   ctx.recentlyPeppered.set(target.id, 4.0);
   if (ctx.pepperRadioCd <= 0) {
     ctx.pepperRadioCd = 5.0;
-    ctx.emitRadio(ally, '人質がいる。非致死で行く', 'Hostage. Less lethal.');
+    ctx.emitRadio(ally, '人質に注意！ペッパーボールで制圧する！', 'Watch the hostage! Deploying pepperball!');
   }
 }
 
@@ -691,10 +691,10 @@ export function triggerRush(ctx: SquadContext, pos: Vec3, reason: 'blind' | 'rel
   }
   ctx.rushCd = SWAT_RUSH_TEAM_COOLDOWN;
   const lines: Record<'blind' | 'reload' | 'pepper' | 'lowHp', [string, string]> = {
-    blind: ['光った。行け', 'He\'s flashed. Go.'],
-    reload: ['込めてる。行け', 'He\'s loading. Go.'],
-    pepper: ['効いてる。詰めろ', 'He\'s hit. Close.'],
-    lowHp: ['撃たれてる。詰めろ', 'He\'s wounded. Move.'],
+    blind: ['フラッシュ命中！ 今だ、一気に詰めろ！', 'Flash hit! Push in now!'],
+    reload: ['リロード中だ！ 撃ち切る前に突っ込め！', 'Suspect reloading! Move in!'],
+    pepper: ['ペッパーが効いている、距離を詰めろ！', 'Pepper hit! Close the distance!'],
+    lowHp: ['相手は負傷している！ 一気に制圧しろ！', 'Suspect is wounded! Press the attack!'],
   };
   const [ja, en] = lines[reason];
   ctx.emitRadio(candidates[0]!.a, ja, en);
@@ -718,7 +718,7 @@ export function updateRush(ctx: SquadContext, ally: AllyUnit, dt: number): void 
     ally.rushTimer = 0;
     return;
   }
-  ally.progress = t('詰めている', 'Pushing');
+  ally.progress = t('突撃制圧中', 'Rushing');
   const speed = ally.shielded ? SWAT_SHIELD_RUSH_SPEED : SWAT_RUSH_SPEED_MIN;
   const dist = Math.hypot(goal.x - ally.body.px, goal.z - ally.body.pz);
   if (dist > 1.4 || Math.abs(goal.y - ally.body.footY) > 0.6) {
@@ -803,8 +803,8 @@ export function tryTriggerPincer(ctx: SquadContext, contactBy: AllyUnit, targetP
   ctx.pincerCd = PINCER_TEAM_COOLDOWN;
   ctx.emitRadio(
     pinGroup[0]!,
-    '正面は押さえる。もう一班は回れ',
-    'Hold the front. Other element, flank.',
+    '正面を釘付けにする！別班は回り込め！',
+    'Pinning target! Flank element, move around!',
   );
 }
 
@@ -812,7 +812,7 @@ export function updatePincerFlank(ctx: SquadContext, ally: AllyUnit, dt: number)
   const goal = ally.pincerTarget;
   if (!goal) return;
   ally.pincerTimer -= dt;
-  ally.progress = t('回っている', 'Flanking');
+  ally.progress = t('挟撃回り込み中', 'Flanking');
   const d = Math.hypot(goal.x - ally.body.px, goal.z - ally.body.pz);
   if (ally.pincerTimer <= 0 || (d <= 1.2 && Math.abs(goal.y - ally.body.footY) < 0.6)) {
     ally.pincerTarget = null;
@@ -978,7 +978,7 @@ export function onHit(ctx: SquadContext, id: string, damage: number, nonlethal: 
     ally.body.setShake(0);
     ally.body.setPose('down');
     ally.body.removeGun();
-    ctx.emitRadio(ally, `${ally.callsign}、やられた`, `${ally.callsign} is down.`);
+    ctx.emitRadio(ally, `${ally.name}が負傷ダウン！`, `${ally.name} is down!`);
     return;
   }
   const flinchSec = ally.rushTimer > 0 ? Math.min(ally.combat.flinchSec, 0.08) : ally.combat.flinchSec;

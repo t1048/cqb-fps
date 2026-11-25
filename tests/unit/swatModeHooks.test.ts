@@ -766,8 +766,8 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
         const texts = collectText(body);
 
         expect(texts.some((t) => t.includes('[1-9'))).toBe(true);
-        expect(texts.some((t) => t.includes('ガスを入れろ'))).toBe(true);
-        expect(texts.some((t) => t.includes('爆薬を付けろ'))).toBe(true);
+        expect(texts.some((t) => t.includes('ガス＆クリア'))).toBe(true);
+        expect(texts.some((t) => t.includes('C2＆クリア'))).toBe(true);
 
         // In door context: 1=stack, 2=clear, 3=flashClear, 4=gasClear, 5=c2Clear
         menu.handleMenuEvent('select', 4, 'gold', onExecute);
@@ -800,8 +800,8 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
       const body = (globalThis as unknown as { document: { body: StubElement } }).document.body;
       const texts = collectText(body);
 
-      expect(texts.some((t) => t.includes('ガスを入れろ'))).toBe(true);
-      expect(texts.some((t) => t.includes('爆薬を付けろ'))).toBe(false);
+      expect(texts.some((t) => t.includes('ガス＆クリア'))).toBe(true);
+      expect(texts.some((t) => t.includes('C2＆クリア'))).toBe(false);
 
       // In area context: 1=clear, 2=flashClear, 3=gasClear
       menu.handleMenuEvent('select', 3, 'gold', onExecute);
@@ -865,7 +865,7 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
       expect(numberedRows.some((r) => r.numText === '10')).toBe(false);
 
       const restrainRow = numberedRows.find((r) => r.label.includes('対象を確保'));
-      const followRow = numberedRows.find((r) => r.label.includes('後ろに付け'));
+      const followRow = numberedRows.find((r) => r.label.includes('追従'));
       expect(restrainRow).toBeDefined();
       expect(followRow).toBeDefined();
 
