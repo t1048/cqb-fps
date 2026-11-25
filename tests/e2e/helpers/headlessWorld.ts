@@ -70,6 +70,7 @@ export function createStubTextures(): TextureLibrary {
     get: () => tex,
     getDecal: () => tex,
     byMaterial: () => tex,
+    getDerivedMaps: () => ({ bumpMap: tex, roughnessMap: tex }),
     bindPalette() {},
     palette: null,
     dispose: () => {

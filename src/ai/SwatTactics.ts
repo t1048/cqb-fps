@@ -90,6 +90,9 @@ export interface EntryRouteOptions {
   reachable?: readonly EntryReach[];
   /** attack は担当ドアを無視し、目標へ最も早く着く入口を選ぶ */
   mode?: 'hold' | 'attack';
+  /** 前フレームの経路フェーズと入口。cross 中は屋外点から 1.8m 離れるまで approach に戻さない */
+  prevPhase?: EntryRoute['phase'] | null;
+  prevEntryId?: string | null;
 }
 
 /** 屋外迂回が最寄り入口より明らかに長いとみなす倍率と、その下限（m） */
@@ -140,9 +143,15 @@ function pickReachableEntry(
   return best;
 }
 
-function routePhase(from: Vec3, portal: EntryPortal): EntryRoute {
+/** approach → cross に切り替える屋外点までの距離と、cross → approach に戻す距離（ヒステリシス） */
+export const ROUTE_CROSS_ENTER_DIST = 1.15;
+export const ROUTE_CROSS_EXIT_DIST = 1.8;
+
+function routePhase(from: Vec3, portal: EntryPortal, options?: EntryRouteOptions): EntryRoute {
   const dist = Math.hypot(portal.outside.x - from.x, portal.outside.z - from.z);
-  if (dist > 1.15) return { dest: portal.outside, entryId: portal.id, phase: 'approach' };
+  const wasCrossing = options?.prevPhase === 'cross' && options.prevEntryId === portal.id;
+  const limit = wasCrossing ? ROUTE_CROSS_EXIT_DIST : ROUTE_CROSS_ENTER_DIST;
+  if (dist > limit) return { dest: portal.outside, entryId: portal.id, phase: 'approach' };
   return { dest: portal.inside, entryId: portal.id, phase: 'cross' };
 }
 
@@ -174,14 +183,14 @@ export function entryRouteDest(
           : null;
     const portal = preferred ?? pickReachableEntry(pool, from, goal, lengths);
     if (!portal) return { dest: goal, entryId: null, phase: 'direct' };
-    return routePhase(from, portal);
+    return routePhase(from, portal, options);
   }
   const preferred = preferPortalId
     ? entries.find((e) => e.id === preferPortalId && Math.abs(e.sillY - from.y) < 1.1) ?? null
     : null;
   const portal = preferred ?? pickEntryPortal(entries, from, goal);
   if (!portal) return { dest: goal, entryId: null, phase: 'direct' };
-  return routePhase(from, portal);
+  return routePhase(from, portal, options);
 }
 
 // ---------- 間接フラッシュバン・催涙ガス投擲（ドア枠・窓・1バウンド壁反射） ----------

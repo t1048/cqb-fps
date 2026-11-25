@@ -22,6 +22,10 @@ const KNEEL_H = STAND_H - KNEEL_DROP;
 const CROUCH_H = 1.15;
 const BODY_W = 0.46;
 const BODY_D = 0.28;
+/** aimAt で首だけで追う最大ヨー(rad)。超えた分は体を回す */
+const HEAD_YAW_LIMIT = 0.5;
+/** 1tick の移動がこれ未満なら歩行ストライドに数えない(m) */
+const STRIDE_DEADZONE = 0.004;
 
 /**
  * 頭・胴・四肢・装備を組み合わせた人型。姿勢で高さ・AABB が変わる。
@@ -47,6 +51,10 @@ export class HumanoidBody {
   private readonly headPivot = new THREE.Group();
   private shake = 0;
   private lastDt = 1 / 60;
+  /** 今フレームの残り旋回予算(rad)。faceToward が消費し tick で 5*dt にリセット */
+  private turnBudget = 5 / 60;
+  /** 胴ひねりの目標（faceToward が設定、tick でブレンド） */
+  private torsoTarget = 0;
   private readonly torso = new THREE.Group();
   private phase = 0;
   private travel = 0;
@@ -260,8 +268,16 @@ export class HumanoidBody {
     this.cuffs.visible = on;
   }
 
-  setPosition(x: number, z: number, y?: number): void {
-    this.travel += Math.hypot(x - this.x, z - this.z);
+  /**
+   * 位置を設定する。countTravel=false は押し出し等の補正用（歩行ストライドに数えない）。
+   */
+  setPosition(x: number, z: number, y?: number, countTravel = true): void {
+    if (countTravel) this.travel += Math.hypot(x - this.x, z - this.z);
+    else if (this.feetReady) {
+      // 歩行アニメを出さない補正移動: 足の追従判定用の前回位置も一緒にずらす
+      this.previous.x += x - this.x;
+      this.previous.z += z - this.z;
+    }
     this.x = x;
     this.z = z;
     if (y !== undefined) this.footY = y;
@@ -286,12 +302,15 @@ export class HumanoidBody {
   tick(dt: number): void {
     dt = Math.min(dt, 0.05);
     this.lastDt = dt;
+    this.turnBudget = 5 * this.lastDt;
     this.headPivot.rotation.x *= Math.exp(-2*dt);
     this.headPivot.rotation.y *= Math.exp(-2*dt);
     this.poseTime += dt;
     const blend = 1 - Math.exp(-10 * dt);
     const walking = this.pose === 'stand' || this.pose === 'crouch';
-    const distance = walking ? Math.min(this.travel, 0.22) : 0;
+    // デッドゾーン: 1tick の移動が STRIDE_DEADZONE 未満なら歩行アニメに数えない（押し出し・微調整で足踏みしない）
+    const moved = this.travel < STRIDE_DEADZONE ? 0 : this.travel;
+    const distance = walking ? Math.min(moved, 0.22) : 0;
     this.travel = 0;
     this.phase += distance * 6.6;
     this.stride += (Math.min(1, distance / Math.max(0.001, dt * 1.7)) - this.stride) * blend;
@@ -378,7 +397,8 @@ export class HumanoidBody {
       for (const leg of this.legs) leg.knee.rotation.x += (-0.85-leg.knee.rotation.x)*blend;
     }
     this.torso.rotation.z = this.shake * 0.18;
-    this.torso.rotation.y *= Math.exp(-8*dt);
+    this.torso.rotation.y += (this.torsoTarget - this.torso.rotation.y) * (1 - Math.exp(-8 * dt));
+    this.torsoTarget *= Math.exp(-8 * dt);
     if (this.gunShown && this.gun && this.gun.parent === this.rig) {
       const targetGunY = this.readyPose === 'high' ? 1.24 : 1.13;
       const targetGunZ = this.readyPose === 'high' ? -0.23 : -0.21;
@@ -481,10 +501,11 @@ export class HumanoidBody {
     const bearing = Math.atan2(this.x - x, this.z - z);
     const delta = bearing - this.yawRad;
     const neck = Math.atan2(Math.sin(delta), Math.cos(delta));
-    if (Math.abs(neck) > 0.65) this.faceToward(x, z, maxTurn);
+    // 首で追える範囲（±0.5rad）を超えた分だけ体を回す。頭ヨーは neck の連続関数（境界で跳ばない）。
+    if (Math.abs(neck) > HEAD_YAW_LIMIT) this.faceToward(x, z, maxTurn);
     const blend = 1 - Math.exp(-10 * Math.min(dt, 0.05));
-    const headYaw = Math.abs(neck) > 0.65 ? Math.sign(neck) * 0.35 : neck;
-    this.headPivot.rotation.y += (THREE.MathUtils.clamp(headYaw, -0.75, 0.75) - this.headPivot.rotation.y) * blend;
+    const headYaw = THREE.MathUtils.clamp(neck, -HEAD_YAW_LIMIT, HEAD_YAW_LIMIT);
+    this.headPivot.rotation.y += (headYaw - this.headPivot.rotation.y) * blend;
     const rawPitch = Math.atan2(y - (this.footY + 1.55), dist);
     const pitch = THREE.MathUtils.clamp(rawPitch, -0.45, 0.45);
     this.headPivot.rotation.x += (pitch - this.headPivot.rotation.x) * blend;
@@ -501,9 +522,13 @@ export class HumanoidBody {
     if (Math.hypot(dx, dz) < 1e-4) return;
     const delta = Math.atan2(-dx, -dz) - this.group.rotation.y;
     const shortest = Math.atan2(Math.sin(delta), Math.cos(delta));
-    const limit = Math.min(maxTurn, 5 * this.lastDt);
-    this.group.rotation.y += THREE.MathUtils.clamp(shortest, -limit, limit);
-    this.torso.rotation.y = THREE.MathUtils.clamp(shortest, -0.26, 0.26);
+    // 同一フレーム内で何度呼ばれても合計旋回量は 5*lastDt（tick でリセット）を超えない
+    const limit = Math.max(0, Math.min(maxTurn, this.turnBudget));
+    const applied = THREE.MathUtils.clamp(shortest, -limit, limit);
+    this.group.rotation.y += applied;
+    this.turnBudget -= Math.abs(applied);
+    // 胴ひねりはスナップせず目標だけ更新し、tick でブレンドする
+    this.torsoTarget = THREE.MathUtils.clamp(shortest, -0.26, 0.26);
   }
 
   get isDown(): boolean {

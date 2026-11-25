@@ -14,8 +14,20 @@ import {
 import { HumanoidBody } from '../ai/HumanoidBody';
 import { noiseRayOriginY } from '../ai/Perception';
 import { shieldBlocks } from '../ai/ShieldGuard';
-import { blockedAtFiltered, reachableRouteLength } from '../ai/SquadRoute';
-import { layoutStackSlots } from '../ai/stackSlots';
+import { blockedAtFiltered, pathSegmentClear, reachableRouteLength } from '../ai/SquadRoute';
+import { layoutStackSlots, type StackSlot } from '../ai/stackSlots';
+import {
+  assignStackSlots,
+  computeEntryOrder,
+  cqbPortalFromStackSlotPortal,
+  cqbRoomFromRoomDef,
+  fromPortalFrame,
+  planEntry,
+  toPortalFrame,
+  type CqbPortal,
+  type EntryPlan,
+  type EntrySlotRank,
+} from '../ai/cqbEntry';
 import {
   BASE_SHIELD_COMBAT,
   BASE_SHIELD_MOBILITY,
@@ -196,6 +208,54 @@ const COVER_RANGE = 11;
 const COVER_FOV_DEG = 120;
 const COVER_NEAR = 1.5;
 const GOAL_TIMEOUT_SEC = 30;
+/** 掃討目標マスが歩行中に seen になっても、選択後この秒数未満 / 残距離この m 未満なら維持する（U ターン抑制） */
+const GOAL_KEEP_SEC = 1.5;
+const GOAL_KEEP_DIST = 2.0;
+
+/** CQB 突入（'entry'）: 順序ゲートの間隔・フェイルセーフ、PoD 保持、経路点の到着半径、タイムアウト */
+const ENTRY_STAGGER_SEC = 0.45;
+const ENTRY_FAILSAFE_SEC = 2.5;
+const ENTRY_POD_HOLD_SEC = 1.0;
+const ENTRY_WP_ARRIVE = 0.3;
+const ENTRY_TIMEOUT_SEC = 6;
+/** 敷居を越えたとみなす屋内側の深さ(m) */
+const ENTRY_CROSS_DEPTH = 0.25;
+/** PoD 保持中に seen にする視線扇（半角°・距離 m） */
+const ENTRY_LOOK_HALF_DEG = 50;
+const ENTRY_LOOK_RANGE = 8;
+/** 扉が開ききるのを待つ上限(s)。超えたら今の角度で計画する */
+const ENTRY_DOOR_OPEN_WAIT = 3;
+/** スタック枠割当: 同セルが別サイドに分かれるペナルティ、セルの希望サイド（Red=左, Blue=右…）外れの 1 人あたりペナルティ */
+const STACK_CELL_SPLIT_PENALTY = 2;
+const STACK_SIDE_PREF_PENALTY = 1;
+
+/** 非戦闘移動の加減速（SuspectNavigator.smooth の既定 = accel 9 / decel 12 / 減速開始 0.6m） */
+const NAV_SMOOTH = {} as const;
+/** 中間経路点では減速しない */
+const NAV_SMOOTH_PASS = { slowRadius: 0 } as const;
+
+/** 進行方向の低域通過（これ以上の速さで動いているときだけ更新）と時定数 */
+const HEADING_MIN_SPEED = 0.5;
+const HEADING_TAU = 0.5;
+/** フォロワー隊形: リーダー後方・自サイドへのオフセット、追従開始/停止距離（slot ごとに加算） */
+const FOLLOW_BACK = 1.1;
+const FOLLOW_SIDE = 0.5;
+const FOLLOW_SIDE_3 = 0.6;
+const FOLLOW_START = 2.4;
+const FOLLOW_START_PER_SLOT = 0.6;
+const FOLLOW_STOP = 1.4;
+const FOLLOW_STOP_PER_SLOT = 0.4;
+/** リーダー移動中に見る自サイド側のオフセット(rad) */
+const FOLLOW_WATCH_SIDE = 0.6;
+/** 視線モード（進行方向 / 警戒方向 / 走査）の最短保持時間 */
+const LOOK_HOLD_SEC = 0.4;
+/** scanAround: 振幅・角速度・静止してから走査を始めるまで */
+const SCAN_AMP = 0.9;
+const SCAN_RATE = 0.9;
+const SCAN_IDLE_SEC = 0.6;
+/** 固定位置フェーズ（スタック到着済み・突入中）の隊員同士は、この距離未満の重なりだけ下位順位側を押す */
+const SEPARATION_FIXED_DIST = 0.42;
+const SEPARATION_LOOSE_MUL = 0.5;
 
 /** 屋内を格子状に区切った 1 マス。視界に入ると seen になる（未視認 = まだクリアしていない場所） */
 export interface CoverCell {
@@ -206,10 +266,104 @@ export interface CoverCell {
   seen: boolean;
   /** 到達できなかったマス（再捜索の周回までは対象にしない） */
   bad: boolean;
+  /** マスの位置で indoorRoomAt が返す部屋（重なり部屋では小さい方）。同室判定に使う */
+  zone?: string | null;
 }
 const RADIO_NAME = 'SWAT無線(傍受)';
 
-export type HunterState = 'staging' | 'stack' | 'sweep' | 'hunt' | 'breach' | 'engage' | 'rush' | 'disarm' | 'down';
+export type HunterState =
+  | 'staging'
+  | 'stack'
+  | 'entry'
+  | 'sweep'
+  | 'hunt'
+  | 'breach'
+  | 'engage'
+  | 'rush'
+  | 'disarm'
+  | 'down';
+
+/** 同じ入口に積んだ隊員の突入グループ（スタック枠・突入順・突入計画を共有） */
+interface EntryGroup {
+  portal: EntryPortal;
+  cqb: CqbPortal | null;
+  room: RoomDef | null;
+  slots: StackSlot[];
+  /** members[i] は slots[i] の隊員 */
+  members: SwatHunter[];
+  ranks: EntrySlotRank[];
+  plans: EntryPlan[] | null;
+  phase: 'stacking' | 'breach' | 'entering' | 'done';
+  breacher: SwatHunter | null;
+  /** 現フェーズの経過秒 */
+  clock: number;
+}
+
+/**
+ * スタック枠割当（設計 §5-1）。各隊員のサイド（左=-1 / 右=+1。computeEntryOrder の side）を全列挙し、
+ * サイド内の枠は assignStackSlots（二乗距離最小 + ドア開口横切り/経路交差ペナルティ）で決める。
+ * 評価 = 二乗距離 + 同セルが左右に分かれる +2（セルごと）+ セルの希望サイド外れ（Red=左, Blue=右, … 1 人 +1）。
+ * 返り値: positions[i] → slot index（-1 = 枠なし）。n > 10 や portal 無しは assignStackSlots のみ。
+ */
+export function assignSwatStackSlots(
+  positions: readonly { x: number; z: number }[],
+  cellKeys: readonly number[],
+  slots: readonly StackSlot[],
+  portal: CqbPortal | null,
+): number[] {
+  const n = positions.length;
+  const fallback = (): number[] => assignStackSlots(positions, slots, portal ?? undefined);
+  if (!portal || n === 0 || n > 10 || slots.length < n) return fallback();
+  const ranks = computeEntryOrder(portal, slots);
+  const sideSlots: Record<-1 | 1, number[]> = { [-1]: [], [1]: [] } as Record<-1 | 1, number[]>;
+  ranks.forEach((r, j) => sideSlots[r.side].push(j));
+  const cells: number[] = [];
+  for (const k of cellKeys) if (!cells.includes(k)) cells.push(k);
+  const want = (i: number): -1 | 1 => (cells.indexOf(cellKeys[i]!) % 2 === 0 ? -1 : 1);
+  const exact = slots.length === n;
+  let best: number[] | null = null;
+  let bestCost = Infinity;
+  for (let mask = 0; mask < 1 << n; mask++) {
+    const bySide: Record<-1 | 1, number[]> = { [-1]: [], [1]: [] } as Record<-1 | 1, number[]>;
+    let cost = 0;
+    for (let i = 0; i < n; i++) {
+      const side: -1 | 1 = mask & (1 << i) ? 1 : -1;
+      bySide[side].push(i);
+      if (side !== want(i)) cost += STACK_SIDE_PREF_PENALTY;
+    }
+    const fits = (s: -1 | 1): boolean =>
+      exact ? bySide[s].length === sideSlots[s].length : bySide[s].length <= sideSlots[s].length;
+    if (!fits(-1) || !fits(1)) continue;
+    for (const k of cells) {
+      const sides = new Set<number>();
+      for (let i = 0; i < n; i++) if (cellKeys[i] === k) sides.add(mask & (1 << i) ? 1 : -1);
+      if (sides.size > 1) cost += STACK_CELL_SPLIT_PENALTY;
+    }
+    if (cost >= bestCost) continue;
+    const out = new Array<number>(n).fill(-1);
+    for (const side of [-1, 1] as const) {
+      const mem = bySide[side];
+      if (mem.length === 0) continue;
+      const ss = sideSlots[side];
+      const local = assignStackSlots(
+        mem.map((i) => positions[i]!),
+        ss.map((j) => slots[j]!),
+        portal,
+      );
+      local.forEach((lj, li) => {
+        const i = mem[li]!;
+        const j = lj >= 0 ? ss[lj]! : -1;
+        out[i] = j;
+        if (j >= 0) cost += (positions[i]!.x - slots[j]!.x) ** 2 + (positions[i]!.z - slots[j]!.z) ** 2;
+      });
+    }
+    if (cost < bestCost - 1e-9) {
+      bestCost = cost;
+      best = out;
+    }
+  }
+  return best ?? fallback();
+}
 
 /** トラップに気付く距離と確率（一度トラップを見つけた後は警戒して上がる） */
 const TRAP_SPOT_DIST = 2.1;
@@ -434,6 +588,29 @@ class SwatHunter implements HitTarget {
   private blockedWindow = 0;
   private scanPhase = Math.random() * Math.PI * 2;
   private entryPhase: EntryRoute['phase'] | null = null;
+  private entryRouteId: string | null = null;
+  /** CQB 突入（'entry'）: 所属グループ・スタック枠 index・突入順・計画・進行状況 */
+  entryGroup: EntryGroup | null = null;
+  slotIndex = -1;
+  entryOrder = 0;
+  entryPlan: EntryPlan | null = null;
+  entryWp = 0;
+  entryHold = 0;
+  /** 突入開始（ゲート通過）時刻（team.clock）。未発進は null */
+  entryStartAt: number | null = null;
+  entryCrossed = false;
+  /** 進行方向の低域通過（単位ベクトル）と今フレームの移動速さ(m/s) */
+  headX = 0;
+  headZ = -1;
+  moveSpeedEst = 0;
+  /** 静止し続けている秒数（自分の更新内での移動のみで判定。押し出しは含まない） */
+  stillTime = 0;
+  private scanBaseYaw = 0;
+  /** フォロワー隊形: 追従中か（ヒステリシス）、2 人組での自サイド（固定） */
+  private following = false;
+  formSide: -1 | 0 | 1 = 0;
+  private lookMode: 'travel' | 'watch' | 'scan' = 'scan';
+  private lookModeTime = 0;
   readonly optics = new TacticalOptics();
   private stepAccum = 0;
   private lastStepX: number;
@@ -534,6 +711,7 @@ class SwatHunter implements HitTarget {
     }
     if (this.state === 'stack') this.stackReady = false;
     if (this.state === 'hunt') this.huntingFlank = false;
+    if (this.state === 'sweep') this.following = false;
     if (this.state === 'breach') {
       this.clearBreachState();
       this.body.setPose('stand');
@@ -593,6 +771,56 @@ class SwatHunter implements HitTarget {
   update(dt: number): void {
     this.body.tick(dt);
     if (!this.alive) return;
+    this.nav.beginFrame();
+    const sx = this.body.px;
+    const sz = this.body.pz;
+    this.updateInner(dt);
+    this.trackMotion(sx, sz, dt);
+  }
+
+  /** 進行方向を姿勢ヨーから初期化する（突入開始時など） */
+  resetHeading(): void {
+    this.headX = -Math.sin(this.body.yawRad);
+    this.headZ = -Math.cos(this.body.yawRad);
+    this.scanBaseYaw = this.body.yawRad;
+  }
+
+  /** 自分の更新内での移動から速さ・進行方向（低域通過）・静止時間を更新する */
+  private trackMotion(sx: number, sz: number, dt: number): void {
+    if (dt <= 0) return;
+    const dx = this.body.px - sx;
+    const dz = this.body.pz - sz;
+    const d = Math.hypot(dx, dz);
+    this.moveSpeedEst = d < 1.5 ? d / dt : 0;
+    if (this.moveSpeedEst > HEADING_MIN_SPEED) {
+      const k = 1 - Math.exp(-dt / HEADING_TAU);
+      const hx = this.headX + (dx / d - this.headX) * k;
+      const hz = this.headZ + (dz / d - this.headZ) * k;
+      const l = Math.hypot(hx, hz);
+      if (l > 1e-4) {
+        this.headX = hx / l;
+        this.headZ = hz / l;
+      }
+    }
+    if (d > 0.004) {
+      this.stillTime = 0;
+      this.scanBaseYaw = this.body.yawRad;
+    } else {
+      this.stillTime += dt;
+    }
+  }
+
+  /** 視線モードを最短保持時間 LOOK_HOLD_SEC 付きで切り替える */
+  private switchLookMode(want: 'travel' | 'watch' | 'scan', dt: number): 'travel' | 'watch' | 'scan' {
+    this.lookModeTime += dt;
+    if (want !== this.lookMode && this.lookModeTime >= LOOK_HOLD_SEC) {
+      this.lookMode = want;
+      this.lookModeTime = 0;
+    }
+    return this.lookMode;
+  }
+
+  private updateInner(dt: number): void {
     this.stateTime += dt;
     this.blockedWindow = Math.max(0, this.blockedWindow - dt);
     if (this.blockedWindow <= 0) this.blockedCount = 0;
@@ -613,6 +841,9 @@ class SwatHunter implements HitTarget {
     switch (this.state) {
       case 'stack':
         this.updateStack(dt);
+        break;
+      case 'entry':
+        this.updateEntry(dt);
         break;
       case 'engage':
         this.updateEngage(dt);
@@ -668,6 +899,7 @@ class SwatHunter implements HitTarget {
       canUseStairs: false,
       faceTravel: true,
       arriveDist: 0.45,
+      smooth: NAV_SMOOTH,
     });
     if (res === 'arrived') {
       this.stackReady = true;
@@ -678,6 +910,105 @@ class SwatHunter implements HitTarget {
         this.stackReady = true;
         if (door) this.body.faceToward(door.centerX, door.centerZ, 5 * dt);
       }
+    }
+  }
+
+  /** CQB 突入（§5-2）: 順序ゲート通過 → サイド固定 waypoints 歩行 → PoD 1.0s 静止警戒 → sweep */
+  private updateEntry(dt: number): void {
+    const group = this.entryGroup;
+    if (!group || group.phase === 'done') {
+      this.setState('sweep');
+      return;
+    }
+    if (group.phase === 'breach' || !group.plans) {
+      this.body.faceToward(group.portal.inside.x, group.portal.inside.z, 5 * dt);
+      return;
+    }
+    const plan = this.entryPlan;
+    if (!plan || plan.waypoints.length === 0) {
+      this.setState('sweep');
+      return;
+    }
+
+    const now = this.team.clock;
+    // 順序ゲート（§1-2）: 直前の生存順位者が敷居を越え、かつ stagger 秒経過（またはフェイルセーフ）で発進
+    if (this.entryStartAt === null) {
+      let pred: SwatHunter | null = null;
+      for (const m of group.members) {
+        if (!m.alive || m.entryOrder >= this.entryOrder) continue;
+        if (!pred || m.entryOrder > pred.entryOrder) pred = m;
+      }
+      let canGo = false;
+      if (!pred) {
+        canGo = true;
+      } else if (pred.state !== 'entry') {
+        canGo = pred.entryStartAt === null || now - pred.entryStartAt >= ENTRY_STAGGER_SEC;
+      } else if (pred.entryStartAt !== null) {
+        const elapsed = now - pred.entryStartAt;
+        canGo = (pred.entryCrossed && elapsed >= ENTRY_STAGGER_SEC) || elapsed >= ENTRY_FAILSAFE_SEC;
+      }
+      if (!canGo) {
+        this.body.faceToward(group.portal.inside.x, group.portal.inside.z, 5 * dt);
+        return;
+      }
+      this.entryStartAt = now;
+    }
+
+    // 敷居越え判定
+    if (!this.entryCrossed && group.cqb) {
+      const { v } = toPortalFrame(group.cqb, { x: this.body.px, z: this.body.pz });
+      if (v >= ENTRY_CROSS_DEPTH) this.entryCrossed = true;
+    }
+
+    // タイムアウト救済
+    if (this.entryWp < plan.waypoints.length && now - this.entryStartAt > ENTRY_TIMEOUT_SEC) {
+      if (this.entryCrossed) {
+        this.entryWp = plan.waypoints.length;
+        this.entryHold = 0;
+      } else {
+        this.setState('sweep');
+        return;
+      }
+    }
+
+    // 経路 waypoints 歩行
+    if (this.entryWp < plan.waypoints.length) {
+      const wp = plan.waypoints[this.entryWp]!;
+      const isLast = this.entryWp === plan.waypoints.length - 1;
+      const res = this.nav.step(wp, this.combat.moveSpeed * 1.1, dt, {
+        canOpenDoors: false,
+        canUseStairs: false,
+        faceTravel: false,
+        arriveDist: ENTRY_WP_ARRIVE,
+        smooth: isLast ? NAV_SMOOTH : NAV_SMOOTH_PASS,
+      });
+      // 敷居越え前はドア内の反対側コーナー、以降は PoD の視線点を見る
+      const lookPt =
+        this.entryWp === 0 && !this.entryCrossed && group.cqb
+          ? fromPortalFrame(group.cqb, -plan.side * 1.5, 2.5)
+          : plan.look;
+      this.body.faceToward(lookPt.x, lookPt.z, 4.5 * dt);
+      if (res === 'arrived') {
+        this.entryWp++;
+        if (this.entryWp >= plan.waypoints.length) this.entryHold = 0;
+      } else if (res === 'blocked') {
+        if (isLast) {
+          this.entryWp = plan.waypoints.length;
+          this.entryHold = 0;
+        } else {
+          this.entryWp++;
+        }
+      }
+      return;
+    }
+
+    // PoD 到着後: 1.0s 静止して look 方向を保持し、±50°・8m 扇のセルを seen にマーク → sweep
+    this.body.faceToward(plan.look.x, plan.look.z, 4 * dt);
+    this.team.markEntryLookSector(this, plan.look);
+    this.entryHold += dt;
+    if (this.entryHold >= ENTRY_POD_HOLD_SEC) {
+      this.assignedPortal = null;
+      this.setState('sweep');
     }
   }
 
@@ -786,6 +1117,8 @@ class SwatHunter implements HitTarget {
       this.assignedPortal?.id,
       'attack',
       this.blockedPortals,
+      this.entryPhase,
+      this.entryRouteId,
     );
     if (route.phase !== 'direct') {
       this.followEntry(route, dt, speed / this.combat.moveSpeed);
@@ -795,6 +1128,7 @@ class SwatHunter implements HitTarget {
       }
       if (this.entryPhase) {
         this.entryPhase = null;
+        this.entryRouteId = null;
         this.nav.reset();
       }
       const res = this.nav.step(goal, speed, dt, {
@@ -843,6 +1177,8 @@ class SwatHunter implements HitTarget {
       this.assignedPortal?.id,
       'attack',
       this.blockedPortals,
+      this.entryPhase,
+      this.entryRouteId,
     );
     if (route.phase !== 'direct') {
       // 屋外から足音へ直進せず、入口ドアを経由してから追う
@@ -858,6 +1194,7 @@ class SwatHunter implements HitTarget {
     }
     if (this.entryPhase) {
       this.entryPhase = null;
+      this.entryRouteId = null;
       this.nav.reset();
     }
     this.team.tryFlash(this, t);
@@ -866,6 +1203,7 @@ class SwatHunter implements HitTarget {
       canUseStairs: true,
       faceTravel: true,
       arriveDist: 1.4,
+      smooth: NAV_SMOOTH,
     });
     if (res === 'blocked') {
       this.noteBlocked();
@@ -908,6 +1246,7 @@ class SwatHunter implements HitTarget {
       canUseStairs: false,
       faceTravel: !this.acquiring,
       arriveDist: 1.4,
+      smooth: NAV_SMOOTH,
     });
     if (res === 'blocked') this.noteBlocked();
     if (res !== 'moving' || this.stateTime > 30) {
@@ -920,10 +1259,12 @@ class SwatHunter implements HitTarget {
 
   /** 屋外にいる間は入口の接近点→ドアの内側へ進み、施錠されていればそのドアをブリーチする。 */
   private followEntry(route: EntryRoute, dt: number, speedScale: number): void {
-    if (this.entryPhase !== route.phase) {
-      this.entryPhase = route.phase;
+    // 同じ入口での approach⇔cross 往復時は nav.reset() しない（§5-7）
+    if (this.entryRouteId !== route.entryId) {
+      this.entryRouteId = route.entryId;
       this.nav.reset();
     }
+    this.entryPhase = route.phase;
     const door = route.entryId ? this.team.doorById(route.entryId) : null;
     if (door?.locked) {
       const near =
@@ -936,6 +1277,7 @@ class SwatHunter implements HitTarget {
       canUseStairs: true,
       faceTravel: true,
       arriveDist: 0.55,
+      smooth: route.phase === 'approach' ? NAV_SMOOTH_PASS : NAV_SMOOTH,
     });
     if (res === 'blocked') {
       this.noteBlocked();
@@ -960,38 +1302,70 @@ class SwatHunter implements HitTarget {
     if (!this.team.hasAlternateEntry(from, entryId, this.blockedPortals)) return;
     this.blockedPortals.set(entryId, PORTAL_BLOCK_SEC);
     this.entryPhase = null;
+    this.entryRouteId = null;
     this.nav.reset();
   }
 
   private updateSweep(dt: number): void {
-    if (this.sweepUnclearedRoom(dt)) return;
     const leader = this.leader;
+    // §5-6: sweepUnclearedRoom はリーダー不在/ダウン時のみ適用し、フォロワーは隊形を維持する
     if (leader && leader.state !== 'engage' && leader.state !== 'rush' && leader.state !== 'staging') {
-      // ツーマン／スリーマンセル: リーダーの後方を追従する。3 人組の 2 名は左右後方に分かれ、背後を扇状に警戒する
+      // §5-5: リーダーの体ヨーではなく進行方向の低域通過を基準に後方・自サイドへ追従（ヒステリシス付き）
       const { slot, count } = this.followerSlot(leader);
-      const lyaw = leader.body.yawRad;
-      const lfx = -Math.sin(lyaw);
-      const lfz = -Math.cos(lyaw);
-      const side = count > 1 ? (slot === 0 ? -1 : 1) : 0;
-      const gx = leader.body.px - lfx * 1.1 + Math.cos(lyaw) * 0.6 * side;
-      const gz = leader.body.pz - lfz * 1.1 - Math.sin(lyaw) * 0.6 * side;
-      const goalClear = count > 1 && !blockedAtFiltered(this.ctx.colliders, gx, gz, 0.3, leader.body.footY);
-      const goal = goalClear
-        ? { x: gx, y: leader.body.footY, z: gz }
-        : { x: leader.body.px, y: leader.body.footY, z: leader.body.pz };
+      const lfx = leader.headX;
+      const lfz = leader.headZ;
+      const rx = -lfz;
+      const rz = lfx;
+      const side: -1 | 1 =
+        count > 1 ? (slot === 0 ? -1 : 1) : this.formSide !== 0 ? this.formSide : this.cellIndex % 2 === 0 ? -1 : 1;
+      const sideOff = count > 1 ? FOLLOW_SIDE_3 : FOLLOW_SIDE;
+      const gx = leader.body.px - lfx * FOLLOW_BACK + rx * sideOff * side;
+      const gz = leader.body.pz - lfz * FOLLOW_BACK + rz * sideOff * side;
+      let goal: Vec3;
+      if (!blockedAtFiltered(this.ctx.colliders, gx, gz, 0.3, leader.body.footY)) {
+        goal = { x: gx, y: leader.body.footY, z: gz };
+      } else {
+        const bx = leader.body.px - lfx * FOLLOW_BACK;
+        const bz = leader.body.pz - lfz * FOLLOW_BACK;
+        goal = !blockedAtFiltered(this.ctx.colliders, bx, bz, 0.3, leader.body.footY)
+          ? { x: bx, y: leader.body.footY, z: bz }
+          : { x: leader.body.px, y: leader.body.footY, z: leader.body.pz };
+      }
       const dist = Math.hypot(leader.body.px - this.body.px, leader.body.pz - this.body.pz);
       const sameFloor = Math.abs(leader.body.footY - this.body.footY) < 0.75;
-      const goalDist = Math.hypot(goal.x - this.body.px, goal.z - this.body.pz);
-      if (dist > 1.9 + slot * 0.6 || !sameFloor || (goalClear && goalDist > 0.9)) {
+      const startDist = FOLLOW_START + slot * FOLLOW_START_PER_SLOT;
+      const stopDist = FOLLOW_STOP + slot * FOLLOW_STOP_PER_SLOT;
+      if (!sameFloor || dist > startDist) this.following = true;
+      else if (sameFloor && dist < stopDist) this.following = false;
+
+      if (this.following) {
+        const mode = this.switchLookMode('travel', dt);
         const fres = this.nav.step(
           goal,
           this.combat.moveSpeed * Math.min(1, SWEEP_SPEED * (dist > 4 ? 1.35 : 1)),
           dt,
-          { canOpenDoors: true, canUseStairs: true, faceTravel: true, arriveDist: goalClear ? 0.6 : 1.7 },
+          {
+            canOpenDoors: true,
+            canUseStairs: true,
+            faceTravel: mode === 'travel',
+            arriveDist: 0.45,
+            restartDist: 0.35,
+            smooth: NAV_SMOOTH,
+          },
         );
-        if (fres === 'blocked') this.noteBlocked();
+        if (fres === 'arrived') this.following = false;
+        else if (fres === 'blocked') this.noteBlocked();
       } else {
-        this.scanAround(dt, leader.body.yawRad + Math.PI * (count > 1 ? (side < 0 ? 0.65 : 1.35) : 0.9));
+        const leaderYaw = Math.atan2(-lfx, -lfz);
+        const leaderMoving = leader.moveSpeedEst > HEADING_MIN_SPEED;
+        const mode = this.switchLookMode(leaderMoving ? 'watch' : 'scan', dt);
+        if (mode === 'watch') {
+          const watchYaw = leaderYaw + side * FOLLOW_WATCH_SIDE;
+          this.body.faceToward(this.body.px - Math.sin(watchYaw), this.body.pz - Math.cos(watchYaw), 3.0 * dt);
+        } else {
+          const baseYaw = leaderYaw + Math.PI * (count > 1 ? (side < 0 ? 0.65 : 1.35) : 0.9);
+          this.scanAround(dt, baseYaw);
+        }
       }
       return;
     }
@@ -1001,18 +1375,26 @@ class SwatHunter implements HitTarget {
       this.setState('hunt');
       return;
     }
+    if (!leader && this.sweepUnclearedRoom(dt)) return;
 
     // 未クリア（視界に入っていない）マスを塗りつぶすように、最寄りの未視認マスへ次々と向かう
-    if (!this.goalCell || this.goalCell.seen || this.goalCell.bad) {
+    // §5-4: 歩行中に seen になっても、選択後 GOAL_KEEP_SEC 未満または残距離 GOAL_KEEP_DIST 未満なら維持
+    const keepGoal =
+      this.goalCell &&
+      !this.goalCell.bad &&
+      (!this.goalCell.seen ||
+        this.goalTime < GOAL_KEEP_SEC ||
+        Math.hypot(this.goalCell.x - this.body.px, this.goalCell.z - this.body.pz) < GOAL_KEEP_DIST);
+    if (!keepGoal) {
       this.goalCell = this.team.pickCell(this);
       this.goalTime = 0;
       if (!this.goalCell) {
-        this.scanAround(dt, this.body.yawRad);
+        this.scanAround(dt, this.scanBaseYaw);
         return;
       }
     }
     this.goalTime += dt;
-    const cell = this.goalCell;
+    const cell = this.goalCell!;
     const goal = { x: cell.x, y: cell.y, z: cell.z };
     if (this.goalTime > GOAL_TIMEOUT_SEC) {
       this.team.markBad(cell);
@@ -1028,6 +1410,8 @@ class SwatHunter implements HitTarget {
       this.assignedPortal?.id,
       'hold',
       this.blockedPortals,
+      this.entryPhase,
+      this.entryRouteId,
     );
     if (route.phase !== 'direct') {
       this.followEntry(route, dt, SWEEP_SPEED);
@@ -1038,6 +1422,7 @@ class SwatHunter implements HitTarget {
     }
     if (this.entryPhase) {
       this.entryPhase = null;
+      this.entryRouteId = null;
       this.nav.reset();
     }
     const res = this.nav.step(goal, this.combat.moveSpeed * SWEEP_SPEED, dt, {
@@ -1045,6 +1430,7 @@ class SwatHunter implements HitTarget {
       canUseStairs: true,
       faceTravel: true,
       arriveDist: 0.9,
+      smooth: NAV_SMOOTH,
     });
     if (res === 'arrived') {
       this.team.markSeenAround(this.body.px, this.body.pz, this.body.footY, COVER_NEAR);
@@ -1063,14 +1449,21 @@ class SwatHunter implements HitTarget {
     const room = this.team.unclearedIndoorRoom(this);
     if (!room) return false;
     this.huntingFlank = false;
-    if (this.goalCell && (this.goalCell.room !== room.id || this.goalCell.seen || this.goalCell.bad)) {
+    const keepRoomGoal =
+      this.goalCell &&
+      this.goalCell.room === room.id &&
+      !this.goalCell.bad &&
+      (!this.goalCell.seen ||
+        this.goalTime < GOAL_KEEP_SEC ||
+        Math.hypot(this.goalCell.x - this.body.px, this.goalCell.z - this.body.pz) < GOAL_KEEP_DIST);
+    if (!keepRoomGoal) {
       this.goalCell = null;
     }
     if (!this.goalCell) {
       this.goalCell = this.team.nextClearCell(this);
       this.goalTime = 0;
       if (!this.goalCell) {
-        if (!this.acquiring) this.scanAround(dt, this.body.yawRad);
+        if (!this.acquiring) this.scanAround(dt, this.scanBaseYaw);
         return true;
       }
     }
@@ -1088,6 +1481,7 @@ class SwatHunter implements HitTarget {
       canUseStairs: false,
       faceTravel: !this.acquiring,
       arriveDist: 0.9,
+      smooth: NAV_SMOOTH,
     });
     if (res === 'arrived') {
       this.team.markSeenAround(this.body.px, this.body.pz, this.body.footY, COVER_NEAR);
@@ -1127,8 +1521,14 @@ class SwatHunter implements HitTarget {
   }
 
   private scanAround(dt: number, baseYaw: number): void {
-    this.scanPhase += dt * 2.2;
-    const yaw = baseYaw + Math.sin(this.scanPhase) * 1.5;
+    // §3.3: 静止 SCAN_IDLE_SEC(0.6s) 以上のときのみ ±0.9rad・0.9rad/s で走査する
+    if (this.stillTime < SCAN_IDLE_SEC) {
+      this.scanPhase = 0;
+      this.body.faceToward(this.body.px - Math.sin(baseYaw), this.body.pz - Math.cos(baseYaw), 2.5 * dt);
+      return;
+    }
+    this.scanPhase += dt * SCAN_RATE;
+    const yaw = baseYaw + Math.sin(this.scanPhase) * SCAN_AMP;
     this.body.faceToward(this.body.px - Math.sin(yaw), this.body.pz - Math.cos(yaw), 2.5 * dt);
   }
 
@@ -1192,6 +1592,7 @@ class SwatHunter implements HitTarget {
           canUseStairs: true,
           faceTravel: true,
           arriveDist: 0.7,
+          smooth: NAV_SMOOTH,
         });
     if (res === 'arrived') {
       this.breachWait += dt;
@@ -1203,8 +1604,10 @@ class SwatHunter implements HitTarget {
         return;
       }
       this.team.onBreach(this, door);
-      this.clearBreachState();
-      this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      if (this.state === 'breach') {
+        this.clearBreachState();
+        this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      }
     } else if (res === 'blocked' || this.stateTime > 20) {
       this.skipDoors.add(door.id);
       this.clearBreachState();
@@ -1233,6 +1636,7 @@ class SwatHunter implements HitTarget {
             canUseStairs: true,
             faceTravel: true,
             arriveDist: 0.7,
+            smooth: NAV_SMOOTH,
           });
       if (res === 'arrived') {
         this.c2Phase = 'plant';
@@ -1272,6 +1676,7 @@ class SwatHunter implements HitTarget {
         canUseStairs: false,
         faceTravel: false,
         arriveDist: 0.35,
+        smooth: NAV_SMOOTH,
       });
     }
     this.body.faceToward(door.centerX, door.centerZ);
@@ -1285,8 +1690,10 @@ class SwatHunter implements HitTarget {
     }
     if (this.c2Timer >= SWAT_C2_FUSE_SEC) {
       this.team.detonateC2(this, door, this.c2Side);
-      this.clearBreachState();
-      this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      if (this.state === 'breach') {
+        this.clearBreachState();
+        this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      }
     }
   }
 
@@ -1380,6 +1787,7 @@ export class SwatTeam {
   private entryStackElapsed = 0;
   private entryCountdown = 0;
   private readonly reportedStackCells = new Set<number>();
+  private readonly entryGroups: EntryGroup[] = [];
   /** 挟撃・ピンサー機動（F7）の状態 */
   private pinningCellIndex: number | null = null;
   private pincerTargetRoomId: string | null = null;
@@ -1698,6 +2106,10 @@ export class SwatTeam {
     return this.d.doors.doors.find((door) => door.id === id) ?? null;
   }
 
+  get clock(): number {
+    return this.routeClock;
+  }
+
   /**
    * 屋外なら到達できる入口ドア経由、屋内なら目標そのもの。
    * attack は担当ドアに縛られず、目標へ最も早く着く入口を選ぶ。
@@ -1710,14 +2122,21 @@ export class SwatTeam {
     preferPortalId?: string | null,
     mode: 'hold' | 'attack' = 'hold',
     blacklist?: { has(id: string): boolean },
+    prevPhase?: EntryRoute['phase'] | null,
+    prevEntryId?: string | null,
   ): EntryRoute {
     const from = { x, y, z };
     if (isIndoorPoint(this.d.rooms, x, z, y) || !isIndoorPoint(this.d.rooms, goal.x, goal.z, goal.y)) {
-      return entryRouteDest(this.d.rooms, this.portals(), from, goal, preferPortalId);
+      return entryRouteDest(this.d.rooms, this.portals(), from, goal, preferPortalId, { prevPhase, prevEntryId });
     }
     let reachable = this.reachablePortalLengths(from);
     if (blacklist) reachable = reachable.filter((r) => !blacklist.has(r.id));
-    return entryRouteDest(this.d.rooms, this.portals(), from, goal, preferPortalId, { reachable, mode });
+    return entryRouteDest(this.d.rooms, this.portals(), from, goal, preferPortalId, {
+      reachable,
+      mode,
+      prevPhase,
+      prevEntryId,
+    });
   }
 
   /** ブラックリストを除いて、今の入口以外に歩ける外壁入口があるか */
@@ -1835,25 +2254,54 @@ export class SwatTeam {
       for (const m of members) bucket.members.push(m);
     });
 
+    this.entryGroups.length = 0;
     for (const { portal, members } of byPortal.values()) {
       const door = this.doorById(portal.id);
       const standable = (x: number, z: number): boolean => !blockedAtFiltered(this.d.colliders, x, z, 0.3, portal.sillY);
-      const slots = door
-        ? layoutStackSlots(
-            buildStackSlotPortal(portal, door),
-            members.length,
-            STACK_OFFSET,
-            STACK_PERSONAL_SPACE,
-            standable,
-          )
+      const sp = door ? buildStackSlotPortal(portal, door) : null;
+      const cqb = sp ? cqbPortalFromStackSlotPortal(sp, portal.sillY) : null;
+      const slots = sp
+        ? layoutStackSlots(sp, members.length, STACK_OFFSET, STACK_PERSONAL_SPACE, standable)
         : [];
+      const ranks = cqb && slots.length > 0 ? computeEntryOrder(cqb, slots) : [];
+      const assignment = assignSwatStackSlots(
+        members.map((m) => ({ x: m.body.px, z: m.body.pz })),
+        members.map((m) => m.cellIndex),
+        slots,
+        cqb,
+      );
+      const room = this.indoorRoomAt(portal.inside.x, portal.inside.z, portal.sillY);
+      const group: EntryGroup = {
+        portal,
+        cqb,
+        room,
+        slots,
+        members: [...members],
+        ranks,
+        plans: null,
+        phase: 'stacking',
+        breacher: null,
+        clock: 0,
+      };
       members.forEach((h, idx) => {
-        const slot = slots[idx];
+        const slotIdx = assignment[idx] ?? -1;
+        const slot = slotIdx >= 0 ? slots[slotIdx] : undefined;
+        const rankInfo = slotIdx >= 0 ? ranks[slotIdx] : undefined;
         h.assignedPortal = portal;
         h.stackSlot = slot ? { x: slot.x, y: portal.sillY, z: slot.z } : { ...portal.outside };
         h.stackReady = false;
+        h.entryGroup = group;
+        h.slotIndex = slotIdx;
+        h.entryOrder = rankInfo ? rankInfo.order : members.length + idx;
+        h.entryPlan = null;
+        h.entryWp = 0;
+        h.entryHold = 0;
+        h.entryStartAt = null;
+        h.entryCrossed = false;
+        h.formSide = rankInfo ? rankInfo.side : h.cellIndex % 2 === 0 ? -1 : 1;
         h.setState('stack');
       });
+      this.entryGroups.push(group);
     }
 
     this.entryPhase = 'stacking';
@@ -1924,17 +2372,137 @@ export class SwatTeam {
     if (this.entryCountdown <= 0) this.releaseStackedEntry();
   }
 
-  /** カウントダウン完了: 全セルを一斉に突入（施錠ドアはブリーチ開始）させる */
+  /** カウントダウン完了: 施錠ドアはブリーチ開始、未施錠ドアは同バケット全員を 'entry' へ移行する（§5-2） */
   private releaseStackedEntry(): void {
     this.entryPhase = 'entered';
-    for (const h of this.hunters) {
-      if (!h.alive || h.state !== 'stack') continue;
-      const portal = h.assignedPortal;
-      if (!h.leader && portal) {
-        const door = this.doorById(portal.id);
-        if (door?.locked && !this.isDoorBeingBreached(door.id, h) && h.tryBeginBreach(portal.inside, door.id)) continue;
+    const handled = new Set<SwatHunter>();
+    for (const group of this.entryGroups) {
+      const stacked = group.members.filter((h) => h.alive && h.state === 'stack');
+      for (const h of stacked) handled.add(h);
+      if (stacked.length === 0) {
+        group.phase = 'done';
+        continue;
       }
-      h.setState('sweep');
+      const door = this.doorById(group.portal.id);
+      if (door?.locked) {
+        const order = stacked
+          .slice()
+          .sort((a, b) => (a.leader ? 1 : 0) - (b.leader ? 1 : 0) || a.entryOrder - b.entryOrder);
+        let breacher: SwatHunter | null = null;
+        for (const cand of order) {
+          if (!this.isDoorBeingBreached(door.id, cand) && cand.tryBeginBreach(group.portal.inside, door.id)) {
+            breacher = cand;
+            break;
+          }
+        }
+        if (breacher) {
+          group.phase = 'breach';
+          group.breacher = breacher;
+          group.clock = 0;
+          for (const h of stacked) {
+            if (h !== breacher) h.setState('entry');
+          }
+          continue;
+        }
+      }
+      for (const h of stacked) h.setState('entry');
+      this.beginGroupEntry(group, null);
+    }
+    // グループ外の残存スタック隊員がいれば従来どおり sweep へ
+    for (const h of this.hunters) {
+      if (h.alive && h.state === 'stack' && !handled.has(h)) h.setState('sweep');
+    }
+  }
+
+  /** バケット全員の CQB 突入を開始する。breacher が指定された場合は order 0 に繰り上げる（§5-2）。 */
+  private beginGroupEntry(group: EntryGroup, breacher: SwatHunter | null): void {
+    group.phase = 'entering';
+    group.clock = 0;
+    group.plans = null;
+    if (breacher && breacher.alive) {
+      const oldOrder = breacher.entryOrder;
+      for (const m of group.members) {
+        if (m === breacher) m.entryOrder = 0;
+        else if (m.entryOrder < oldOrder) m.entryOrder += 1;
+      }
+      breacher.setState('entry');
+    }
+    for (const m of group.members) {
+      if (!m.alive) continue;
+      if (m.state === 'stack') m.setState('entry');
+      if (m.state === 'entry') {
+        m.entryPlan = null;
+        m.entryWp = 0;
+        m.entryHold = 0;
+        m.entryStartAt = null;
+        m.entryCrossed = false;
+        m.resetHeading();
+      }
+    }
+    const door = this.doorById(group.portal.id);
+    if (door && !door.locked && door.angle < 55 && !door.isMoving) {
+      door.command(door.maxAngle, true, group.portal.outside.x, group.portal.outside.z);
+    }
+  }
+
+  /** 各突入グループの扉開放待ち・突入計画生成・ブリーチ後続監視 */
+  private updateEntryGroups(dt: number): void {
+    for (const group of this.entryGroups) {
+      if (group.phase === 'done' || group.phase === 'stacking') continue;
+      group.clock += dt;
+      if (group.phase === 'breach') {
+        const b = group.breacher;
+        if (!b || !b.alive || b.state !== 'breach') {
+          const door = this.doorById(group.portal.id);
+          if (!door || !door.locked) {
+            this.beginGroupEntry(group, null);
+          } else {
+            const waiting = group.members
+              .filter((h) => h.alive && h.state === 'entry')
+              .sort((a, b2) => a.entryOrder - b2.entryOrder);
+            let nextBreacher: SwatHunter | null = null;
+            for (const cand of waiting) {
+              if (!this.isDoorBeingBreached(door.id, cand) && cand.tryBeginBreach(group.portal.inside, door.id)) {
+                nextBreacher = cand;
+                break;
+              }
+            }
+            if (nextBreacher) {
+              group.breacher = nextBreacher;
+            } else {
+              group.phase = 'done';
+              for (const h of waiting) h.setState('sweep');
+            }
+          }
+        }
+        continue;
+      }
+      // phase === 'entering'
+      const entering = group.members.filter((h) => h.alive && h.state === 'entry');
+      if (entering.length === 0) {
+        group.phase = 'done';
+        continue;
+      }
+      const door = this.doorById(group.portal.id);
+      if (door && !door.locked && door.angle < 55) {
+        if (!door.isMoving) door.command(door.maxAngle, true, group.portal.outside.x, group.portal.outside.z);
+        if (group.clock < ENTRY_DOOR_OPEN_WAIT) continue;
+      }
+      if (!group.plans) {
+        if (group.cqb && group.room && group.slots.length > 0) {
+          const passable = door && !door.locked ? new Set<Collider>(door.colliders) : undefined;
+          group.plans = planEntry(group.cqb, cqbRoomFromRoomDef(group.room), group.slots, {
+            isStandable: (p) => !blockedAtFiltered(this.d.colliders, p.x, p.z, 0.3, p.y, passable),
+            reachable: (a, b) => pathSegmentClear(this.d.colliders, a, b, 0.25, group.portal.sillY, passable),
+          });
+          for (const m of group.members) {
+            m.entryPlan = m.slotIndex >= 0 ? (group.plans[m.slotIndex] ?? null) : null;
+          }
+        } else {
+          group.phase = 'done';
+          for (const h of entering) h.setState('sweep');
+        }
+      }
     }
   }
 
@@ -1942,6 +2510,7 @@ export class SwatTeam {
   abortStacking(): void {
     if (this.entryPhase !== 'stacking' && this.entryPhase !== 'countdown') return;
     this.entryPhase = 'entered';
+    for (const g of this.entryGroups) g.phase = 'done';
     for (const h of this.hunters) {
       if (h.alive && h.state === 'stack') h.setState('sweep');
     }
@@ -1973,6 +2542,7 @@ export class SwatTeam {
     if (this.started) {
       this.updatePressure(dt);
       this.updateEntryCoordination(dt);
+      this.updateEntryGroups(dt);
       this.updateAntiCamping(dt);
     }
     for (const h of this.hunters) h.update(dt);
@@ -2112,12 +2682,14 @@ export class SwatTeam {
   }
 
   /**
-   * 隊員同士の重なりを解消する（交戦時に同じ遮蔽・ピーク位置を選んで 1 点に重なるのを防ぐ）。
-   * 押し出し先が壁・家具に掛かる場合は動かさない。
+   * 隊員同士の重なりを解消する（§3.4 / §5-8）。
+   * 固定位置フェーズ（スタック到着済み・突入中）は重なり < 0.42m のときだけ下位順位側のみを押す。
+   * それ以外は従来の 0.5 倍の強さ。押し出しは歩行アニメを出さない（countTravel=false）。
    */
   private separate(dt: number): void {
     const hs = this.hunters;
     const maxPush = SEPARATION_SPEED * dt;
+    const isFixed = (h: SwatHunter): boolean => (h.state === 'stack' && h.stackReady) || h.state === 'entry';
     for (let i = 0; i < hs.length; i++) {
       const a = hs[i]!;
       if (!a.alive || a.state === 'staging') continue;
@@ -2128,6 +2700,27 @@ export class SwatTeam {
         let dx = b.body.px - a.body.px;
         let dz = b.body.pz - a.body.pz;
         let d = Math.hypot(dx, dz);
+        const fa = isFixed(a);
+        const fb = isFixed(b);
+        if (fa || fb) {
+          if (d >= SEPARATION_FIXED_DIST) continue;
+          if (d < 1e-4) {
+            dx = Math.cos(i * 2.4);
+            dz = Math.sin(i * 2.4);
+            d = 1;
+          }
+          const push = Math.min(maxPush, SEPARATION_FIXED_DIST - Math.min(d, SEPARATION_FIXED_DIST));
+          const ux = dx / d;
+          const uz = dz / d;
+          let aHigher = true;
+          if (fa && !fb) aHigher = true;
+          else if (!fa && fb) aHigher = false;
+          else if (a.entryGroup && a.entryGroup === b.entryGroup) aHigher = a.entryOrder <= b.entryOrder;
+          else aHigher = a.cellIndex <= b.cellIndex;
+          if (aHigher) this.nudge(b, ux * push, uz * push);
+          else this.nudge(a, -ux * push, -uz * push);
+          continue;
+        }
         if (d >= SEPARATION_DIST) continue;
         if (d < 1e-4) {
           // 完全一致: 序列で決まる方向へ分ける
@@ -2135,7 +2728,7 @@ export class SwatTeam {
           dz = Math.sin(i * 2.4);
           d = 1;
         }
-        const push = Math.min(maxPush, (SEPARATION_DIST - Math.min(d, SEPARATION_DIST)) / 2);
+        const push = Math.min(maxPush * SEPARATION_LOOSE_MUL, ((SEPARATION_DIST - Math.min(d, SEPARATION_DIST)) / 2) * SEPARATION_LOOSE_MUL);
         const ux = dx / d;
         const uz = dz / d;
         this.nudge(a, -ux * push, -uz * push);
@@ -2148,7 +2741,7 @@ export class SwatTeam {
     const x = h.body.px + dx;
     const z = h.body.pz + dz;
     if (blockedAtFiltered(this.d.colliders, x, z, 0.3, h.body.footY)) return;
-    h.body.setPosition(x, z, h.body.footY);
+    h.body.setPosition(x, z, h.body.footY, false);
   }
 
   getMinimapStates(): { name: string; x: number; z: number; y: number; yawRad: number; down: boolean }[] {
@@ -2395,6 +2988,7 @@ export class SwatTeam {
         h.state === 'rush' ||
         h.state === 'breach' ||
         h.state === 'stack' ||
+        h.state === 'entry' ||
         h.state === 'disarm'
       ) continue;
       if (h.huntingFlank) continue;
@@ -2444,6 +3038,8 @@ export class SwatTeam {
       z: door.centerZ - door.normalZ * side * 2.6,
     };
     if (this.flashesLeft > 0 && this.flashCd <= 4) this.throwFlash(by, target, 1.4);
+    const grp = this.entryGroups.find((g) => g.portal.id === door.id && g.phase === 'breach');
+    if (grp) this.beginGroupEntry(grp, by);
   }
 
   // ---------- C2 爆破ブリーチ（F8） ----------
@@ -2532,6 +3128,8 @@ export class SwatTeam {
       };
       this.throwFlash(by, target, 1.4);
     }
+    const grp = this.entryGroups.find((g) => g.portal.id === door.id && g.phase === 'breach');
+    if (grp) this.beginGroupEntry(grp, by);
   }
 
   /** 追跡中、潜伏推定位置が近く直接視認できていなければ閃光弾を投げ込む（ドア枠・窓・壁バウンド含む）。 */
@@ -2658,6 +3256,7 @@ export class SwatTeam {
         h.state === 'disarm' ||
         h.state === 'staging' ||
         h.state === 'stack' ||
+        h.state === 'entry' ||
         h.state === 'rush'
       ) continue;
       if (h.leader && h.leader.alive) continue; // 組員はリーダーに追従する
@@ -2700,7 +3299,8 @@ export class SwatTeam {
           const x = r.x - r.width / 2 + 0.4 + ((i + 0.5) * (r.width - 0.8)) / nx;
           const z = r.z - r.depth / 2 + 0.4 + ((j + 0.5) * (r.depth - 0.8)) / nz;
           if (blockedAtFiltered(this.d.colliders, x, z, 0.3, fy)) continue;
-          out.push({ x, y: fy, z, room: r.id, seen: false, bad: false });
+          const zone = this.indoorRoomAt(x, z, fy)?.id ?? r.id;
+          out.push({ x, y: fy, z, room: r.id, seen: false, bad: false, zone });
         }
       }
     }
@@ -2708,8 +3308,28 @@ export class SwatTeam {
     return out;
   }
 
-  /** 隊員の視界（視野角・距離・遮蔽）に入ったマスを確認済みにする */
+  /**
+   * 隊員の視界（視野角・距離・遮蔽）に入ったマスを確認済みにする。
+   * §5-3: 観測者が対象セルと同じ屋内部屋にいる（または敷居 0.6m 以内、スタック待機外）場合のみ seen にする。
+   */
   private scanCoverage(h: SwatHunter): void {
+    const here = this.indoorRoomAt(h.body.px, h.body.pz, h.body.footY);
+    let nearSillRoom: string | null = null;
+    if (!here && h.state !== 'stack') {
+      for (const p of this.portals()) {
+        if (Math.abs(p.sillY - h.body.footY) > 0.75) continue;
+        const door = this.doorById(p.id);
+        const cx = door ? door.centerX : (p.outside.x + p.inside.x) / 2;
+        const cz = door ? door.centerZ : (p.outside.z + p.inside.z) / 2;
+        if (Math.hypot(h.body.px - cx, h.body.pz - cz) <= 0.6) {
+          nearSillRoom = this.indoorRoomAt(p.inside.x, p.inside.z, p.sillY)?.id ?? null;
+          break;
+        }
+      }
+    }
+    const allowedRoom = here?.id ?? nearSillRoom;
+    if (!allowedRoom) return;
+
     const cells = this.coverCells();
     const eye = { x: h.body.px, y: h.body.footY + 1.5, z: h.body.pz };
     const fx = -Math.sin(h.body.yawRad);
@@ -2718,11 +3338,40 @@ export class SwatTeam {
     const touched = new Set<string>();
     for (const c of cells) {
       if (c.seen || Math.abs(c.y - h.body.footY) > 0.9) continue;
+      if (c.room !== allowedRoom && (c.zone ?? c.room) !== allowedRoom) continue;
       const dx = c.x - eye.x;
       const dz = c.z - eye.z;
       const d = Math.hypot(dx, dz);
       if (d > COVER_RANGE) continue;
       if (d > COVER_NEAR && (dx * fx + dz * fz) / d < cosHalf) continue;
+      if (d > 0.6 && !hasLineOfSight(this.d.colliders, eye, { x: c.x, y: c.y + 1.0, z: c.z })) continue;
+      c.seen = true;
+      touched.add(c.room);
+    }
+    for (const id of touched) this.checkRoomClear(id, h);
+  }
+
+  /** PoD 保持中に look 方向の ±50° 扇・8m 内の同室セルを seen にマークする（§5-2） */
+  markEntryLookSector(h: SwatHunter, look: Vec3): void {
+    const here = this.indoorRoomAt(h.body.px, h.body.pz, h.body.footY);
+    if (!here) return;
+    const eye = { x: h.body.px, y: h.body.footY + 1.5, z: h.body.pz };
+    const lx = look.x - eye.x;
+    const lz = look.z - eye.z;
+    const ll = Math.hypot(lx, lz);
+    if (ll < 1e-4) return;
+    const fx = lx / ll;
+    const fz = lz / ll;
+    const cosHalf = Math.cos(ENTRY_LOOK_HALF_DEG * DEG2RAD);
+    const touched = new Set<string>();
+    for (const c of this.coverCells()) {
+      if (c.seen || Math.abs(c.y - h.body.footY) > 0.9) continue;
+      if (c.room !== here.id && (c.zone ?? c.room) !== here.id) continue;
+      const dx = c.x - eye.x;
+      const dz = c.z - eye.z;
+      const d = Math.hypot(dx, dz);
+      if (d > ENTRY_LOOK_RANGE) continue;
+      if (d > 0.6 && (dx * fx + dz * fz) / d < cosHalf) continue;
       if (d > 0.6 && !hasLineOfSight(this.d.colliders, eye, { x: c.x, y: c.y + 1.0, z: c.z })) continue;
       c.seen = true;
       touched.add(c.room);
@@ -2768,7 +3417,17 @@ export class SwatTeam {
       const guess = { x: p.x + Math.cos(a) * rr, y: p.y, z: p.z + Math.sin(a) * rr };
       this.radio(h, '全区画クリア、容疑者なし。ドローンが熱源を探知、その付近を再捜索する。', 'No suspect. Drone has a heat signature, moving.', true);
       for (const x of this.hunters) {
-        if (!x.alive || x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || (x.leader && x.leader.alive)) continue;
+        if (
+          !x.alive ||
+          x.state === 'engage' ||
+          x.state === 'rush' ||
+          x.state === 'breach' ||
+          x.state === 'entry' ||
+          x.state === 'stack' ||
+          x.state === 'disarm' ||
+          x.state === 'staging' ||
+          (x.leader && x.leader.alive)
+        ) continue;
         x.huntTarget = { ...guess };
         if (x !== h) x.setState('hunt');
       }
@@ -3174,6 +3833,7 @@ export class SwatTeam {
     this.c2BlastLight.intensity = 0;
     this.radioQueue.length = 0;
     this.radioSpeakGap = 0;
+    this.entryGroups.length = 0;
     for (const h of this.hunters) {
       this.d.weapons.removeTarget(h);
       h.dispose();

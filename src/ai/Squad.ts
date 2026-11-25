@@ -51,7 +51,18 @@ import {
   type CombatThreat,
   type XZ,
 } from './EngageBehavior';
-import { layoutStackSlots } from './stackSlots';
+import { layoutStackSlots, type StackSlot } from './stackSlots';
+import {
+  assignStackSlots,
+  computeEntryOrder,
+  cqbPortalFromStackSlotPortal,
+  cqbRoomFromRoomDef,
+  entryHalfWidth,
+  entryRoomDepth,
+  fromPortalFrame,
+  planEntry,
+  type EntryPlan,
+} from './cqbEntry';
 import { shieldBlocks } from './ShieldGuard';
 import { HumanoidBody } from './HumanoidBody';
 import { segmentHitsAABB } from './HostageShield';
@@ -151,6 +162,46 @@ const COVERAGE_PERIOD = 0.25;
 const STAIR_PICK_INTERVAL = 1.0;
 /** タイムアウトしたドアを一時的に通行不能扱いする時間（s） */
 const SKIPPED_DOOR_TTL = 4.0;
+
+// ---- 動きの平滑化・CQB 突入（docs/design/swat-cqb-motion-overhaul.md §3/§4） ----
+/** 加速度 (m/s²) */
+const MOVE_ACCEL = 9;
+/** 減速度 (m/s²) */
+const MOVE_DECEL = 12;
+/** 最終目標の手前でこの距離から減速する (m) */
+const ARRIVE_SLOW_DIST = 0.6;
+/** arrive ヒステリシス: 停止は d<r、再始動は d>r+これ */
+const ARRIVE_HYST = 0.35;
+/** 追従の再始動/停止距離 */
+const FOLLOW_START_DIST = 0.9;
+const FOLLOW_STOP_DIST = 0.4;
+/** プレイヤー移動方向の低域通過時定数 / 更新する最低速度 */
+const FOLLOW_HEADING_TAU = 0.8;
+const FOLLOW_HEADING_MIN_SPEED = 0.6;
+/** 隊形目標点の低域通過時定数 */
+const FOLLOW_GOAL_TAU = 0.3;
+/** 視線ターゲット切替の最短保持 (s) */
+const LOOK_MIN_HOLD = 0.4;
+/** スタック到着半径（layoutStackSlots の arrive と一致） */
+const STACK_ARRIVE = 0.34;
+/** スタック中に「進めていない」とみなす停滞秒 */
+const STACK_STALL_WAIT = 0.8;
+/** 突入順ゲートのフェイルセーフ (s) */
+const ENTRY_GATE_FAILSAFE = 2.5;
+/** 突入経路の中間点 arrive / 最終点 arrive */
+const ENTRY_WP_ARRIVE = 0.3;
+const ENTRY_POD_ARRIVE = 0.28;
+/** 突入タイムアウト / スタール */
+const ENTRY_TIMEOUT_SEC = 6.0;
+const ENTRY_STALL_SEC = 2.4;
+/** 固定位置フェーズで押し合う重なり距離 */
+const FIXED_OVERLAP = 0.42;
+/** PoD への戻り歩行を諦めるまでの累計秒 */
+const POD_RETURN_GIVEUP = 4.0;
+/** プレイヤー射線からの退避保持秒 */
+const DODGE_HOLD_SEC = 0.6;
+/** secured の視線付け替えにかける秒 */
+const SECURED_TURN_SEC = 0.6;
 
 export interface Cell extends XZ {
   y: number;
@@ -274,7 +325,42 @@ interface AllyUnit extends HitTarget {
   activeStair: { id: string; up: boolean } | null;
   /** 階段選択のキャッシュ（経路探索を毎フレーム回さない） */
   stairPick: { up: boolean; floorY: number; id: string; timer: number } | null;
+  vel: XZ;
+  navThisFrame: boolean;
+  settled: boolean;
+  entryPlan: EntryPlan | null;
+  entryOrder: number;
+  slotIndex: number;
+  entryWp: number;
+  entryStartT: number;
+  entryCrossT: number;
+  entryGateWait: number;
+  entryThreatLook: Vec3 | null;
+  lookKey: string;
+  lookKeyT: number;
+  followGoal: XZ | null;
+  idleLook: Vec3 | null;
+  dodge: { pos: XZ; left: number } | null;
+  securedLookSet: boolean;
+  securedTurnRate: number;
+  podReturnT: number;
   label: AIDebugLabel;
+}
+
+/** 同一ポータルにスタックするグループ（スタック待ち・突入順の共有状態） */
+interface PortalGroup {
+  order: SquadOrder;
+  portal: EntryPortal;
+  room: RoomDef | null;
+  /** スタック枠（slot index 順） */
+  slots: StackSlot[];
+  /** グループ全員が「待ち」（到着済み or 停滞）の累計秒 */
+  waitT: number;
+  /** スタック開始からの経過秒（ハードキャップ用） */
+  elapsed: number;
+  allSettled: boolean;
+  /** 突入開始時に扉の開放状態で経路を一度だけ引き直したか */
+  replanned: boolean;
 }
 
 interface ThrownFlash {
@@ -358,6 +444,10 @@ export class SquadSystem {
   private radioSpeakGap = 0;
   private readonly muzzleOriginTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly muzzleDirTmp: Vec3 = { x: 0, y: 0, z: -1 };
+  private simTime = 0;
+  private followHeading: XZ = { x: 0, z: -1 };
+  private lastPlayerPos: XZ = { x: 0, z: 0 };
+  private readonly portalGroups = new Map<string, PortalGroup>();
   private disposed = false;
 
   constructor(
@@ -394,6 +484,9 @@ export class SquadSystem {
     }
 
     this.root.name = 'squad';
+    const yaw0 = Number.isFinite(player.yawRad) ? player.yawRad : 0;
+    this.followHeading = { x: -Math.sin(yaw0), z: -Math.cos(yaw0) };
+    this.lastPlayerPos = { x: player.position.x, z: player.position.z };
     this.menu = new CommandMenu(cfg, player, doors, colliders, entities, rooms);
     this.root.add(this.menu.root);
 
@@ -519,6 +612,25 @@ export class SquadSystem {
         stackWaitTimer: 0,
         activeStair: null,
         stairPick: null,
+        vel: { x: 0, z: 0 },
+        navThisFrame: false,
+        settled: false,
+        entryPlan: null,
+        entryOrder: index,
+        slotIndex: -1,
+        entryWp: 0,
+        entryStartT: -1,
+        entryCrossT: -1,
+        entryGateWait: 0,
+        entryThreatLook: null,
+        lookKey: '',
+        lookKeyT: 0,
+        followGoal: null,
+        idleLook: null,
+        dodge: null,
+        securedLookSet: false,
+        securedTurnRate: Math.PI * 1.4,
+        podReturnT: 0,
         label,
         getAABB: () => body.getAABB(),
         shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
@@ -687,6 +799,9 @@ export class SquadSystem {
     this.updateThrownFlashes(dt);
     this.updateC2Blasts(dt);
     this.updateMarkers();
+    this.simTime += dt;
+    this.updateFollowHeading(dt);
+    this.updatePortalGroups(dt);
 
     this.ackLeft = Math.max(0, this.ackLeft - dt);
     this.flashCd = Math.max(0, this.flashCd - dt);
@@ -722,6 +837,7 @@ export class SquadSystem {
 
     for (const ally of this.allies) {
       ally.body.tick(dt);
+      ally.navThisFrame = false;
       ally.fireCd = Math.max(0, ally.fireCd - dt);
       ally.warnCd = Math.max(0, ally.warnCd - dt);
       ally.doorWait = Math.max(0, ally.doorWait - dt);
@@ -737,6 +853,8 @@ export class SquadSystem {
           if (ally.flinchLeft <= 0) ally.body.setFlash(false);
         }
         if (ally.blindLeft > 0) {
+          ally.vel.x = 0;
+          ally.vel.z = 0;
           ally.blindLeft = Math.max(0, ally.blindLeft - dt);
           ally.body.setPose('crouch');
           ally.body.setShake(Math.sin(ally.blindLeft * 26) * 0.12);
@@ -752,11 +870,25 @@ export class SquadSystem {
           this.tryEngage(ally, dt);
           if (!ally.engaging) this.tryWarn(ally);
           this.updateAllyTactics(ally, dt);
+          if (!ally.navThisFrame) {
+            const spd = Math.hypot(ally.vel.x, ally.vel.z);
+            if (spd > 1e-4) {
+              const next = Math.max(0, spd - MOVE_DECEL * dt);
+              const k = next / spd;
+              ally.vel.x *= k;
+              ally.vel.z *= k;
+            } else {
+              ally.vel.x = 0;
+              ally.vel.z = 0;
+            }
+          }
           this.applySeparation(ally, dt);
           this.updateAllyOptics(ally);
           this.updateAllyFootstep(ally);
         }
       } else {
+        ally.vel.x = 0;
+        ally.vel.z = 0;
         ally.optics.hide();
       }
       const c = ally.body.chestPos();
@@ -914,49 +1046,117 @@ export class SquadSystem {
     room: RoomDef | null,
     order: SquadOrder,
   ): AllyUnit {
-    const slots = this.computeStackSlots(portal, group.length);
+    const n = group.length;
     if (room) this.announcedRooms.delete(`${room.id}:${portal.id}`);
     this.announcedStacks.delete(portal.id);
+    const cqbPortal = cqbPortalFromStackSlotPortal(portal, portal.sillY);
+    const PRE_ENTRY: readonly TacticalPhase[] = ['stacking', 'door_prep', 'c2_plant', 'c2_standoff', 'flash_wait', 'gas_wait'];
+    const prevGroup = this.portalGroups.get(portal.id);
 
+    // 同ポータルで既にスタック中の役割があれば常に保持（order==='stack' の再発行や直接 clear でも）
     const keepRoles =
-      order !== 'stack' &&
-      group.every((u) => u.order === 'stack' && u.entryPortal?.id === portal.id && u.groupSize === group.length);
-    const sorted = [...group].sort((a, b) =>
-      keepRoles
-        ? a.roleIndex - b.roleIndex
-        : Math.hypot(a.body.px - portal.centerX, a.body.pz - portal.centerZ) - Math.hypot(b.body.px - portal.centerX, b.body.pz - portal.centerZ),
-    );
-    const pods = room ? this.computeDominationPoints(portal, room, sorted.length) : [];
+      !!prevGroup &&
+      prevGroup.slots.length === n &&
+      group.every(
+        (u) =>
+          u.entryPortal?.id === portal.id &&
+          u.groupSize === n &&
+          u.stackPos !== null &&
+          u.slotIndex >= 0 &&
+          PRE_ENTRY.includes(u.phase),
+      ) &&
+      new Set(group.map((u) => u.slotIndex)).size === n;
+
+    let slots: StackSlot[];
+    const slotOf = new Map<AllyUnit, number>();
+    const saved = new Map<AllyUnit, Pick<AllyUnit, 'stackPos' | 'entryPlan' | 'entryOrder' | 'podPos' | 'podLook' | 'entryThreatLook'>>();
+    if (keepRoles) {
+      slots = prevGroup!.slots;
+      for (const u of group) {
+        slotOf.set(u, u.slotIndex);
+        saved.set(u, {
+          stackPos: u.stackPos,
+          entryPlan: u.entryPlan,
+          entryOrder: u.entryOrder,
+          podPos: u.podPos,
+          podLook: u.podLook,
+          entryThreatLook: u.entryThreatLook,
+        });
+      }
+    } else {
+      slots = this.computeStackSlots(portal, n);
+      // 総移動距離最小・ドア開口横切り/経路交差ペナルティで枠を割当（距離ソートの貪欲割当は交差を生む）
+      const assign = assignStackSlots(
+        group.map((u) => ({ x: u.body.px, z: u.body.pz })),
+        slots,
+        cqbPortal,
+      );
+      group.forEach((u, i) => slotOf.set(u, assign[i] ?? -1));
+    }
+
+    const ranks = computeEntryOrder(cqbPortal, slots);
+    const plans = keepRoles ? null : room ? this.planPortalEntry(portal, room, slots) : null;
+    // 突入順 = スタック順（L0, R0, L1, R1 …）。枠を取れなかった隊員は最後尾
+    let extra = slots.length;
+    const orderOf = new Map<AllyUnit, number>();
+    for (const u of group) {
+      const si = slotOf.get(u) ?? -1;
+      orderOf.set(u, si >= 0 ? (ranks[si]?.order ?? extra++) : extra++);
+    }
+    const sorted = [...group].sort((a, b) => orderOf.get(a)! - orderOf.get(b)!);
+
+    this.portalGroups.set(portal.id, {
+      order,
+      portal,
+      room,
+      slots,
+      waitT: 0,
+      elapsed: 0,
+      allSettled: false,
+      replanned: false,
+    });
 
     sorted.forEach((ally, roleIdx) => {
       this.resetUnitForOrder(ally, order);
+      const si = slotOf.get(ally) ?? -1;
       ally.roleIndex = roleIdx;
+      ally.entryOrder = roleIdx;
+      ally.slotIndex = si;
       ally.groupSize = sorted.length;
       ally.entryPortal = portal;
       ally.door = portal.door;
       ally.targetRoom = room;
-      ally.stackPos = slots[roleIdx] ?? {
-        x: portal.centerX - portal.intoX * (1.15 + roleIdx * 0.9),
-        z: portal.centerZ - portal.intoZ * (1.15 + roleIdx * 0.9),
-      };
-      ally.podPos = pods[roleIdx]?.pos ?? null;
-      ally.podLook = pods[roleIdx]?.look ?? null;
-      ally.entryDelay = roleIdx * this.cfg.staggerSec;
+      const keep = saved.get(ally);
+      if (keep) {
+        ally.stackPos = keep.stackPos;
+        ally.entryPlan = keep.entryPlan;
+        ally.podPos = keep.podPos;
+        ally.podLook = keep.podLook;
+        ally.entryThreatLook = keep.entryThreatLook;
+      } else {
+        const slot = si >= 0 ? slots[si] : undefined;
+        ally.stackPos = slot
+          ? { x: slot.x, z: slot.z }
+          : {
+              x: portal.centerX - portal.intoX * (1.15 + roleIdx * 0.9),
+              z: portal.centerZ - portal.intoZ * (1.15 + roleIdx * 0.9),
+            };
+        this.applyEntryPlan(ally, portal, room, si >= 0 && plans ? (plans[si] ?? null) : null);
+      }
+      ally.entryDelay = 0;
 
       const alreadyNearDoor =
+        ally.stackPos !== null &&
         Math.abs(ally.body.footY - portal.sillY) < 0.65 &&
         Math.hypot(ally.body.px - ally.stackPos.x, ally.body.pz - ally.stackPos.z) <= 1.25;
 
       if (
         order !== 'stack' &&
         alreadyNearDoor &&
-        sorted.every(
-          (u) =>
-            Math.hypot(
-              u.body.px - (slots[sorted.indexOf(u)]?.x ?? portal.centerX),
-              u.body.pz - (slots[sorted.indexOf(u)]?.z ?? portal.centerZ),
-            ) <= 1.25,
-        )
+        sorted.every((u) => {
+          const s = slots[slotOf.get(u) ?? -1];
+          return Math.hypot(u.body.px - (s?.x ?? portal.centerX), u.body.pz - (s?.z ?? portal.centerZ)) <= 1.25;
+        })
       ) {
         ally.phase = 'door_prep';
         ally.progress = roleIdx === 0 ? (portal.door && portal.door.angle < this.cfg.doorOpenAngle ? 'ドア開放準備' : '突入準備') : '突入待機';
@@ -966,6 +1166,218 @@ export class SquadSystem {
       }
     });
     return sorted[0]!;
+  }
+
+  /** planEntry（cqbEntry）で枠ごとのサイド固定突入計画を作る。既存の支配点計算をフォールバック PoD に使う */
+  private planPortalEntry(portal: EntryPortal, room: RoomDef, slots: readonly StackSlot[]): EntryPlan[] {
+    const y = portal.sillY;
+    const passable = this.passableUnlockedDoors();
+    const r = this.cfg.bodyRadius;
+    const fallbackPods = this.computeDominationPoints(portal, room, slots.length).map((p) => ({ x: p.pos.x, y, z: p.pos.z }));
+    return planEntry(cqbPortalFromStackSlotPortal(portal, y), cqbRoomFromRoomDef(room), slots, {
+      isStandable: (p) => this.isStandable(p.x, p.z, y),
+      reachable: (a, b) =>
+        pathSegmentClear(this.colliders, a, b, r, y, passable) ||
+        squadRoute(a, b, y, this.colliders, this.bounds, r, passable).length > 0,
+      fallbackPods,
+    });
+  }
+
+  /** 突入計画を隊員に反映（PoD・視線・敷居までの警戒点） */
+  private applyEntryPlan(ally: AllyUnit, portal: EntryPortal, room: RoomDef | null, plan: EntryPlan | null): void {
+    ally.entryPlan = plan;
+    ally.podPos = plan ? { x: plan.pod.x, z: plan.pod.z } : null;
+    ally.podLook = plan ? plan.look : null;
+    ally.entryThreatLook = null;
+    if (plan && room) {
+      // 敷居点までは「ドア内の自サイド反対側コーナー」（最初に脅威が見える方向）を見る
+      const cp = cqbPortalFromStackSlotPortal(portal, portal.sillY);
+      const cr = cqbRoomFromRoomDef(room);
+      const opp = (plan.side === -1 ? 1 : -1) as -1 | 1;
+      const halfOpp = entryHalfWidth(cp, cr, opp);
+      const depth = entryRoomDepth(cp, cr);
+      ally.entryThreatLook = fromPortalFrame(
+        cp,
+        opp * Math.max(0.6, halfOpp),
+        Math.max(1.2, Math.min(depth - 0.6, 3.0)),
+        portal.sillY + 1.38,
+      );
+    }
+  }
+
+  /**
+   * 突入開始時（扉が開いた状態）に一度だけ経路・PoD を引き直す。side/rank/order（＝役割）は凍結のまま。
+   * 開いた扉板が入口壁沿いに来るなど、スタック時点では分からない障害を反映する。
+   */
+  private replanGroupOnRelease(portal: EntryPortal): void {
+    const g = this.portalGroups.get(portal.id);
+    if (!g || g.replanned) return;
+    g.replanned = true;
+    if (!g.room) return;
+    const members = this.allies.filter((u) => u.entryPortal?.id === portal.id && u.order === g.order && u.slotIndex >= 0);
+    if (members.length === 0 || members.some((u) => u.entryStartT >= 0)) return;
+    const plans = this.planPortalEntry(portal, g.room, g.slots);
+    for (const u of members) {
+      const p = plans[u.slotIndex];
+      const prev = u.entryPlan;
+      if (!p || (prev && (p.side !== prev.side || p.rank !== prev.rank))) continue;
+      this.applyEntryPlan(u, portal, g.room, p);
+    }
+  }
+
+  /** スタック中グループの一斉 door_prep 遷移（グループ単位のタイムアウト） */
+  private updatePortalGroups(dt: number): void {
+    for (const [id, g] of this.portalGroups) {
+      const members = this.allies.filter((u) => u.entryPortal?.id === id && u.order === g.order);
+      if (members.length === 0) {
+        this.portalGroups.delete(id);
+        continue;
+      }
+      const stacking = members.filter((u) => !u.down && u.phase === 'stacking');
+      if (stacking.length === 0) continue;
+      const settledAt = (u: AllyUnit): boolean => u.settled && Math.abs(u.body.footY - g.portal.sillY) < 0.4;
+      g.allSettled = stacking.every(settledAt);
+      if (g.order === 'stack') {
+        if (g.allSettled && !this.announcedStacks.has(id)) {
+          this.announcedStacks.add(id);
+          this.emitRadio(stacking[0]!, 'スタック完了、突入準備よし！', 'Stacked up, ready to make entry.');
+        }
+        continue;
+      }
+      g.elapsed += dt;
+      // 「グループ全員が待っている」（到着済み or 進めていない）時間だけを数える。歩いて向かっている者がいれば待つ
+      if (stacking.every((u) => settledAt(u) || u.stalled >= STACK_STALL_WAIT || u.blindLeft > 0)) g.waitT += dt;
+      const hardCap = Math.max(20, this.cfg.stackWaitTimeoutSec * 4);
+      if (g.allSettled || g.waitT >= this.cfg.stackWaitTimeoutSec || g.elapsed >= hardCap) {
+        // door_prep への遷移はグループ一斉（早着者が個別に突入しない）
+        for (const u of stacking) {
+          u.phase = 'door_prep';
+          u.phaseTimer = 0;
+          u.stackWaitTimer = 0;
+        }
+      }
+    }
+  }
+
+  /** プレイヤーの移動方向を低域通過して追従隊形の基準向きを更新（速度 > 0.6 m/s の時のみ） */
+  private updateFollowHeading(dt: number): void {
+    const px = this.player.position.x;
+    const pz = this.player.position.z;
+    const dx = px - this.lastPlayerPos.x;
+    const dz = pz - this.lastPlayerPos.z;
+    this.lastPlayerPos.x = px;
+    this.lastPlayerPos.z = pz;
+    if (dt <= 1e-5) return;
+    const dist = Math.hypot(dx, dz);
+    if (dist / dt > FOLLOW_HEADING_MIN_SPEED && dist > 1e-4) {
+      const ux = dx / dist;
+      const uz = dz / dist;
+      const k = 1 - Math.exp(-dt / FOLLOW_HEADING_TAU);
+      const hx = this.followHeading.x + (ux - this.followHeading.x) * k;
+      const hz = this.followHeading.z + (uz - this.followHeading.z) * k;
+      const hl = Math.hypot(hx, hz);
+      if (hl > 1e-4) {
+        this.followHeading.x = hx / hl;
+        this.followHeading.z = hz / hl;
+      } else {
+        this.followHeading.x = ux;
+        this.followHeading.z = uz;
+      }
+    }
+  }
+
+  /** 視線ターゲット切替のチャタリング防止（最短 LOOK_MIN_HOLD 秒は現在キーを保持） */
+  private holdLook(ally: AllyUnit, want: string, dt: number): string {
+    if (!ally.lookKey) {
+      ally.lookKey = want;
+      ally.lookKeyT = 0;
+      return want;
+    }
+    ally.lookKeyT += dt;
+    if (want !== ally.lookKey && ally.lookKeyT >= LOOK_MIN_HOLD) {
+      ally.lookKey = want;
+      ally.lookKeyT = 0;
+    }
+    return ally.lookKey;
+  }
+
+  /** スタック枠への移動と到着ヒステリシス（到着済みなら true、移動中なら false） */
+  private updateStackSettle(ally: AllyUnit, portal: EntryPortal, slot: XZ, dt: number): boolean {
+    const body = ally.body;
+    const d = Math.hypot(slot.x - body.px, slot.z - body.pz);
+    const sameFloor = Math.abs(body.footY - portal.sillY) < 0.4;
+    if (ally.settled) {
+      if (!sameFloor || d > STACK_ARRIVE + ARRIVE_HYST) ally.settled = false;
+    } else if (sameFloor && d <= STACK_ARRIVE) {
+      ally.settled = true;
+    }
+    if (ally.settled) {
+      ally.stalled = 0;
+      ally.stuckStage = 0;
+      ally.anchor = { x: body.px, z: body.pz };
+      return true;
+    }
+    // 対象ポータルの扉は開けず、道中にある未施錠の途中ドアのみ開放して進む
+    this.navigateTo(ally, slot.x, slot.z, portal.sillY, dt, true, true, portal.door?.id ?? null);
+    return false;
+  }
+
+  /**
+   * 突入順ゲート（§1-2）: 順番 k は「直前の生存メンバー (k-1) が敷居を越えた」かつ
+   * 「k-1 の開始から staggerSec 経過」で発進。k-1 開始から ENTRY_GATE_FAILSAFE (2.5s) でフェイルセーフ開放。
+   */
+  private entryGateOpen(ally: AllyUnit): boolean {
+    if (ally.entryOrder <= 0 || !ally.entryPortal) return true;
+    const pid = ally.entryPortal.id;
+    let prev: AllyUnit | null = null;
+    for (const u of this.allies) {
+      if (u === ally || u.down || u.entryPortal?.id !== pid || u.order !== ally.order) continue;
+      if (u.entryOrder < ally.entryOrder && (!prev || u.entryOrder > prev.entryOrder)) {
+        prev = u;
+      }
+    }
+    if (!prev) return true;
+    if (prev.phase === 'sweeping' || prev.phase === 'secured' || prev.phase === 'restraining') {
+      return prev.entryStartT < 0 || this.simTime - prev.entryStartT >= this.cfg.staggerSec;
+    }
+    if (prev.entryStartT >= 0) {
+      if (this.simTime - prev.entryStartT >= ENTRY_GATE_FAILSAFE) return true;
+      return prev.entryCrossT >= 0 && this.simTime - prev.entryStartT >= this.cfg.staggerSec;
+    }
+    if (prev.phase !== 'entering' && ally.entryGateWait >= ENTRY_GATE_FAILSAFE) return true;
+    return false;
+  }
+
+  /** PoD 保持（到着済みは静止、離れていれば戻る。戻れない場合は POD_RETURN_GIVEUP で諦めて静止） */
+  private holdAtPod(ally: AllyUnit, portal: EntryPortal, dt: number): void {
+    const pod = ally.podPos;
+    if (!pod) {
+      ally.settled = true;
+      return;
+    }
+    const body = ally.body;
+    const d = Math.hypot(pod.x - body.px, pod.z - body.pz);
+    const sameFloor = Math.abs(body.footY - portal.sillY) < 0.4;
+    if (ally.settled) {
+      if (!sameFloor || d > ENTRY_POD_ARRIVE + ARRIVE_HYST) {
+        ally.settled = false;
+        ally.podReturnT = 0;
+      }
+    } else if (sameFloor && d <= ENTRY_POD_ARRIVE) {
+      ally.settled = true;
+    }
+    if (ally.settled) {
+      ally.stalled = 0;
+      ally.stuckStage = 0;
+      ally.anchor = { x: body.px, z: body.pz };
+      return;
+    }
+    ally.podReturnT += dt;
+    if (ally.podReturnT >= POD_RETURN_GIVEUP || ally.stalled >= ENTRY_STALL_SEC) {
+      ally.settled = true;
+      return;
+    }
+    this.navigateTo(ally, pod.x, pod.z, portal.sillY, dt, false, false);
   }
 
   private executeOrder(order: SquadOrder, ctx: OrderContext): void {
@@ -1153,6 +1565,21 @@ export class SquadSystem {
     ally.c2BeepTimer = 0;
     ally.c2Standoff = null;
     ally.c2IsLead = false;
+    ally.settled = false;
+    ally.entryPlan = null;
+    ally.slotIndex = -1;
+    ally.entryWp = 0;
+    ally.entryStartT = -1;
+    ally.entryCrossT = -1;
+    ally.entryGateWait = 0;
+    ally.entryThreatLook = null;
+    ally.lookKey = '';
+    ally.lookKeyT = 0;
+    ally.followGoal = null;
+    ally.idleLook = null;
+    ally.dodge = null;
+    ally.securedLookSet = false;
+    ally.podReturnT = 0;
     ally.body.setPose('stand');
   }
 
@@ -1223,26 +1650,55 @@ export class SquadSystem {
 
     switch (ally.phase) {
       case 'follow': {
-        const goal = this.computeFollowGoal(ally);
+        const raw = this.computeFollowGoal(ally);
+        // 目標点の低域通過（プレイヤーの微小移動・隊形候補の切替で目標が跳ばない）。大きく離れたら即追従
+        const fg = ally.followGoal;
+        if (!fg || Math.hypot(raw.x - fg.x, raw.z - fg.z) > 3.0 || Math.abs(raw.y - body.footY) > 0.75) {
+          ally.followGoal = { x: raw.x, z: raw.z };
+        } else {
+          const k = 1 - Math.exp(-dt / FOLLOW_GOAL_TAU);
+          fg.x += (raw.x - fg.x) * k;
+          fg.z += (raw.z - fg.z) * k;
+        }
+        const goal = ally.followGoal!;
+        if (ally.dodge) {
+          // プレイヤー射線から退避中は退避位置を保持（applySeparation が移動を担当）
+          ally.progress = '射線退避';
+          return;
+        }
         const dist = Math.hypot(goal.x - body.px, goal.z - body.pz);
-        if (dist <= this.cfg.arriveDistance && Math.abs(goal.y - body.footY) < 0.4) {
+        const sameFloor = Math.abs(raw.y - body.footY) < 0.4;
+        // ヒステリシス: 停止 0.4 / 再始動 0.9
+        if (ally.settled) {
+          if (dist > FOLLOW_START_DIST || !sameFloor) ally.settled = false;
+        } else if (dist <= FOLLOW_STOP_DIST && sameFloor) {
+          ally.settled = true;
+          ally.idleLook = null;
+        }
+        if (ally.settled) {
           ally.stalled = 0;
           ally.stuckStage = 0;
           ally.anchor = { x: body.px, z: body.pz };
           ally.progress = '隊列待機';
-          if (!ally.engaging) {
-            const lookDist = 4;
+          if (!ally.idleLook) {
+            // 停止中の視線はプレイヤー向き±0.35 に固定（毎フレーム再計算しない）
             const sideAngle = this.player.yawRad + (ally.index % 2 === 0 ? 0.35 : -0.35);
-            body.aimAt(
-              body.px - Math.sin(sideAngle) * lookDist,
-              body.footY + 1.45,
-              body.pz - Math.cos(sideAngle) * lookDist,
-              dt,
-              Math.PI * 1.6 * dt,
-            );
+            ally.idleLook = {
+              x: body.px - Math.sin(sideAngle) * 4,
+              y: body.footY + 1.45,
+              z: body.pz - Math.cos(sideAngle) * 4,
+            };
+          }
+          const mode = this.holdLook(ally, 'idle', dt);
+          if (!ally.engaging && mode === 'idle') {
+            body.aimAt(ally.idleLook.x, ally.idleLook.y, ally.idleLook.z, dt, Math.PI * 1.6 * dt);
           }
         } else {
-          this.navigateTo(ally, goal.x, goal.z, goal.y, dt, true, true);
+          const mode = this.holdLook(ally, 'travel', dt);
+          this.navigateTo(ally, goal.x, goal.z, raw.y, dt, true, mode === 'travel');
+          if (mode !== 'travel' && ally.idleLook && !ally.engaging) {
+            body.aimAt(ally.idleLook.x, ally.idleLook.y, ally.idleLook.z, dt, Math.PI * 1.6 * dt);
+          }
           ally.progress = '追従中';
         }
         return;
@@ -1274,10 +1730,14 @@ export class SquadSystem {
           ally.phase = 'hold';
           return;
         }
-        const arrived =
-          Math.hypot(mt.x - body.px, mt.z - body.pz) <= this.cfg.arriveDistance &&
-          Math.abs(mt.y - body.footY) < 0.4;
-        if (!arrived) {
+        const d = Math.hypot(mt.x - body.px, mt.z - body.pz);
+        const sameFloor = Math.abs(mt.y - body.footY) < 0.4;
+        if (ally.settled) {
+          if (!sameFloor || d > this.cfg.arriveDistance + ARRIVE_HYST) ally.settled = false;
+        } else if (sameFloor && d <= this.cfg.arriveDistance) {
+          ally.settled = true;
+        }
+        if (!ally.settled) {
           ally.progress = '指定位置へ移動中';
           this.navigateTo(ally, mt.x, mt.z, mt.y, dt, true, true);
         } else {
@@ -1298,44 +1758,18 @@ export class SquadSystem {
           ally.phase = 'hold';
           return;
         }
-        const d = Math.hypot(slot.x - body.px, slot.z - body.pz);
-        const sameFloor = Math.abs(body.footY - portal.sillY) < 0.4;
-        if (!sameFloor || d > 0.34) {
+        if (!this.updateStackSettle(ally, portal, slot, dt)) {
           ally.stackWaitTimer = 0;
           ally.progress = 'スタック位置へ移動';
-          // 対象ポータルの扉は開けず、道中にある未施錠の途中ドアのみ開放して進む
-          this.navigateTo(ally, slot.x, slot.z, portal.sillY, dt, true, true, portal.door?.id ?? null);
           return;
         }
         if (!ally.engaging) {
           body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
         }
-        const mates = this.allies.filter((u) => !u.down && u.entryPortal?.id === portal.id && u.order === ally.order);
-        const allStacked = mates.every(
-          (u) => u.stackPos !== null && Math.abs(u.body.footY - portal.sillY) < 0.4 && Math.hypot(u.body.px - u.stackPos.x, u.body.pz - u.stackPos.z) <= 0.42,
-        );
-        if (!allStacked) {
-          ally.stackWaitTimer += dt;
-          if (ally.order !== 'stack' && ally.stackWaitTimer >= this.cfg.stackWaitTimeoutSec) {
-            ally.phase = 'door_prep';
-            ally.phaseTimer = 0;
-            ally.stackWaitTimer = 0;
-            return;
-          }
-          ally.progress = '味方整列待ち';
-          return;
-        }
-        ally.stackWaitTimer = 0;
-        if (ally.order === 'stack') {
-          ally.progress = 'スタック完了';
-          if (!this.announcedStacks.has(portal.id)) {
-            this.announcedStacks.add(portal.id);
-            this.emitRadio(ally, 'スタック完了、突入準備よし！', 'Stacked up, ready to make entry.');
-          }
-          return;
-        }
-        ally.phase = 'door_prep';
-        ally.phaseTimer = 0;
+        // door_prep への遷移はグループ単位（updatePortalGroups）。個人のタイムアウトで先走らない
+        const g = this.portalGroups.get(portal.id);
+        ally.stackWaitTimer = g?.waitT ?? 0;
+        ally.progress = g?.allSettled ? 'スタック完了' : '味方整列待ち';
         return;
       }
 
@@ -1351,7 +1785,8 @@ export class SquadSystem {
           !this.allies.some(
             (u) => !u.down && u.entryPortal?.id === portal.id && u.phase === 'door_prep' && u.roleIndex < ally.roleIndex,
           );
-        if (!ally.engaging) {
+        const settledAtSlot = ally.stackPos ? this.updateStackSettle(ally, portal, ally.stackPos, dt) : true;
+        if (!ally.engaging && settledAtSlot) {
           body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
         }
         if (door) {
@@ -1564,42 +1999,85 @@ export class SquadSystem {
           ally.phase = 'hold';
           return;
         }
-        if (ally.entryDelay > 0) {
-          ally.entryDelay -= dt;
-          ally.progress = '2番手突入待ち';
-          if (!ally.engaging) {
-            body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
+        // 突入順ゲート: 順番 k は「k-1 が敷居を越えた」かつ「k-1 の開始から stagger 秒」で発進（フェイルセーフ 2.5s）
+        // C2 起爆後・閃光/ガス待ち明けの一斉 entering もここを通るので同じ順序になる
+        if (ally.entryStartT < 0) {
+          if (!this.entryGateOpen(ally)) {
+            ally.entryGateWait += dt;
+            ally.progress = `${ally.entryOrder + 1}番手突入待ち`;
+            if (!ally.engaging) {
+              body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
+            }
+            return;
           }
-          return;
+          this.replanGroupOnRelease(portal);
+          ally.entryStartT = this.simTime;
+          ally.phaseTimer = 0;
+          ally.entryWp = 0;
+          ally.stalled = 0;
+          ally.stuckStage = 0;
+          ally.anchor = { x: body.px, z: body.pz };
+          ally.settled = false;
         }
 
         ally.phaseTimer += dt;
         const beyond =
           (body.px - portal.centerX) * portal.intoX + (body.pz - portal.centerZ) * portal.intoZ;
-        if (beyond > 0.35) ally.entered = true;
+        if (beyond > 0.35 && !ally.entered) {
+          ally.entered = true;
+          ally.entryCrossT = this.simTime;
+        }
 
-        const intoX = portal.intoX;
-        const intoZ = portal.intoZ;
-        const dest = ally.entered ? (ally.podPos ?? { x: portal.centerX + intoX * 1.4, z: portal.centerZ + intoZ * 1.4 }) : { x: portal.centerX + intoX * 0.72, z: portal.centerZ + intoZ * 0.72 };
-
+        const plan = ally.entryPlan;
+        const wps: XZ[] = plan
+          ? plan.waypoints
+          : [
+              { x: portal.centerX + portal.intoX * 0.72, z: portal.centerZ + portal.intoZ * 0.72 },
+              ally.podPos ?? { x: portal.centerX + portal.intoX * 1.4, z: portal.centerZ + portal.intoZ * 1.4 },
+            ];
+        // waypoint を順に（中間点 arrive 0.3。敷居点は奥行きで追い越していれば通過扱い）
+        while (ally.entryWp < wps.length - 1) {
+          const w = wps[ally.entryWp]!;
+          const wBeyond = (w.x - portal.centerX) * portal.intoX + (w.z - portal.centerZ) * portal.intoZ;
+          if (
+            Math.hypot(w.x - body.px, w.z - body.pz) <= ENTRY_WP_ARRIVE ||
+            (ally.entryWp === 0 && ally.entered && beyond > wBeyond + 0.1)
+          ) {
+            ally.entryWp++;
+          } else {
+            break;
+          }
+        }
+        const isLast = ally.entryWp >= wps.length - 1;
+        const dest = wps[Math.min(ally.entryWp, wps.length - 1)]!;
         const d = Math.hypot(dest.x - body.px, dest.z - body.pz);
-        if (d > 0.28 && ally.phaseTimer < 5.5 && ally.stalled < 2.4) {
+        const timedOut = ally.phaseTimer >= ENTRY_TIMEOUT_SEC || ally.stalled >= ENTRY_STALL_SEC;
+        if (!(isLast && d <= ENTRY_POD_ARRIVE) && !timedOut) {
           ally.progress = '室内に突入展開';
-          this.navigateTo(ally, dest.x, dest.z, portal.sillY, dt, false, false);
+          this.navigateTo(ally, dest.x, dest.z, portal.sillY, dt, false, false, null, undefined, isLast);
           if (!ally.engaging) {
-            const look = ally.podLook ?? {
-              x: dest.x + intoX * 1.5,
-              y: portal.sillY + 1.38,
-              z: dest.z + intoZ * 1.5,
-            };
+            // 敷居までは自サイド反対側のコーナー（最初に脅威が見える方向）、以降は PoD の保持視線
+            const key = this.holdLook(ally, ally.entered ? 'pod' : 'threat', dt);
+            const look =
+              (key === 'threat' ? ally.entryThreatLook : null) ??
+              ally.podLook ?? {
+                x: dest.x + portal.intoX * 1.5,
+                y: portal.sillY + 1.38,
+                z: dest.z + portal.intoZ * 1.5,
+              };
             body.aimAt(look.x, look.y, look.z, dt, Math.PI * 2.2 * dt);
           }
           return;
         }
 
+        // 後続のゲートが詰まらないよう、敷居を越えずに終わっても越境扱いにする
+        if (ally.entryCrossT < 0) ally.entryCrossT = this.simTime;
         ally.phase = 'sweeping';
         ally.sweepElapsed = 0;
         ally.stalled = 0;
+        ally.podReturnT = 0;
+        // タイムアウト時もその場で捜索に移らず、可能なら PoD 保持へ（updateSweeping の holdAtPod）
+        ally.settled = isLast && d <= ENTRY_POD_ARRIVE;
         return;
       }
 
@@ -1615,8 +2093,11 @@ export class SquadSystem {
 
       case 'secured': {
         ally.progress = '室確保・警戒中';
+        // 位置は PoD 固定（離れていれば戻る。静止中は分離力もほぼ無効）
+        const portal = ally.entryPortal;
+        if (!ally.engaging && portal) this.holdAtPod(ally, portal, dt);
         if (!ally.engaging && ally.podLook) {
-          body.aimAt(ally.podLook.x, ally.podLook.y, ally.podLook.z, dt, Math.PI * 1.4 * dt);
+          body.aimAt(ally.podLook.x, ally.podLook.y, ally.podLook.z, dt, ally.securedTurnRate * dt);
         }
         return;
       }
@@ -1657,10 +2138,14 @@ export class SquadSystem {
     const isSearcher = ally.roleIndex === 0 || ally.groupSize === 1;
     if (!isSearcher) {
       ally.progress = '支配点で援護警戒';
+      // PoD 保持（静止）。タイムアウトで手前に止まった場合のみ PoD まで歩く
+      if (!ally.engaging) this.holdAtPod(ally, portal, dt);
       if (!ally.engaging && ally.podLook) {
         body.aimAt(ally.podLook.x, ally.podLook.y, ally.podLook.z, dt, Math.PI * 1.6 * dt);
       }
-      const mate = this.allies.find((a) => !a.down && a !== ally && a.targetRoom === room);
+      const mate =
+        this.allies.find((a) => !a.down && a !== ally && a.targetRoom === room && a.entryPortal?.id === portal.id && a.roleIndex === 0) ??
+        this.allies.find((a) => !a.down && a !== ally && a.targetRoom === room);
       if (!mate || mate.phase === 'secured' || ally.sweepElapsed > 7.5) {
         this.enterSecured(ally, room, portal);
       }
@@ -1726,17 +2211,29 @@ export class SquadSystem {
   }
 
   private enterSecured(ally: AllyUnit, room: RoomDef, portal: EntryPortal): void {
+    const wasSweepingSearcher = ally.phase === 'sweeping' && (ally.roleIndex === 0 || ally.groupSize === 1);
     ally.phase = 'secured';
     ally.sweepCell = null;
     ally.vantage = null;
+    if (wasSweepingSearcher) {
+      // 捜索役は自分の PoD に戻って保持する
+      ally.settled = false;
+      ally.podReturnT = 0;
+    }
     const adjacent = (x: number, z: number, y: number) =>
       Math.abs(y - (room.floorY ?? 0)) < 0.5 &&
       Math.abs(x - room.x) <= room.width / 2 + 0.35 &&
       Math.abs(z - room.z) <= room.depth / 2 + 0.35;
     const exits = this.doors.doors.filter((d) => d !== portal.door && adjacent(d.centerX, d.centerZ, d.sillY));
-    if (exits.length > 0) {
+    if (exits.length > 0 && !ally.securedLookSet) {
+      // podLook の付け替えは 1 回だけ。0.6s かけて回す（faceToward の予算内）
+      ally.securedLookSet = true;
       const targetExit = exits[ally.roleIndex % exits.length]!;
       ally.podLook = { x: targetExit.centerX, y: targetExit.sillY + 1.38, z: targetExit.centerZ };
+      const b = ally.body;
+      const bearing = Math.atan2(b.px - ally.podLook.x, b.pz - ally.podLook.z);
+      const delta = Math.abs(Math.atan2(Math.sin(bearing - b.yawRad), Math.cos(bearing - b.yawRad)));
+      ally.securedTurnRate = THREE.MathUtils.clamp(delta / SECURED_TURN_SEC, 1.0, 5.0);
     }
     const key = `${room.id}:${portal.id}`;
     if (!this.announcedRooms.has(key)) {
@@ -2077,8 +2574,10 @@ export class SquadSystem {
     faceTravel: boolean,
     excludeDoorId: string | null = null,
     speedOverride?: number,
+    decelAtGoal = true,
   ): void {
     const body = ally.body;
+    ally.navThisFrame = true;
     const moveSpeed = speedOverride ?? ally.combat.moveSpeed;
     let routeDest: XZ = { x: goalX, z: goalZ };
     let onStairRun = false;
@@ -2149,7 +2648,8 @@ export class SquadSystem {
 
     if (onStairRun) {
       if (!ally.engaging && faceTravel) body.faceToward(routeDest.x, routeDest.z, Math.PI * 1.8 * dt);
-      stepToward(body, this.colliders, routeDest.x, routeDest.z, moveSpeed * dt, this.cfg.bodyRadius);
+      const sd = this.smoothedStep(ally, routeDest, moveSpeed, Infinity, dt);
+      stepToward(body, this.colliders, routeDest.x, routeDest.z, sd, this.cfg.bodyRadius);
       return;
     }
 
@@ -2201,7 +2701,11 @@ export class SquadSystem {
       }
     }
 
-    if (ally.doorWait > 0) return;
+    if (ally.doorWait > 0) {
+      ally.vel.x = 0;
+      ally.vel.z = 0;
+      return;
+    }
 
     const next = ally.path[0] ?? routeDest;
     const dNext = Math.hypot(next.x - body.px, next.z - body.pz);
@@ -2213,8 +2717,17 @@ export class SquadSystem {
     if (!ally.engaging && faceTravel) {
       body.aimAt(next.x, body.footY + 1.4, next.z, dt, Math.PI * 2 * dt);
     }
+    // 最終目標までの残り距離（経路長）。最終目標接近時のみ減速する
+    let remainingToGoal = Infinity;
+    if (decelAtGoal && Math.hypot(routeDest.x - goalX, routeDest.z - goalZ) < 0.05) {
+      remainingToGoal = dNext;
+      for (let i = 0; i + 1 < ally.path.length; i++) {
+        remainingToGoal += Math.hypot(ally.path[i + 1]!.x - ally.path[i]!.x, ally.path[i + 1]!.z - ally.path[i]!.z);
+      }
+    }
     const before = dNext;
-    stepToward(body, this.colliders, next.x, next.z, moveSpeed * dt, this.cfg.bodyRadius);
+    const sd = this.smoothedStep(ally, next, moveSpeed, remainingToGoal, dt);
+    stepToward(body, this.colliders, next.x, next.z, sd, this.cfg.bodyRadius);
     const remaining = Math.hypot(next.x - body.px, next.z - body.pz);
     if (remaining < 0.14 && ally.path.length > 0) {
       ally.path.shift();
@@ -2224,13 +2737,40 @@ export class SquadSystem {
     }
   }
 
+  /**
+   * 加減速付きの 1 フレーム移動量。vDes = dir * speed * min(1, 残距離/0.6)、
+   * vel += clamp(vDes - vel, accel*dt)（加速 9 / 減速 12 m/s²）。移動量は vel の進行方向成分。
+   */
+  private smoothedStep(ally: AllyUnit, toward: XZ, speed: number, remainingToGoal: number, dt: number): number {
+    const body = ally.body;
+    const dx = toward.x - body.px;
+    const dz = toward.z - body.pz;
+    const d = Math.hypot(dx, dz);
+    ally.navThisFrame = true;
+    if (d < 1e-4) return 0;
+    const ux = dx / d;
+    const uz = dz / d;
+    const desired = speed * Math.min(1, Math.max(0, remainingToGoal) / ARRIVE_SLOW_DIST);
+    const vdx = ux * desired - ally.vel.x;
+    const vdz = uz * desired - ally.vel.z;
+    const dv = Math.hypot(vdx, vdz);
+    const cur = Math.hypot(ally.vel.x, ally.vel.z);
+    const maxDv = (desired < cur ? MOVE_DECEL : MOVE_ACCEL) * dt;
+    const k = dv > maxDv ? maxDv / dv : 1;
+    ally.vel.x += vdx * k;
+    ally.vel.z += vdz * k;
+    const along = ally.vel.x * ux + ally.vel.z * uz;
+    // 停止直前に 0 速で張り付かないよう、最小でも 0.15 m/s は進める
+    return Math.min(d, Math.max(along, Math.min(0.15, desired)) * dt);
+  }
+
   private computeFollowGoal(ally: AllyUnit): { x: number; y: number; z: number } {
     const p = this.player.position;
-    const yaw = this.player.yawRad;
-    const fx = -Math.sin(yaw);
-    const fz = -Math.cos(yaw);
-    const rx = Math.cos(yaw);
-    const rz = -Math.sin(yaw);
+    // 隊形の基準向きはプレイヤー移動方向の低域通過（その場旋回で隊員が周回しない）
+    const fx = this.followHeading.x;
+    const fz = this.followHeading.z;
+    const rx = -fz;
+    const rz = fx;
     // 2 列縦隊: 偶数番は左・奇数番は右、2 名ごとに 1 列後ろへ（3 名以上でも追従位置が重ならない）
     const side = ally.index % 2 === 0 ? -1 : 1;
     const row = Math.floor(ally.index / 2);
@@ -2410,14 +2950,16 @@ export class SquadSystem {
     const nearby = candidates.slice(0, 8);
     const unknown = this.coverage.filter((c) => c.room === room && !c.seen);
     const ranked = nearby
-      .map((c) => ({
-        c,
-        gain: unknown.reduce(
+      .map((c) => {
+        const gain = unknown.reduce(
           (n, u) => n + Number(hasLineOfSight(this.colliders, { x: c.x, y: c.y + 1.55, z: c.z }, { x: u.x, y: u.y + 0.35, z: u.z })),
           0,
-        ),
-      }))
-      .sort((a, b) => b.gain - a.gain);
+        );
+        // 部屋中央へ出ていくより、壁沿いから死角を覗く位置を優先（中央からの距離ボーナス）
+        const fromCenter = Math.min(4, Math.hypot(c.x - room.x, c.z - room.z));
+        return { c, score: gain * (1 + 0.25 * fromCenter) + fromCenter * 0.5 };
+      })
+      .sort((a, b) => b.score - a.score);
 
     for (const { c } of ranked) {
       const path = squadRoute({ x: ally.body.px, z: ally.body.pz }, c, cell.y, this.colliders, this.bounds, this.cfg.bodyRadius);
@@ -2753,39 +3295,128 @@ export class SquadSystem {
     }
   }
 
+  /** 固定位置フェーズか（重なり 0.42m 未満のみ、下位順位側を押す） */
+  private isFixedPositionPhase(ally: AllyUnit): boolean {
+    switch (ally.phase) {
+      case 'door_prep':
+      case 'c2_plant':
+      case 'c2_standoff':
+      case 'flash_wait':
+      case 'gas_wait':
+      case 'entering':
+      case 'secured':
+      case 'hold':
+      case 'overwatch':
+        return true;
+      case 'stacking':
+      case 'sweeping':
+      case 'move':
+      case 'follow':
+        return ally.settled;
+      default:
+        return false;
+    }
+  }
+
+  /** 歩行アニメの travel に加算せず押し出す（§3.4） */
+  private nudgeBody(body: HumanoidBody, tx: number, tz: number, dist: number): boolean {
+    const dx = tx - body.px;
+    const dz = tz - body.pz;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-4 || dist <= 0) return false;
+    const k = Math.min(1, dist / d);
+    const nx = body.px + dx * k;
+    const nz = body.pz + dz * k;
+    if (this.isStandable(nx, nz, body.footY)) {
+      body.setPosition(nx, nz, body.footY, false);
+      return true;
+    }
+    if (this.isStandable(nx, body.pz, body.footY)) {
+      body.setPosition(nx, body.pz, body.footY, false);
+      return true;
+    }
+    if (this.isStandable(body.px, nz, body.footY)) {
+      body.setPosition(body.px, nz, body.footY, false);
+      return true;
+    }
+    return false;
+  }
+
   private applySeparation(ally: AllyUnit, dt: number): void {
     // 階段昇降中は横方向への押し出しで側壁・手すりへ衝突するのを防ぐため無効化
     if (ally.activeStair !== null) return;
     const body = ally.body;
-    // 隊員同士の密集・重なり回避
+    const fixed = this.isFixedPositionPhase(ally);
+    // 隊員同士の密集・重なり回避（§3.4）
     for (const other of this.allies) {
       if (other === ally || other.down || other.activeStair !== null || Math.abs(other.body.footY - body.footY) > 0.6) continue;
       const dx = body.px - other.body.px;
       const dz = body.pz - other.body.pz;
       const d = Math.hypot(dx, dz);
-      if (d > 1e-4 && d < this.cfg.personalSpace) {
-        const push = Math.min(this.cfg.moveSpeed * dt * 0.6, (this.cfg.personalSpace - d) * 0.5);
-        stepToward(body, this.colliders, body.px + (dx / d) * push, body.pz + (dz / d) * push, push, this.cfg.bodyRadius);
+      if (d <= 1e-4) continue;
+      if (fixed) {
+        if (d >= FIXED_OVERLAP) continue;
+        // 下位順位側のみを押す（同ポータルは entryOrder、それ以外は index）
+        const samePortal = ally.entryPortal !== null && ally.entryPortal.id === other.entryPortal?.id;
+        const allyRank = samePortal ? ally.entryOrder : ally.index;
+        const otherRank = samePortal ? other.entryOrder : other.index;
+        if (allyRank < otherRank) continue;
+        const push = Math.min(this.cfg.moveSpeed * dt * 0.3, (FIXED_OVERLAP - d) * 0.5);
+        this.nudgeBody(body, body.px + (dx / d) * push, body.pz + (dz / d) * push, push);
+      } else if (d < this.cfg.personalSpace) {
+        // 非固定位置フェーズは従来の 0.5 倍の強さ、countTravel=false
+        const push = Math.min(this.cfg.moveSpeed * dt * 0.3, (this.cfg.personalSpace - d) * 0.25);
+        this.nudgeBody(body, body.px + (dx / d) * push, body.pz + (dz / d) * push, push);
       }
     }
 
-    // 待機・追従中にプレイヤーの射線前方に立っていたら自動で横へ避ける
+    // 待機・追従中にプレイヤーの射線前方に立っていたら自動で横へ避ける（0.6s 保持＋退避位置を記憶）
     if (ally.phase === 'follow' || ally.phase === 'hold' || ally.phase === 'secured') {
-      if (Math.abs(this.player.position.y - body.footY) > 0.6) return;
-      const p = this.player.position;
-      const fx = -Math.sin(this.player.yawRad);
-      const fz = -Math.cos(this.player.yawRad);
-      const rx = Math.cos(this.player.yawRad);
-      const rz = -Math.sin(this.player.yawRad);
-      const vx = body.px - p.x;
-      const vz = body.pz - p.z;
-      const forwardDist = vx * fx + vz * fz;
-      const lateralDist = vx * rx + vz * rz;
-      if (forwardDist > 0.4 && forwardDist < 2.2 && Math.abs(lateralDist) < 0.45) {
-        const side = lateralDist >= 0 ? 1 : -1;
-        const step = this.cfg.moveSpeed * dt * 0.7;
-        stepToward(body, this.colliders, body.px + rx * side * step, body.pz + rz * side * step, step, this.cfg.bodyRadius);
+      if (Math.abs(this.player.position.y - body.footY) <= 0.6) {
+        const p = this.player.position;
+        const fx = -Math.sin(this.player.yawRad);
+        const fz = -Math.cos(this.player.yawRad);
+        const rx = Math.cos(this.player.yawRad);
+        const rz = -Math.sin(this.player.yawRad);
+        const vx = body.px - p.x;
+        const vz = body.pz - p.z;
+        const forwardDist = vx * fx + vz * fz;
+        const lateralDist = vx * rx + vz * rz;
+        if (forwardDist > 0.4 && forwardDist < 2.2 && Math.abs(lateralDist) < 0.45) {
+          const side = lateralDist >= 0 ? 1 : -1;
+          const shift = Math.min(0.55, Math.max(0.25, 0.65 - Math.abs(lateralDist)));
+          const wantX = body.px + rx * side * shift;
+          const wantZ = body.pz + rz * side * shift;
+          const pos = this.isStandable(wantX, wantZ, body.footY)
+            ? { x: wantX, z: wantZ }
+            : this.isStandable(body.px - rx * side * shift, body.pz - rz * side * shift, body.footY)
+              ? { x: body.px - rx * side * shift, z: body.pz - rz * side * shift }
+              : { x: wantX, z: wantZ };
+          if (!ally.dodge) {
+            ally.dodge = { pos, left: DODGE_HOLD_SEC };
+          } else {
+            ally.dodge.left = DODGE_HOLD_SEC;
+          }
+        }
       }
+      if (ally.dodge) {
+        ally.dodge.left -= dt;
+        const dx = ally.dodge.pos.x - body.px;
+        const dz = ally.dodge.pos.z - body.pz;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 0.12) {
+          const step = Math.min(dist, this.cfg.moveSpeed * dt * 0.7);
+          this.nudgeBody(body, ally.dodge.pos.x, ally.dodge.pos.z, step);
+        }
+        if (ally.phase === 'follow') {
+          ally.followGoal = { x: ally.dodge.pos.x, z: ally.dodge.pos.z };
+        }
+        if (ally.dodge.left <= 0) {
+          ally.dodge = null;
+        }
+      }
+    } else if (ally.dodge) {
+      ally.dodge = null;
     }
   }
 

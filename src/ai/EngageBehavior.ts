@@ -402,9 +402,27 @@ export interface SuspectNavOptions {
   canUseStairs: boolean;
   faceTravel?: boolean;
   arriveDist?: number;
+  /**
+   * 加減速（opt-in）。指定時は瞬時に最高速にならず、accel(m/s²) で加速・decel(m/s²) で減速する。
+   * 最終目標 dest への残距離が slowRadius 未満なら目標速度を比例で落とす（到着前に減速）。
+   * 未指定の既存呼び出し（容疑者 AI 等）は従来どおり等速。
+   */
+  smooth?: { accel?: number; decel?: number; slowRadius?: number };
+  /**
+   * 到着ヒステリシス（opt-in）。一度 arriveDist 内で 'arrived' を返したら、
+   * 同じ目標（0.35m 以内）に対しては arriveDist + restartDist を超えるまで 'arrived' を返し続ける。
+   */
+  restartDist?: number;
 }
 
 export type NavStepResult = 'moving' | 'arrived' | 'blocked';
+
+/** smooth 指定時の既定値（設計 §3.2: accel 9 m/s²・停止 12 m/s²・減速開始 0.6m） */
+const NAV_SMOOTH_ACCEL = 9;
+const NAV_SMOOTH_DECEL = 12;
+const NAV_SMOOTH_SLOW_RADIUS = 0.6;
+/** 減速中でも完全に止まらないための目標速度の下限（最高速比） */
+const NAV_SMOOTH_MIN_FRAC = 0.25;
 
 /**
  * 容疑者（Suspect / EngageBehavior）共用の部屋間・階段ナビゲータ。
@@ -425,6 +443,12 @@ export class SuspectNavigator {
   private stalled = 0;
   private anchor: XZ;
   private openingDoorNow = false;
+  /** smooth 指定時の現在速度(m/s)。reset() では落とさない（状態遷移で急停止しない） */
+  private curSpeed = 0;
+  /** このフレームに step が呼ばれたか（beginFrame で判定。呼ばれなかったフレームは停止扱い） */
+  private steppedThisFrame = false;
+  /** restartDist 指定時の到着済み目標（ヒステリシス） */
+  private settledAt: XZ | null = null;
 
   constructor(
     private readonly body: HumanoidBody,
@@ -444,6 +468,20 @@ export class SuspectNavigator {
     return this.activeStair !== null;
   }
 
+  /** smooth 指定時の現在速度(m/s) */
+  get speed(): number {
+    return this.curSpeed;
+  }
+
+  /**
+   * フレーム頭で呼ぶ（smooth を使う呼び出し側のみ）。前フレームに step が呼ばれていなければ
+   * その場で止まっていたので速度を 0 に戻す（次の発進は加速から）。
+   */
+  beginFrame(): void {
+    if (!this.steppedThisFrame) this.curSpeed = 0;
+    this.steppedThisFrame = false;
+  }
+
   reset(): void {
     this.path.length = 0;
     this.pathGoal = null;
@@ -456,6 +494,25 @@ export class SuspectNavigator {
     this.doorOpenTargetId = null;
     this.stalled = 0;
     this.anchor = { x: this.body.px, z: this.body.pz };
+    this.settledAt = null;
+  }
+
+  /** smooth 指定時の 1 フレームの移動距離。未指定なら speed*dt（従来どおり） */
+  private stepDistance(dest: Vec3, speed: number, dt: number, opts: SuspectNavOptions): number {
+    this.steppedThisFrame = true;
+    const sm = opts.smooth;
+    if (!sm) {
+      this.curSpeed = speed;
+      return speed * dt;
+    }
+    const slow = sm.slowRadius ?? NAV_SMOOTH_SLOW_RADIUS;
+    const d = Math.hypot(dest.x - this.body.px, dest.z - this.body.pz);
+    const frac = slow > 0 ? Math.max(NAV_SMOOTH_MIN_FRAC, Math.min(1, d / slow)) : 1;
+    const want = speed * frac;
+    const diff = want - this.curSpeed;
+    const lim = (diff >= 0 ? sm.accel ?? NAV_SMOOTH_ACCEL : sm.decel ?? NAV_SMOOTH_DECEL) * dt;
+    this.curSpeed = Math.max(0, this.curSpeed + Math.max(-lim, Math.min(lim, diff)));
+    return this.curSpeed * dt;
   }
 
   private passableUnlockedDoors(): Set<Collider> | undefined {
@@ -555,6 +612,7 @@ export class SuspectNavigator {
   step(dest: Vec3, speed: number, dt: number, opts: SuspectNavOptions): NavStepResult {
     const body = this.body;
     const arriveDist = opts.arriveDist ?? 0.55;
+    this.steppedThisFrame = true;
     this.repathCd = Math.max(0, this.repathCd - dt);
     this.doorWait = Math.max(0, this.doorWait - dt);
     for (const [doorId, left] of this.skippedDoors) {
@@ -563,7 +621,20 @@ export class SuspectNavigator {
     }
 
     const sameFloor = Math.abs(dest.y - body.footY) <= 0.75;
-    if (sameFloor && Math.hypot(dest.x - body.px, dest.z - body.pz) <= arriveDist) {
+    const distToDest = Math.hypot(dest.x - body.px, dest.z - body.pz);
+    if (opts.restartDist !== undefined) {
+      const s = this.settledAt;
+      if (s && Math.hypot(s.x - dest.x, s.z - dest.z) > 0.35) this.settledAt = null;
+      if (sameFloor && this.settledAt && distToDest <= arriveDist + opts.restartDist) {
+        this.steppedThisFrame = true;
+        this.curSpeed = 0;
+        return 'arrived';
+      }
+      this.settledAt = null;
+    }
+    if (sameFloor && distToDest <= arriveDist) {
+      if (opts.restartDist !== undefined) this.settledAt = { x: dest.x, z: dest.z };
+      this.curSpeed = 0;
       return 'arrived';
     }
 
@@ -638,7 +709,7 @@ export class SuspectNavigator {
 
     if (onStairRun) {
       if (opts.faceTravel) body.faceToward(routeDest.x, routeDest.z, Math.PI * 1.8 * dt);
-      stepToward(body, this.ctx.colliders, routeDest.x, routeDest.z, speed * dt, BODY_RADIUS);
+      stepToward(body, this.ctx.colliders, routeDest.x, routeDest.z, this.stepDistance(dest, speed, dt, opts), BODY_RADIUS);
       return 'moving';
     }
 
@@ -709,7 +780,7 @@ export class SuspectNavigator {
     if (opts.faceTravel) {
       body.faceToward(next.x, next.z, Math.PI * 2 * dt);
     }
-    const moved = stepToward(body, this.ctx.colliders, next.x, next.z, speed * dt, BODY_RADIUS);
+    const moved = stepToward(body, this.ctx.colliders, next.x, next.z, this.stepDistance(dest, speed, dt, opts), BODY_RADIUS);
     const remaining = Math.hypot(next.x - body.px, next.z - body.pz);
     if (remaining < 0.16 && this.path.length > 0) {
       this.path.shift();
