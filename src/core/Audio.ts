@@ -1,10 +1,3 @@
-import {
-  phoneProsody,
-  phoneSpeechBudgetMs,
-  phoneSyllableCount,
-  type CallHeat,
-  type CallRole,
-} from './phoneVoice';
 import type { Vec3 } from './types';
 
 type AudioContextCtor = typeof AudioContext;
@@ -47,18 +40,14 @@ const NOISE_BUFFER_SEC = 2.0;
 const MAX_AMBIENT_DIST_SQ = 42 * 42;
 const MAX_LOUD_DIST_SQ = 85 * 85;
 
-function distortionCurve(drive: number): Float32Array<ArrayBuffer> {
+const RADIO_DISTORTION_CURVE: Float32Array<ArrayBuffer> = (() => {
   const curve = new Float32Array(65);
   for (let i = 0; i < curve.length; i++) {
     const x = (i * 2) / (curve.length - 1) - 1;
-    curve[i] = Math.tanh(x * drive);
+    curve[i] = Math.tanh(x * 2.2);
   }
   return curve;
-}
-
-const RADIO_DISTORTION_CURVE = distortionCurve(2.2);
-const PHONE_MILD_CURVE = distortionCurve(1.35);
-const PHONE_HOT_CURVE = distortionCurve(3.1);
+})();
 
 function clamp(v: number, min: number, max: number): number {
   if (!Number.isFinite(v)) return min;
@@ -154,14 +143,6 @@ export class AudioEngine {
   private tinnitusGain: GainNode | null = null;
   private radioSeq = 0;
   private stopAllyRadioEffect: (() => void) | null = null;
-  private phoneSeq = 0;
-  private phoneActive = false;
-  /** cancel 直後の speak が synth.cancel に巻き込まれるのを避ける */
-  private phoneDeferSpeak = false;
-  private phoneTimer: ReturnType<typeof setTimeout> | null = null;
-  private phoneSafetyTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly phoneQueue: { role: CallRole; text: string; heat: CallHeat }[] = [];
-  private stopPhoneBed: (() => void) | null = null;
 
   private readonly handleGestureUnlock = (): void => {
     this.unlock();
@@ -196,7 +177,11 @@ export class AudioEngine {
     this.applyUserGain();
     if (muted) {
       this.cancelAllyRadio();
-      this.cancelPhoneLine();
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -1256,7 +1241,11 @@ export class AudioEngine {
     this.stopTinnitus();
     this.restoreMasterBus();
     this.cancelAllyRadio();
-    this.cancelPhoneLine();
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {
+      // Ignore speechSynthesis cancel errors.
+    }
     for (const cleanup of Array.from(this.activeCleanups)) {
       cleanup();
     }
@@ -2029,293 +2018,5 @@ export class AudioEngine {
     carrier.start(voiceStart, this.randomNoiseOffset(bodySec), bodySec + 0.01);
     tailOsc.start(tailStart);
     tailOsc.stop(tailStart + tailDur + 0.008);
-  }
-
-  /**
-   * 交渉通話の 1 台詞。交渉人は低く遅く、容疑者は熱量に応じて高く速く大きい。
-   * ロケールの TTS が無ければ電話帯域のフォルマントで話す。連続呼び出しはキューする。
-   */
-  public playPhoneLine(role: CallRole, text: string, heat: CallHeat): void {
-    if (this.disposed) return;
-    const spoken = text.trim();
-    if (!spoken) return;
-    this.phoneQueue.push({ role, text: spoken, heat });
-    this.drainPhoneQueue();
-  }
-
-  /** 通話の読み上げと回線ノイズを止め、キューを捨てる。 */
-  public cancelPhoneLine(): void {
-    this.phoneSeq++;
-    this.phoneQueue.length = 0;
-    this.phoneActive = false;
-    this.phoneDeferSpeak = true;
-    this.clearPhoneTimers();
-    this.stopPhoneLineBed();
-    try {
-      if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
-    } catch {
-      // Ignore speechSynthesis cancel errors.
-    }
-  }
-
-  private drainPhoneQueue(): void {
-    if (this.disposed || this.phoneActive || this.phoneQueue.length === 0) return;
-    if (this.effectiveVolume <= 0) {
-      this.phoneQueue.length = 0;
-      return;
-    }
-    const next = this.phoneQueue.shift()!;
-    this.phoneActive = true;
-    const seq = ++this.phoneSeq;
-    this.beginPhoneBed(next.heat);
-    if (this.speakPhoneUtterance(next, seq)) return;
-    if (this.playPhoneBabble(next, seq)) return;
-    this.finishPhoneLine(seq);
-  }
-
-  private finishPhoneLine(seq: number): void {
-    if (this.phoneSeq !== seq || !this.phoneActive) return;
-    this.clearPhoneTimers();
-    this.stopPhoneLineBed();
-    const hangingUp = this.phoneQueue.length === 0;
-    this.phoneActive = false;
-    if (hangingUp) {
-      const ready = this.getReadyContext();
-      if (ready) this.playHandsetClick(ready, true);
-    }
-    this.drainPhoneQueue();
-  }
-
-  private clearPhoneTimers(): void {
-    if (this.phoneTimer !== null) {
-      clearTimeout(this.phoneTimer);
-      this.phoneTimer = null;
-    }
-    if (this.phoneSafetyTimer !== null) {
-      clearTimeout(this.phoneSafetyTimer);
-      this.phoneSafetyTimer = null;
-    }
-  }
-
-  private beginPhoneBed(heat: CallHeat): void {
-    this.stopPhoneLineBed();
-    const ready = this.getReadyContext();
-    if (!ready) return;
-    this.playHandsetClick(ready, false);
-    this.stopPhoneBed = this.startPhoneLineNoise(ready, heat);
-  }
-
-  private stopPhoneLineBed(): void {
-    if (!this.stopPhoneBed) return;
-    const stop = this.stopPhoneBed;
-    this.stopPhoneBed = null;
-    stop();
-  }
-
-  /** TTS を開始できたら true。cancel 直後だけ少し遅らせて synth.cancel と競合しない。 */
-  private speakPhoneUtterance(item: { role: CallRole; text: string; heat: CallHeat }, seq: number): boolean {
-    const speech = this.resolveEnglishSpeech();
-    if (!speech) return false;
-    const prosody = phoneProsody(item.role, item.heat);
-    const { synth, voice } = speech;
-    const utter = new SpeechSynthesisUtterance(item.text);
-    utter.voice = voice;
-    utter.lang = 'en-US';
-    utter.volume = clamp(prosody.volume * this.effectiveVolume, 0, 1);
-    utter.pitch = prosody.pitch;
-    utter.rate = prosody.rate;
-    utter.onend = () => this.finishPhoneLine(seq);
-    utter.onerror = () => this.finishPhoneLine(seq);
-    const budget = phoneSpeechBudgetMs(item.text, prosody.rate);
-    const delay = this.phoneDeferSpeak ? 30 : 0;
-    this.phoneDeferSpeak = false;
-    const start = (): void => {
-      if (this.phoneSeq !== seq) return;
-      try {
-        synth.speak(utter);
-      } catch {
-        this.finishPhoneLine(seq);
-        return;
-      }
-      this.phoneSafetyTimer = setTimeout(() => this.finishPhoneLine(seq), budget);
-    };
-    if (delay > 0) {
-      this.phoneTimer = setTimeout(() => {
-        this.phoneTimer = null;
-        start();
-      }, delay);
-    } else {
-      start();
-    }
-    return true;
-  }
-
-  /** ボイスが無いときの電話帯域チャッター。長さは台詞に合わせる。 */
-  private playPhoneBabble(item: { role: CallRole; text: string; heat: CallHeat }, seq: number): boolean {
-    const ready = this.getReadyContext();
-    if (!ready) return false;
-    const { ctx, masterLowpass } = ready;
-    const prosody = phoneProsody(item.role, item.heat);
-    const syllables = phoneSyllableCount(item.text);
-    const per =
-      item.heat === 'shout' ? 0.1 : item.heat === 'strained' || item.heat === 'steady' ? 0.16 : 0.13;
-    const bodySec = syllables * per + 0.2;
-    const voiceStart = ctx.currentTime + 0.04;
-    const voiceEnd = voiceStart + bodySec;
-    const step = bodySec / syllables;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(prosody.baseHz, voiceStart);
-    for (let i = 0; i < syllables; i++) {
-      const t = voiceStart + i * step;
-      const pitchMul =
-        item.heat === 'shout'
-          ? 0.9 + ((i * 53) % 11) * 0.055
-          : item.heat === 'strained'
-            ? Math.max(0.82, 1.04 - i * 0.02)
-            : item.role === 'negotiator'
-              ? 0.98 + ((i * 19) % 4) * 0.012
-              : 0.9 + ((i * 37) % 9) * 0.035;
-      osc.frequency.linearRampToValueAtTime(Math.max(70, prosody.baseHz * pitchMul), t + step * 0.55);
-    }
-
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.setValueAtTime(300, voiceStart);
-    const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(3400, voiceStart);
-    const f1 = ctx.createBiquadFilter();
-    f1.type = 'bandpass';
-    f1.frequency.setValueAtTime(item.role === 'suspect' ? 820 : 640, voiceStart);
-    f1.Q.value = 4.2;
-    const f2 = ctx.createBiquadFilter();
-    f2.type = 'bandpass';
-    f2.frequency.setValueAtTime(item.heat === 'shout' ? 2300 : 1750, voiceStart);
-    f2.Q.value = 5.2;
-    const shaper = ctx.createWaveShaper();
-    shaper.curve =
-      item.heat === 'shout' || (item.role === 'suspect' && item.heat === 'raised')
-        ? PHONE_HOT_CURVE
-        : PHONE_MILD_CURVE;
-
-    const vg = ctx.createGain();
-    const peak = item.heat === 'shout' ? 0.2 : item.role === 'suspect' ? 0.13 : 0.075;
-    vg.gain.setValueAtTime(EPSILON, voiceStart);
-    for (let i = 0; i < syllables; i++) {
-      const t = voiceStart + i * step;
-      vg.gain.linearRampToValueAtTime(peak, t + step * 0.18);
-      vg.gain.linearRampToValueAtTime(Math.max(EPSILON, peak * 0.18), t + step * 0.82);
-    }
-    vg.gain.exponentialRampToValueAtTime(EPSILON, voiceEnd);
-
-    osc.connect(f1);
-    osc.connect(f2);
-    f1.connect(vg);
-    f2.connect(vg);
-    vg.connect(shaper);
-    shaper.connect(hp);
-    hp.connect(lp);
-    lp.connect(masterLowpass);
-
-    this.registerVoice([osc], [osc, hp, lp, f1, f2, shaper, vg]);
-    osc.start(voiceStart);
-    osc.stop(voiceEnd + 0.01);
-    this.phoneSafetyTimer = setTimeout(() => this.finishPhoneLine(seq), bodySec * 1000 + 80);
-    return true;
-  }
-
-  /** 受話器を上げる / 切るクリック。無線スケルチは使わない。 */
-  private playHandsetClick(ready: ReadyAudioContext, hangup: boolean): void {
-    const { ctx, masterLowpass, noiseBuffer } = ready;
-    const now = ctx.currentTime;
-    const noiseDur = hangup ? 0.032 : 0.018;
-    const noise = this.createNoiseSource(ctx, noiseBuffer);
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(hangup ? 1400 : 2200, now);
-    bp.Q.value = 1.4;
-    const ng = ctx.createGain();
-    ng.gain.setValueAtTime(EPSILON, now);
-    ng.gain.linearRampToValueAtTime(hangup ? 0.06 : 0.04, now + 0.002);
-    ng.gain.exponentialRampToValueAtTime(EPSILON, now + noiseDur);
-    noise.connect(bp);
-    bp.connect(ng);
-    ng.connect(masterLowpass);
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    const oscDur = hangup ? 0.046 : 0.02;
-    osc.frequency.setValueAtTime(hangup ? 240 : 520, now);
-    if (hangup) osc.frequency.exponentialRampToValueAtTime(90, now + oscDur);
-    const og = ctx.createGain();
-    og.gain.setValueAtTime(EPSILON, now);
-    og.gain.linearRampToValueAtTime(hangup ? 0.04 : 0.022, now + 0.003);
-    og.gain.exponentialRampToValueAtTime(EPSILON, now + oscDur);
-    osc.connect(og);
-    og.connect(masterLowpass);
-
-    this.registerVoice([noise, osc], [noise, bp, ng, osc, og]);
-    noise.start(now, this.randomNoiseOffset(noiseDur), noiseDur + 0.005);
-    osc.start(now);
-    osc.stop(now + oscDur + 0.01);
-  }
-
-  /** 300Hz–3.2kHz に絞った細い回線ヒスと低いハム。 */
-  private startPhoneLineNoise(ready: ReadyAudioContext, heat: CallHeat): () => void {
-    const { ctx, masterLowpass, noiseBuffer } = ready;
-    const now = ctx.currentTime;
-    const src = this.createNoiseSource(ctx, noiseBuffer);
-    src.loop = true;
-
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.setValueAtTime(300, now);
-    const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(3200, now);
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(heat === 'shout' ? 0.02 : 0.011, now);
-    src.connect(hp);
-    hp.connect(lp);
-    lp.connect(gain);
-    gain.connect(masterLowpass);
-
-    const hum = ctx.createOscillator();
-    hum.type = 'sine';
-    hum.frequency.setValueAtTime(140, now);
-    const humGain = ctx.createGain();
-    humGain.gain.setValueAtTime(0.005, now);
-    hum.connect(humGain);
-    humGain.connect(masterLowpass);
-
-    let stopped = false;
-    const stop = (): void => {
-      if (stopped) return;
-      stopped = true;
-      this.activeCleanups.delete(stop);
-      try {
-        src.stop();
-      } catch {
-        // Ignore if already stopped.
-      }
-      try {
-        hum.stop();
-      } catch {
-        // Ignore if already stopped.
-      }
-      for (const n of [src, hp, lp, gain, hum, humGain]) {
-        try {
-          n.disconnect();
-        } catch {
-          // Ignore disconnect errors.
-        }
-      }
-    };
-    this.activeCleanups.add(stop);
-    src.start(now, this.randomNoiseOffset(0.5));
-    hum.start(now);
-    return stop;
   }
 }
