@@ -91,7 +91,7 @@ export class SwatObstacles {
     h.barricadeCd = h.barricadeBurst > 0 ? Math.max(0.22, h.combat.fireInterval) : 1.1;
     if (this.barricadeRadioCd <= 0) {
       this.barricadeRadioCd = 12;
-      this.host.radio(h, '窓にバリケードだ！ 撃ち抜いて射線を開く！', 'Window is boarded! Shooting it out!');
+      this.host.radio(h, '窓が塞がってる。撃ち抜く', 'Window\'s boarded. Shooting it out.');
     }
     return true;
   }
@@ -108,7 +108,7 @@ export class SwatObstacles {
       this.traps.disarm(door.id);
       if (this.host.canPlayerHear({ x: door.centerX, y: door.sillY, z: door.centerZ }, 14)) {
         this.host.d.subtitle.show(
-          t('C2の爆風でドアのブービートラップが吹き飛んだ！', 'The C2 blast destroyed the door booby trap!'),
+          t('爆風でドアの仕掛けが飛んだ', 'The blast took the trap on the door.'),
           2.0,
         );
       }
@@ -147,10 +147,10 @@ export class SwatObstacles {
       this.heldDoors.set(id, { wasLocked: door.locked, by: h });
       door.locked = true; // 解除が終わるまで誰も開けない
       h.beginDisarm(door);
-      this.host.radio(h, 'ワイヤーだ！ ドアにブービートラップ！ 解除する、時間をくれ。', 'Tripwire! Door is rigged, stand by.', true);
+      this.host.radio(h, 'ワイヤーだ。ドアに仕掛け。待ってくれ', 'Tripwire. Door\'s rigged. Stand by.', true);
       if (this.host.canPlayerHear({ x: door.centerX, y: door.sillY, z: door.centerZ }, 10)) {
         this.host.d.subtitle.show(
-          t('SWAT「トラップだ…慎重にいけ」— 解除に手間取っている', 'SWAT: "It\'s a trap... take it slow" — busy disarming it'),
+          t('仕掛けだ。外している', 'It\'s rigged. They\'re working on it.'),
           2.0,
         );
       }
@@ -170,9 +170,9 @@ export class SwatObstacles {
     if (success) {
       this.trapsDisarmed++;
       this.traps?.disarm(door.id);
-      this.host.radio(h, 'トラップ解除完了。前進する。', 'Trap disarmed, moving.', true);
+      this.host.radio(h, '外した。進む', 'Clear. Moving.', true);
     } else {
-      this.host.radio(h, 'しまった、解除に失敗——！', 'Oh no—', true);
+      this.host.radio(h, '外れない', 'It didn\'t come off.', true);
       this.traps?.detonate(door.id);
     }
   }
@@ -226,8 +226,8 @@ export class SwatObstacles {
     if (speaker) {
       this.host.radio(
         speaker,
-        downed > 0 ? '爆発物だ！ 負傷者多数！ ドアに気を付けろ！' : '爆発！ ブービートラップだ、全員ドアを警戒しろ！',
-        downed > 0 ? 'IED! Officers down! Watch the doors!' : 'IED! Booby trap! Watch the doors!',
+        downed > 0 ? '爆発。負傷あり。ドアに注意' : '爆発。ドアに仕掛け。注意',
+        downed > 0 ? 'Blast. Officers down. Watch the doors.' : 'Blast. Doors are rigged.',
         true,
       );
     }

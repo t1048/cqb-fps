@@ -477,16 +477,16 @@ export function hasClothColor(root: THREE.Object3D, hex: number): boolean {
 
 const ORDER_MENU_PATTERNS: Record<ParitySquadOrder, RegExp> = {
   stack: /スタック/,
-  clear: /オープン|突入＆クリア|突入クリア/,
+  clear: /開けて入れ|蹴って入れ|部屋に入れ/,
   flashClear: /フラッシュ|閃光/,
-  breachClear: /ブリーチ|強行突入/,
-  c2Clear: /C2|爆破/i,
+  breachClear: /ブリーチ/,
+  c2Clear: /爆薬|C2|爆破/i,
   gasClear: /ガス|催涙|CS/i,
-  pieDoor: /扉開放|開放警戒/,
-  move: /指定位置/,
-  overwatch: /ロック|警戒方向/,
-  hold: /現在位置で待機|現在位置待機/,
-  follow: /追従/,
+  pieDoor: /外から/,
+  move: /地点へ/,
+  overwatch: /照準の先/,
+  hold: /止まれ/,
+  follow: /後ろに付け/,
   restrain: /確保/,
 };
 

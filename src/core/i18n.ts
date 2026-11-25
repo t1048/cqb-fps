@@ -159,18 +159,18 @@ export function tMotifSummary(id: string | undefined, fallback: string, seed = 0
 }
 
 const ORDER_EN: Record<string, string> = {
-  follow: 'Fall In',
-  hold: 'Hold Position',
-  move: 'Move Here',
-  overwatch: 'Cover Area',
-  stack: 'Stack Up',
-  open_clear: 'Open & Clear',
-  flash_clear: 'Flash & Clear',
-  gas_clear: 'Gas & Clear',
-  c2_clear: 'C2 & Clear',
-  breach_clear: 'Breach & Clear',
-  open_hold: 'Open & Hold',
-  restrain: 'Restrain / Secure',
+  follow: 'On Me',
+  hold: 'Hold There',
+  move: 'Move There',
+  overwatch: 'Watch That Way',
+  stack: 'Stack',
+  open_clear: 'Go In',
+  flash_clear: 'Throw a Bang',
+  gas_clear: 'Put Gas In',
+  c2_clear: 'Charge the Door',
+  breach_clear: 'Breach It',
+  open_hold: 'Hold Outside',
+  restrain: 'Cuff Them',
 };
 
 export function tOrderLabel(order: string, fallback: string): string {

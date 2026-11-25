@@ -47,7 +47,7 @@ const HOLD_SPOTS: readonly (readonly [forward: number, side: number])[] = [
 const STRUGGLE_LINES: readonly [ja: string, en: string][] = [
   ['人質「離して！」', 'Hostage: "Let me go!"'],
   ['人質「痛い、やめて！」', 'Hostage: "Ow, stop it!"'],
-  ['人質が身をよじって暴れている', 'The hostage is thrashing and struggling!'],
+  ['暴れてる', 'They\'re fighting it.'],
   ['人質「助けてくれ！」', 'Hostage: "Somebody help me!"'],
 ];
 const pickLine = (): string => {
@@ -182,7 +182,7 @@ export class HostageGrab {
     this.nextStruggle = 1.5 + Math.random() * 2;
     this.weapons.removeTarget(c);
     this.subtitle.show(
-      t('容疑者「動くな！来い！」— 人質を拘束した', 'Suspect: "Don\'t move! Come here!" — Hostage taken'),
+      t('動くな。こっちへ来い', 'Don\'t move. Over here.'),
       1.8,
     );
   }
@@ -279,7 +279,7 @@ export class HostageGrab {
     this.resist.set(c.id, 55);
     this.cooldown.set(c.id, REGRAB_COOLDOWN);
     this.player.addViewKick(0.03, (Math.random() - 0.5) * 0.08);
-    this.subtitle.show(t('人質が拘束を振りほどいて逃げた！', 'The hostage broke free and escaped!'), 1.8);
+    this.subtitle.show(t('振りほどかれた', 'They got loose.'), 1.8);
   }
 
   private renderResist(r: number): void {

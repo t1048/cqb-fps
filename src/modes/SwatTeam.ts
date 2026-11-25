@@ -356,7 +356,7 @@ export class SwatTeam implements SwatTeamHost {
           if (e.pos.x < b.min.x - m || e.pos.x > b.max.x + m || e.pos.z < b.min.z - m || e.pos.z > b.max.z + m || e.pos.y > b.max.y + m) continue;
           this.shieldHintShown = true;
           d.subtitle.show(
-            t('防弾盾に弾かれた！ 腰より下を撃つか、側面・背後へ回り込め', 'Blocked by ballistic shield! Aim below the waist or flank around!'),
+            t('盾に止まった。下か、横からだ', 'Stopped on the shield. Low, or from the side.'),
             2.6,
           );
           return;
