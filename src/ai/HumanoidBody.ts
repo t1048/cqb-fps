@@ -26,9 +26,12 @@ const BODY_D = 0.28;
 const HEAD_YAW_LIMIT = 0.5;
 /** 1tick の移動がこれ未満なら歩行ストライドに数えない(m) */
 const STRIDE_DEADZONE = 0.004;
-/** AIリーンの最大横オフセット(m)と最大ロール角(rad) */
-const MAX_LEAN_OFFSET = 0.24;
-const MAX_LEAN_ROLL_RAD = 0.24;
+/** 腰（骨盤）ピボットの高さ(m)。上半身はこの位置を軸に傾き、下半身と断裂しない */
+const WAIST_Y = 0.82;
+/** AIリーン時の骨盤の横体重移動(m)・腰の沈み込み(m)・上半身ロール角(rad) */
+const LEAN_HIP_SHIFT = 0.075;
+const LEAN_DROP = 0.035;
+const MAX_LEAN_ROLL_RAD = 0.28;
 
 /**
  * 頭・胴・四肢・装備を組み合わせた人型。姿勢で高さ・AABB が変わる。
@@ -189,15 +192,19 @@ export class HumanoidBody {
       this.shieldMesh = g;
     }
 
+    this.torso.position.y = WAIST_Y;
     for (const child of [...this.rig.children]) {
-      if (!this.legs.some(leg => leg.hip === child) && child !== this.gun) this.torso.add(child);
+      if (!this.legs.some(leg => leg.hip === child) && child !== this.gun) {
+        child.position.y -= WAIST_Y;
+        this.torso.add(child);
+      }
     }
     const cuffMat = this.makeMat(tex, 'metal', 0xd0d6dc, 0.3);
     for (const side of [-1, 1]) {
       this.part(this.geo(new THREE.BoxGeometry(0.055, 0.045, 0.065)), cuffMat, this.cuffs, side * 0.055, 0, 0);
     }
     this.part(this.geo(new THREE.BoxGeometry(0.06, 0.02, 0.025)), cuffMat, this.cuffs, 0, 0, 0.01);
-    this.cuffs.position.set(0, 0.94, 0.18);
+    this.cuffs.position.set(0, 0.94 - WAIST_Y, 0.18);
     this.cuffs.visible = false;
     this.torso.add(this.cuffs);
     this.rig.add(this.torso);
@@ -322,9 +329,15 @@ export class HumanoidBody {
     this.kneeling += ((this.pose === 'kneel' ? THREE.MathUtils.smoothstep(this.poseTime, 0.1, 0.4) : 0) - this.kneeling) * blend;
     const targetDrop = this.pose === 'kneel' ? KNEEL_DROP * THREE.MathUtils.smoothstep(this.poseTime, 0.38, 0.72) : this.pose === 'crouch' ? STAND_H - CROUCH_H : 0;
     this.drop += (targetDrop - this.drop) * blend;
+    const leanGoal = this.pose === 'stand' || this.pose === 'crouch' ? this.leanTarget : 0;
+    this.leanCurrent += (leanGoal - this.leanCurrent) * (1 - Math.exp(-9 * dt));
+    if (Math.abs(this.leanCurrent) < 1e-4 && leanGoal === 0) this.leanCurrent = 0;
+    const hipShift = this.leanCurrent * LEAN_HIP_SHIFT;
+    const leanRoll = this.leanCurrent * MAX_LEAN_ROLL_RAD;
+    const leanDrop = Math.abs(this.leanCurrent) * LEAN_DROP;
     if (this.pose !== 'down') {
-      const pelvisY = 0.798 - this.drop - 0.018 * this.stride * Math.cos(this.phase * 2);
-      this.rig.position.y = pelvisY - 0.82;
+      const pelvisY = 0.798 - this.drop - leanDrop - 0.018 * this.stride * Math.cos(this.phase * 2);
+      this.rig.position.y = pelvisY - WAIST_Y;
       this.rig.rotation.x = 0;
       const yaw = this.group.rotation.y;
       const sin = Math.sin(yaw), cos = Math.cos(yaw);
@@ -363,11 +376,13 @@ export class HumanoidBody {
       }
       for (const [i,{ hip, knee, ankle, side }] of this.legs.entries()) {
         const foot = this.feet[i]!;
+        // 骨盤の体重移動に合わせて股関節も一緒に横移動し、脚の 2 リンク IK が地面へ自然に接続する
+        hip.position.x = side * 0.096 + hipShift;
         const fx = foot.x-this.x, fz = foot.z-this.z;
         const lateral = fx*cos-fz*sin-hip.position.x;
         const z = fx*sin+fz*cos;
         const staggerDrop = this.pose === 'kneel' ? side * 0.07 * Math.sin(Math.PI*this.kneeling) : 0;
-        hip.position.y = 0.82 + staggerDrop;
+        hip.position.y = WAIST_Y + staggerDrop;
         const y = pelvisY + staggerDrop - (foot.y-this.footY+0.061);
         hip.rotation.order = 'ZXY';
         hip.rotation.z = Math.atan2(lateral,y);
@@ -399,24 +414,30 @@ export class HumanoidBody {
       this.rig.rotation.x = -Math.PI / 2 * t;
       this.rig.position.y = THREE.MathUtils.lerp(this.fallStart,0.25,t);
       this.rig.position.z = -0.55*t;
-      for (const leg of this.legs) leg.knee.rotation.x += (-0.85-leg.knee.rotation.x)*blend;
+      for (const leg of this.legs) {
+        leg.hip.position.x = leg.side * 0.096;
+        leg.knee.rotation.x += (-0.85-leg.knee.rotation.x)*blend;
+      }
     }
-    const leanGoal = this.pose === 'stand' || this.pose === 'crouch' ? this.leanTarget : 0;
-    this.leanCurrent += (leanGoal - this.leanCurrent) * (1 - Math.exp(-9 * dt));
-    if (Math.abs(this.leanCurrent) < 1e-4 && leanGoal === 0) this.leanCurrent = 0;
-    this.torso.position.x = this.leanCurrent * MAX_LEAN_OFFSET;
-    this.torso.rotation.z = this.shake * 0.18 - this.leanCurrent * MAX_LEAN_ROLL_RAD;
+    this.torso.position.x = hipShift;
+    this.torso.position.y = WAIST_Y;
+    this.torso.rotation.z = this.shake * 0.18 - leanRoll;
     this.torso.rotation.y += (this.torsoTarget - this.torso.rotation.y) * (1 - Math.exp(-8 * dt));
     this.torsoTarget *= Math.exp(-8 * dt);
     if (this.gunShown && this.gun && this.gun.parent === this.rig) {
-      const targetGunX = 0.125 + this.leanCurrent * MAX_LEAN_OFFSET;
-      const targetGunY = this.readyPose === 'high' ? 1.24 : 1.13;
-      const targetGunZ = this.readyPose === 'high' ? -0.23 : -0.21;
+      const baseGunY = this.readyPose === 'high' ? 1.24 : 1.13;
+      const baseGunZ = this.readyPose === 'high' ? -0.23 : -0.21;
+      const gx = 0.125;
+      const dy = baseGunY - WAIST_Y;
+      const cosR = Math.cos(leanRoll);
+      const sinR = Math.sin(leanRoll);
+      const targetGunX = hipShift + gx * cosR + dy * sinR;
+      const targetGunY = WAIST_Y - gx * sinR + dy * cosR;
       const targetPitch = this.readyPose === 'high' ? this.aimPitch * 0.65 : -0.28;
-      const targetRoll = -this.leanCurrent * MAX_LEAN_ROLL_RAD * 0.85;
+      const targetRoll = -leanRoll * 0.9;
       this.gun.position.x += (targetGunX - this.gun.position.x) * blend;
       this.gun.position.y += (targetGunY - this.gun.position.y) * blend;
-      this.gun.position.z += (targetGunZ - this.gun.position.z) * blend;
+      this.gun.position.z += (baseGunZ - this.gun.position.z) * blend;
       this.gun.rotation.x += (targetPitch - this.gun.rotation.x) * blend;
       this.gun.rotation.z += (targetRoll - this.gun.rotation.z) * blend;
     }
@@ -453,7 +474,7 @@ export class HumanoidBody {
   }
 
   chestPos(): { x: number; y: number; z: number } {
-    const off = this.leanCurrent * MAX_LEAN_OFFSET * 0.6;
+    const off = this.leanCurrent * LEAN_HIP_SHIFT + 0.31 * Math.sin(this.leanCurrent * MAX_LEAN_ROLL_RAD);
     if (Math.abs(off) < 1e-4) {
       return { x: this.x, y: this.footY + Math.min(this.height * 0.72, 1.25), z: this.z };
     }
