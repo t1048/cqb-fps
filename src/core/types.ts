@@ -1020,72 +1020,6 @@ export interface PerceptionConfig {
   };
 }
 
-/** 交渉の選択肢1つ（public/data/negotiation.json）。士気の増減量は絶対値で指定（符号は意味で固定）。 */
-export interface NegotiationChoiceDef {
-  id: string;
-  label: string;
-  /** 割り当てキー（KeyboardEvent.code） */
-  key: string;
-  /** プレイヤーの台詞（字幕） */
-  playerLine: string;
-  chance: {
-    base: number;
-    /** profile.aggression × この値 を減算 */
-    aggressionWeight: number;
-    /** (士気/100) × この値 を減算 */
-    moraleWeight: number;
-    /** 信頼 1 あたりの加算 */
-    trustBonus: number;
-    min: number;
-    max: number;
-  };
-  /** 成功時の士気低下量 */
-  successMorale: { min: number; max: number };
-  /** 失敗時の士気上昇量（硬化） */
-  failMorale: { min: number; max: number };
-  /** 失敗時に即発砲する確率 */
-  fireChanceOnFail: number;
-  /** 成功時に加算する信頼 */
-  trustGain: number;
-  /** 成功時に要求内容を開示するか */
-  revealDemand: boolean;
-  successLine: string;
-  failLine: string;
-}
-
-/** 交渉パラメータ（public/data/negotiation.json）。距離 m・角度 度・時間 s。 */
-export interface NegotiationConfig {
-  range: number;
-  /** 交渉中にこの倍率×range を超えて離れると中断 */
-  abortRangeMultiplier: number;
-  coneDeg: number;
-  /** 交渉を開始できる SuspectState 名 */
-  allowedStates: string[];
-  /** 視線を遮ってよい遮蔽物種別（door/cover）。これ以外（wall）が射線を遮ると不可 */
-  blockers: string[];
-  /** 遮蔽越しでなくても開始できる SuspectState 名（人質盾） */
-  directSightStates: string[];
-  timeoutSec: number;
-  choiceCooldownSec: number;
-  /** 失敗がこの回数に達すると発砲 */
-  maxFails: number;
-  trustMax: number;
-  /** 人質盾からの交渉で、士気がこの値未満になると人質を解放して投降 */
-  shieldReleaseBelow: number;
-  /** 決裂（発砲/悪化）後に再交渉できない秒数 */
-  lockoutSec: number;
-  /** 終了メッセージの表示秒数 */
-  resultHoldSec: number;
-  timeout: { moraleRise: { min: number; max: number }; fireChance: number; shieldFireChance: number };
-  /** 切断キー（KeyboardEvent.code） */
-  cancelKey: string;
-  /** 要求内容（profile id 別）。無ければ defaultDemand */
-  demands: Record<string, string>;
-  defaultDemand: string;
-  text: Record<'hintIdle' | 'hintReady' | 'hintShield' | 'cancel' | 'surrender' | 'release' | 'fire' | 'worsen' | 'interrupted' | 'locked', string>;
-  choices: NegotiationChoiceDef[];
-}
-
 export type SquadOrder =
   | 'follow'
   | 'hold'
@@ -1149,7 +1083,6 @@ export interface SquadConfig {
 }
 
 export interface GameData {
-  negotiation: NegotiationConfig;
   perception: PerceptionConfig;
   roe: RoeConfig;
   player: PlayerConfig;

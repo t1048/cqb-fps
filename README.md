@@ -173,7 +173,6 @@ public/data/
 ├── weapons.json         # 実弾・非致死性装備・フラッシュバンのパラメータ
 ├── ai_profiles.json     # 容疑者・民間人の士気・戦闘・人質盾・パニック設定
 ├── squad.json           # 味方隊員 AI（スタック・突入・警戒・階段追従）のパラメータ
-├── negotiation.json     # （旧・交渉無線の設定。現在は未使用）
 ├── perception.json      # AI の聴覚・視覚パラメータ
 ├── player.json          # 移動・足音・リーン・警告コール・逮捕/保護パラメータ
 ├── doors.json           # ドア高・ピーク角・開閉速度・ブリーチ設定

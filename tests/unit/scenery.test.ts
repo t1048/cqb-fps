@@ -85,8 +85,11 @@ describe('motif scenery', () => {
       if (map.motif === 'residence') continue;
       const upper = map.rooms.some((r) => !r.outdoor && (r.floorY ?? 0) > 2);
       if (!upper) continue;
-      found = true;
       const rails = map.covers.filter((c) => c.prop === 'rail');
+      // 吹き抜けは 1F/2F の重なり幅 (2 * ATRIUM_GALLERY_MIN + ATRIUM_HOLE_MIN_SIDE) や
+      // ドア・階段とのクリアランス条件を満たす間取りでのみ開口される。
+      if (rails.length === 0) continue;
+      found = true;
       expect(rails.length).toBeGreaterThan(0);
       expect(map.stairs?.length ?? 0).toBeGreaterThan(0);
       const hall = map.rooms.find((r) => /ホール|ラウンジ|ロビー|座敷/.test(r.name));

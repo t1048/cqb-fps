@@ -33,7 +33,6 @@ const ALL_TRACKED_EVENTS: ReadonlyArray<keyof AllGameEvents> = [
   'suspectStateChanged',
   'evidence',
   'arrest',
-  'negotiation',
   'roeViolation',
   'playerHit',
   'playerBlinded',

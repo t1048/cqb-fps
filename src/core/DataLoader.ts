@@ -34,7 +34,6 @@ import type {
   MapData,
   MoraleModifiers,
   MoveMode,
-  NegotiationConfig,
   NumRange,
   PerceptionConfig,
   PlayerConfig,
@@ -1456,92 +1455,6 @@ export function validateRoe(raw: unknown, source = 'roe'): RoeConfig {
   return { points, labels, violationOncePerTarget: r.bool(o, 'violationOncePerTarget', ''), hostileStates, ranks };
 }
 
-function range2(r: Reader, o: Record<string, unknown>, key: string, path: string): { min: number; max: number } {
-  const e = r.obj(o[key], `${path}.${key}`);
-  const min = r.num(e, 'min', `${path}.${key}`, 0, 100);
-  const max = r.num(e, 'max', `${path}.${key}`, 0, 100);
-  if (min > max) r.fail(`${path}.${key}`, 'min <= max にしてください');
-  return { min, max };
-}
-
-function strArr(r: Reader, v: unknown, path: string): string[] {
-  return r.arr(v, path).map((x, i): string => (typeof x === 'string' ? x : r.fail(`${path}[${i}]`, '文字列が必要です')));
-}
-
-export function validateNegotiation(raw: unknown, source = 'negotiation'): NegotiationConfig {
-  const r = new Reader(source);
-  const o = r.obj(raw, '');
-  const to = r.obj(o.timeout, 'timeout');
-  const demands: Record<string, string> = {};
-  const dm = r.obj(o.demands, 'demands');
-  for (const k of Object.keys(dm)) demands[k] = r.str(dm, k, 'demands');
-  const tx = r.obj(o.text, 'text');
-  const text = {} as NegotiationConfig['text'];
-  for (const k of ['hintIdle', 'hintReady', 'hintShield', 'cancel', 'surrender', 'release', 'fire', 'worsen', 'interrupted', 'locked'] as const) {
-    text[k] = r.str(tx, k, 'text');
-  }
-  const choices = r.arr(o.choices, 'choices', 1).map((d, i) => {
-    const p = `choices[${i}]`;
-    const e = r.obj(d, p);
-    const ch = r.obj(e.chance, `${p}.chance`);
-    const cp = `${p}.chance`;
-    const cMin = r.num(ch, 'min', cp, 0, 1);
-    const cMax = r.num(ch, 'max', cp, 0, 1);
-    if (cMin > cMax) r.fail(cp, 'min <= max にしてください');
-    return {
-      id: r.str(e, 'id', p),
-      label: r.str(e, 'label', p),
-      key: r.str(e, 'key', p),
-      playerLine: r.str(e, 'playerLine', p),
-      chance: {
-        base: r.num(ch, 'base', cp, 0, 1),
-        aggressionWeight: r.num(ch, 'aggressionWeight', cp, 0, 2),
-        moraleWeight: r.num(ch, 'moraleWeight', cp, 0, 2),
-        trustBonus: r.num(ch, 'trustBonus', cp, 0, 1),
-        min: cMin,
-        max: cMax,
-      },
-      successMorale: range2(r, e, 'successMorale', p),
-      failMorale: range2(r, e, 'failMorale', p),
-      fireChanceOnFail: r.num(e, 'fireChanceOnFail', p, 0, 1),
-      trustGain: r.num(e, 'trustGain', p, 0, 10),
-      revealDemand: r.bool(e, 'revealDemand', p),
-      successLine: r.str(e, 'successLine', p),
-      failLine: r.str(e, 'failLine', p),
-    };
-  });
-  const keys = new Set<string>();
-  for (const c of choices) {
-    if (keys.has(c.key)) r.fail('choices', `キー ${c.key} が重複しています`);
-    keys.add(c.key);
-  }
-  return {
-    range: r.num(o, 'range', '', 0.5, 100),
-    abortRangeMultiplier: r.num(o, 'abortRangeMultiplier', '', 1, 10),
-    coneDeg: r.num(o, 'coneDeg', '', 1, 360),
-    allowedStates: strArr(r, o.allowedStates, 'allowedStates'),
-    blockers: strArr(r, o.blockers, 'blockers'),
-    directSightStates: strArr(r, o.directSightStates, 'directSightStates'),
-    timeoutSec: r.num(o, 'timeoutSec', '', 1, 600),
-    choiceCooldownSec: r.num(o, 'choiceCooldownSec', '', 0, 30),
-    maxFails: r.num(o, 'maxFails', '', 1, 20),
-    trustMax: r.num(o, 'trustMax', '', 0, 20),
-    shieldReleaseBelow: r.num(o, 'shieldReleaseBelow', '', 0, 100),
-    lockoutSec: r.num(o, 'lockoutSec', '', 0, 120),
-    resultHoldSec: r.num(o, 'resultHoldSec', '', 0, 30),
-    timeout: {
-      moraleRise: range2(r, to, 'moraleRise', 'timeout'),
-      fireChance: r.num(to, 'fireChance', 'timeout', 0, 1),
-      shieldFireChance: r.num(to, 'shieldFireChance', 'timeout', 0, 1),
-    },
-    cancelKey: r.str(o, 'cancelKey', ''),
-    demands,
-    defaultDemand: r.str(o, 'defaultDemand', ''),
-    text,
-    choices,
-  };
-}
-
 export const SQUAD_ORDERS: readonly SquadOrder[] = [
   'follow',
   'hold',
@@ -1666,10 +1579,6 @@ export const DataLoader = {
     const url = dataUrl('perception.json');
     return validatePerception(await fetchJson(url), url);
   },
-  async loadNegotiation(): Promise<NegotiationConfig> {
-    const url = dataUrl('negotiation.json');
-    return validateNegotiation(await fetchJson(url), url);
-  },
   async loadRoe(): Promise<RoeConfig> {
     const url = dataUrl('roe.json');
     return validateRoe(await fetchJson(url), url);
@@ -1709,18 +1618,17 @@ export const DataLoader = {
   },
   /** 共通JSONを並列ロードし検証、続いてステージのマップを読み込み/生成。不正なら DataError を throw。 */
   async loadAll(stage: StageEntry, seed?: number): Promise<GameData> {
-    const [player, doors, weapons, aiProfiles, roe, perception, negotiation, squad] = await Promise.all([
+    const [player, doors, weapons, aiProfiles, roe, perception, squad] = await Promise.all([
       DataLoader.loadPlayerConfig(),
       DataLoader.loadDoorConfig(),
       DataLoader.loadWeapons(),
       DataLoader.loadAIProfiles(),
       DataLoader.loadRoe(),
       DataLoader.loadPerception(),
-      DataLoader.loadNegotiation(),
       DataLoader.loadSquad(),
     ]);
     const map = await DataLoader.loadStageMap(stage, seed, aiProfiles, doors);
     validateCrossReferences(map, aiProfiles);
-    return { player, doors, map, weapons, aiProfiles, roe, perception, negotiation, squad };
+    return { player, doors, map, weapons, aiProfiles, roe, perception, squad };
   },
 };

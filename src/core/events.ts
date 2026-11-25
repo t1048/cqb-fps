@@ -74,15 +74,6 @@ export interface GameEvents {
   /** 証拠（落とした武器）回収（T2-5 追加） */
   evidence: { targetId: string; pos: Vec3 };
   arrest: { targetId: string; evidenceCollected: boolean };
-  /** 交渉の進行（T3-5 追加）。end の result: surrender/release=解決、fire=発砲、worsen=悪化、abort/interrupted=中断 */
-  negotiation: {
-    suspectId: string;
-    phase: 'start' | 'choice' | 'end';
-    choiceId?: string;
-    success?: boolean;
-    result?: NegotiationResult;
-    morale: number;
-  };
   roeViolation: { kind: RoeViolationKind; targetId?: string; points: number };
   /** プレイヤー被弾（敵弾ヒット） */
   playerHit: { shooter: ActorId; damage: number; from: Vec3; hp: number };
