@@ -392,11 +392,30 @@ export class CommandMenu {
         passableAt(bx - edge.intoX * 0.45, bz - edge.intoZ * 0.45) &&
         passableAt(bx + edge.intoX * 0.45, bz + edge.intoZ * 0.45);
 
-      if (!passageClear(edge.bx, edge.bz)) continue;
+      let anchorX = edge.bx;
+      let anchorZ = edge.bz;
+      if (!passageClear(anchorX, anchorZ)) {
+        let found = false;
+        for (const step of [0.2, 0.4, 0.6, 0.8, 1.0]) {
+          for (const sign of [1, -1]) {
+            const cx = edge.bx + edge.axisX * step * sign;
+            const cz = edge.bz + edge.axisZ * step * sign;
+            if (cx < xMin - 1e-6 || cx > xMax + 1e-6 || cz < zMin - 1e-6 || cz > zMax + 1e-6) continue;
+            if (passageClear(cx, cz)) {
+              anchorX = cx;
+              anchorZ = cz;
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (!found) continue;
+      }
 
       for (const d of this.doors.doors) {
         if (d.angle < this.cfg.doorOpenAngle || Math.abs(d.sillY - floorY) >= 0.75) continue;
-        if (Math.hypot(d.centerX - edge.bx, d.centerZ - edge.bz) > 1.2) continue;
+        if (Math.hypot(d.centerX - anchorX, d.centerZ - anchorZ) > 1.2) continue;
         const dt = this.buildDoorAreaTarget(d, playerRoom);
         if (dt && dt.room === r) return dt;
       }
@@ -404,20 +423,20 @@ export class CommandMenu {
       let minOff = 0;
       let maxOff = 0;
       for (let off = -0.2; off >= -0.8 - 1e-6; off -= 0.2) {
-        if (passageClear(edge.bx + edge.axisX * off, edge.bz + edge.axisZ * off)) minOff = off;
+        if (passageClear(anchorX + edge.axisX * off, anchorZ + edge.axisZ * off)) minOff = off;
         else break;
       }
       for (let off = 0.2; off <= 0.8 + 1e-6; off += 0.2) {
-        if (passageClear(edge.bx + edge.axisX * off, edge.bz + edge.axisZ * off)) maxOff = off;
+        if (passageClear(anchorX + edge.axisX * off, anchorZ + edge.axisZ * off)) maxOff = off;
         else break;
       }
       const midOff = (minOff + maxOff) / 2;
       const span = maxOff - minOff + 0.4;
       return {
         room: r,
-        entryX: edge.bx + edge.axisX * midOff,
+        entryX: anchorX + edge.axisX * midOff,
         entryY: floorY,
-        entryZ: edge.bz + edge.axisZ * midOff,
+        entryZ: anchorZ + edge.axisZ * midOff,
         intoX: edge.intoX,
         intoZ: edge.intoZ,
         axisX: edge.axisX,

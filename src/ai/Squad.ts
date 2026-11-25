@@ -344,6 +344,7 @@ interface AllyUnit extends HitTarget {
   securedLookSet: boolean;
   securedTurnRate: number;
   podReturnT: number;
+  coverHold: { suspectId: string; threatPos: Vec3; hide: XZ; peek: XZ; lostSec: number } | null;
   label: AIDebugLabel;
 }
 
@@ -438,6 +439,7 @@ export class SquadSystem {
   private pincerCd = 0;
   private contactRadioCd = 0;
   private pepperRadioCd = 0;
+  private coverRadioCd = 0;
   private lockedDoorsEncountered = 0;
   private readonly recentlyPeppered = new Map<string, number>();
   private readonly radioQueue: { ally: AllyUnit; text: string; voiceText?: string }[] = [];
@@ -631,6 +633,7 @@ export class SquadSystem {
         securedLookSet: false,
         securedTurnRate: Math.PI * 1.4,
         podReturnT: 0,
+        coverHold: null,
         label,
         getAABB: () => body.getAABB(),
         shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
@@ -648,7 +651,11 @@ export class SquadSystem {
           immediateFireOnEnter: true,
           immediateFireShots: 3,
           skipRetreatOnHit: () =>
-            ally.shielded || ally.rushTimer > 0 || ally.order === 'hold' || ally.order === 'overwatch',
+            ally.shielded ||
+            ally.rushTimer > 0 ||
+            ally.order === 'hold' ||
+            ally.order === 'overwatch' ||
+            this.isRoomConfined(ally),
         },
       );
       this.allies.push(ally);
@@ -810,6 +817,7 @@ export class SquadSystem {
     this.pincerCd = Math.max(0, this.pincerCd - dt);
     this.contactRadioCd = Math.max(0, this.contactRadioCd - dt);
     this.pepperRadioCd = Math.max(0, this.pepperRadioCd - dt);
+    this.coverRadioCd = Math.max(0, this.coverRadioCd - dt);
     if (this.flashesLeft < SWAT_FLASH_CARRY_MAX) {
       this.flashRefill += dt;
       if (this.flashRefill >= FLASH_REFILL_SEC) {
@@ -1580,6 +1588,7 @@ export class SquadSystem {
     ally.dodge = null;
     ally.securedLookSet = false;
     ally.podReturnT = 0;
+    ally.coverHold = null;
     ally.body.setPose('stand');
   }
 
@@ -1619,6 +1628,21 @@ export class SquadSystem {
     );
   }
 
+  private isPointInRoom(x: number, z: number, y: number, room: RoomDef, margin = 0.25): boolean {
+    return (
+      Math.abs(y - (room.floorY ?? 0)) < 0.75 &&
+      Math.abs(x - room.x) <= room.width / 2 + margin &&
+      Math.abs(z - room.z) <= room.depth / 2 + margin
+    );
+  }
+
+  private isRoomConfined(ally: AllyUnit): boolean {
+    return (
+      ally.targetRoom !== null &&
+      (ally.phase === 'entering' || ally.phase === 'sweeping' || ally.phase === 'secured')
+    );
+  }
+
   private updateAllyTactics(ally: AllyUnit, dt: number): void {
     const body = ally.body;
     body.setReadyPose(SWAT_READY_POSE);
@@ -1639,6 +1663,7 @@ export class SquadSystem {
     if (
       ally.engageActive &&
       !this.isOrderLockedForAutonomousMove(ally) &&
+      !this.isRoomConfined(ally) &&
       (ally.phase === 'follow' || ally.phase === 'move' || ally.phase === 'secured') &&
       (ally.engage.label === 'toCover' ||
         ally.engage.label === 'toPeek' ||
@@ -1646,6 +1671,15 @@ export class SquadSystem {
         ally.engage.label === 'flank')
     ) {
       return;
+    }
+
+    if (
+      this.isRoomConfined(ally) &&
+      (ally.phase === 'sweeping' || ally.phase === 'secured' || (ally.phase === 'entering' && ally.entered))
+    ) {
+      if (this.updateRoomCoverHold(ally, dt)) return;
+    } else if (ally.coverHold) {
+      ally.coverHold = null;
     }
 
     switch (ally.phase) {
@@ -3297,6 +3331,7 @@ export class SquadSystem {
 
   /** 固定位置フェーズか（重なり 0.42m 未満のみ、下位順位側を押す） */
   private isFixedPositionPhase(ally: AllyUnit): boolean {
+    if (ally.coverHold !== null && ally.settled) return true;
     switch (ally.phase) {
       case 'door_prep':
       case 'c2_plant':
@@ -3600,12 +3635,247 @@ export class SquadSystem {
     return this.checkLineBlock(ally, from, to, targetId) !== 'none';
   }
 
+  private findWallCoverInRoom(ally: AllyUnit, room: RoomDef, threatPos: Vec3): { hide: XZ; peek: XZ } | null {
+    const floorY = room.floorY ?? 0;
+    const rxMin = room.x - room.width / 2;
+    const rxMax = room.x + room.width / 2;
+    const rzMin = room.z - room.depth / 2;
+    const rzMax = room.z + room.depth / 2;
+    const insetX = room.width < 2.0 ? 0.25 : 0.35;
+    const insetZ = room.depth < 2.0 ? 0.25 : 0.35;
+    const inRoomStrict = (x: number, z: number): boolean =>
+      x >= rxMin + insetX && x <= rxMax - insetX && z >= rzMin + insetZ && z <= rzMax - insetZ;
+
+    const m = Math.max(0.45, this.cfg.bodyRadius + 0.12);
+    const threatChest: Vec3 = { x: threatPos.x, y: threatPos.y + 1.35, z: threatPos.z };
+    const raw: XZ[] = [];
+
+    for (const c of this.colliders) {
+      if (c.kind !== 'wall' && c.kind !== 'cover') continue;
+      const a = c.aabb;
+      if (a.min.y > floorY + 1.2 || a.max.y < floorY + 0.25) continue;
+      if (a.max.x < rxMin - 0.6 || a.min.x > rxMax + 0.6 || a.max.z < rzMin - 0.6 || a.min.z > rzMax + 0.6) {
+        continue;
+      }
+      const cx = (a.min.x + a.max.x) / 2;
+      const cz = (a.min.z + a.max.z) / 2;
+      const xs = [
+        cx,
+        Math.min(a.max.x, a.min.x + 0.25),
+        Math.min(a.max.x, a.min.x + m),
+        Math.max(a.min.x, a.max.x - 0.25),
+        Math.max(a.min.x, a.max.x - m),
+      ];
+      const zs = [
+        cz,
+        Math.min(a.max.z, a.min.z + 0.25),
+        Math.min(a.max.z, a.min.z + m),
+        Math.max(a.min.z, a.max.z - 0.25),
+        Math.max(a.min.z, a.max.z - m),
+      ];
+      for (const x of xs) {
+        raw.push({ x, z: a.min.z - m }, { x, z: a.max.z + m });
+      }
+      for (const z of zs) {
+        raw.push({ x: a.min.x - m, z }, { x: a.max.x + m, z });
+      }
+      raw.push(
+        { x: a.min.x - m, z: a.min.z - m },
+        { x: a.min.x - m, z: a.max.z + m },
+        { x: a.max.x + m, z: a.min.z - m },
+        { x: a.max.x + m, z: a.max.z + m },
+      );
+    }
+
+    const peekOffsets: readonly XZ[] = [
+      { x: 0.55, z: 0 },
+      { x: -0.55, z: 0 },
+      { x: 0, z: 0.55 },
+      { x: 0, z: -0.55 },
+      { x: 0.85, z: 0 },
+      { x: -0.85, z: 0 },
+      { x: 0, z: 0.85 },
+      { x: 0, z: -0.85 },
+    ];
+
+    const candidates: { hide: XZ; peek: XZ | null; score: number }[] = [];
+    for (const p of raw) {
+      if (!inRoomStrict(p.x, p.z)) continue;
+      const dist = Math.hypot(p.x - ally.body.px, p.z - ally.body.pz);
+      if (dist > 5.5) continue;
+      if (!this.isStandable(p.x, p.z, floorY)) continue;
+      if (hasLineOfSight(this.colliders, threatChest, { x: p.x, y: floorY + 1.35, z: p.z })) continue;
+
+      let peek: XZ | null = null;
+      for (const off of peekOffsets) {
+        const px = p.x + off.x;
+        const pz = p.z + off.z;
+        if (!inRoomStrict(px, pz) || !this.isStandable(px, pz, floorY)) continue;
+        if (hasLineOfSight(this.colliders, threatChest, { x: px, y: floorY + 1.35, z: pz })) {
+          peek = { x: px, z: pz };
+          break;
+        }
+      }
+      const crowded = this.allies.some(
+        (a) =>
+          a !== ally &&
+          !a.down &&
+          a.coverHold !== null &&
+          Math.hypot(a.coverHold.hide.x - p.x, a.coverHold.hide.z - p.z) < 0.65,
+      );
+      const score = dist - (peek ? 4.0 : 0) + (crowded ? 1.5 : 0);
+      candidates.push({ hide: p, peek, score });
+    }
+
+    candidates.sort((a, b) => a.score - b.score);
+    const origin: XZ = { x: ally.body.px, z: ally.body.pz };
+    for (const cand of candidates) {
+      if (pathSegmentClear(this.colliders, origin, cand.hide, this.cfg.bodyRadius, floorY)) {
+        return { hide: cand.hide, peek: cand.peek ?? cand.hide };
+      }
+      const route = squadRoute(origin, cand.hide, floorY, this.colliders, this.bounds, this.cfg.bodyRadius);
+      if (route.length > 0 && route.every((pt) => this.isPointInRoom(pt.x, pt.z, floorY, room, 0.25))) {
+        return { hide: cand.hide, peek: cand.peek ?? cand.hide };
+      }
+    }
+
+    const fb = ally.podPos ?? { x: ally.body.px, z: ally.body.pz };
+    return this.isPointInRoom(fb.x, fb.z, floorY, room, 0) ? { hide: fb, peek: fb } : null;
+  }
+
+  private updateRoomCoverHold(ally: AllyUnit, dt: number): boolean {
+    const room = ally.targetRoom;
+    if (!room) return false;
+    const floorY = room.floorY ?? 0;
+    const from = ally.body.chestPos();
+    const peekFrom: Vec3 | null = ally.coverHold
+      ? { x: ally.coverHold.peek.x, y: floorY + 1.35, z: ally.coverHold.peek.z }
+      : null;
+
+    let best: { id: string; px: number; pz: number; footY: number } | null = null;
+    let bestDist = ally.combat.engageRange;
+    for (const s of this.entities.suspects.values()) {
+      if (!s.alive) continue;
+      if (
+        s.state === SuspectState.SURRENDER ||
+        s.state === SuspectState.ARRESTED ||
+        s.state === SuspectState.DOWN ||
+        s.state === SuspectState.NEGOTIATION
+      ) {
+        continue;
+      }
+      if (this.isPointInRoom(s.body.px, s.body.pz, s.body.footY, room)) continue;
+      const c = s.body.chestPos();
+      const d = Math.hypot(c.x - from.x, c.z - from.z);
+      if (d > bestDist) continue;
+      const seesDirect = hasLineOfSight(this.colliders, from, c);
+      const seesPeek = !seesDirect && peekFrom !== null && hasLineOfSight(this.colliders, peekFrom, c);
+      if (!seesDirect && !seesPeek) continue;
+      bestDist = d;
+      best = { id: s.id, px: s.body.px, pz: s.body.pz, footY: s.body.footY };
+    }
+
+    if (best) {
+      const threatPos: Vec3 = { x: best.px, y: best.footY, z: best.pz };
+      const needRecompute =
+        !ally.coverHold ||
+        ally.coverHold.suspectId !== best.id ||
+        Math.hypot(threatPos.x - ally.coverHold.threatPos.x, threatPos.z - ally.coverHold.threatPos.z) > 1.5;
+      if (needRecompute) {
+        const spot = this.findWallCoverInRoom(ally, room, threatPos);
+        if (!spot) return false;
+        ally.coverHold = { suspectId: best.id, threatPos, hide: spot.hide, peek: spot.peek, lostSec: 0 };
+      } else if (ally.coverHold) {
+        ally.coverHold.threatPos = threatPos;
+        ally.coverHold.lostSec = 0;
+      }
+    } else if (ally.coverHold) {
+      const tracked = this.entities.suspects.get(ally.coverHold.suspectId);
+      if (
+        !tracked ||
+        !tracked.alive ||
+        tracked.state === SuspectState.SURRENDER ||
+        tracked.state === SuspectState.ARRESTED ||
+        tracked.state === SuspectState.DOWN ||
+        tracked.state === SuspectState.NEGOTIATION ||
+        this.isPointInRoom(tracked.body.px, tracked.body.pz, tracked.body.footY, room)
+      ) {
+        ally.coverHold = null;
+        return false;
+      }
+      ally.coverHold.lostSec += dt;
+      if (ally.coverHold.lostSec >= 5.0) {
+        ally.coverHold = null;
+        return false;
+      }
+    } else {
+      return false;
+    }
+
+    const hold = ally.coverHold;
+    if (!hold) return false;
+    if (ally.phase === 'entering' && ally.entryCrossT < 0) {
+      ally.entryCrossT = this.simTime;
+    }
+    ally.progress = '壁カバー・投降勧告中';
+
+    const dist = Math.hypot(hold.hide.x - ally.body.px, hold.hide.z - ally.body.pz);
+    if (ally.settled) {
+      if (dist > 0.35) ally.settled = false;
+    } else if (dist <= 0.25) {
+      ally.settled = true;
+    }
+    if (!ally.settled && this.isPointInRoom(hold.hide.x, hold.hide.z, floorY, room, 0.1)) {
+      this.navigateTo(ally, hold.hide.x, hold.hide.z, floorY, dt, false, false, null, undefined, true);
+    }
+
+    if (!ally.engaging) {
+      ally.body.aimAt(hold.threatPos.x, hold.threatPos.y + 1.35, hold.threatPos.z, dt, Math.PI * 2.0 * dt);
+    }
+
+    if (ally.warnCd <= 0) {
+      const target = this.entities.suspects.get(hold.suspectId);
+      if (
+        target &&
+        target.alive &&
+        target.state !== SuspectState.SURRENDER &&
+        target.state !== SuspectState.ARRESTED &&
+        target.state !== SuspectState.DOWN &&
+        target.state !== SuspectState.NEGOTIATION
+      ) {
+        const c = target.body.chestPos();
+        const pEye = this.player.getEyePosition();
+        const playerCovering =
+          this.player.alive &&
+          Math.hypot(c.x - pEye.x, c.z - pEye.z) <= 10 &&
+          hasLineOfSight(this.colliders, pEye, c)
+            ? 1
+            : 0;
+        const totalCovering = Math.max(1, this.countAlliesCovering(c, 10) + playerCovering);
+        const pressure = 1 + this.cfg.presenceBonusPerAlly * Math.max(0, totalCovering - 1);
+        target.onWarned({ x: ally.body.px, y: ally.body.footY + 1.35, z: ally.body.pz }, pressure);
+        ally.warnCd = this.cfg.warningInterval;
+        if (this.coverRadioCd <= 0) {
+          this.coverRadioCd = 6.0;
+          this.emitRadio(
+            ally,
+            '奥のエリアに容疑者！壁に隠れてカバー、投降を勧告する！',
+            'Suspect in next area! Taking cover and calling for surrender!',
+          );
+        }
+      }
+    }
+
+    return true;
+  }
+
   private syncAnchorConstraints(ally: AllyUnit): void {
     const anchored = ally.order === 'hold' || ally.order === 'overwatch';
+    const confined = anchored || this.isRoomConfined(ally);
     const baseCombat = ally.shielded ? BASE_SHIELD_COMBAT : BASE_SWAT_COMBAT;
     const baseMob = ally.shielded ? BASE_SHIELD_MOBILITY : BASE_SWAT_MOBILITY;
-    ally.combat.coverSearchRange = anchored ? 0 : baseCombat.coverSearchRange;
-    ally.mobility.repositionAfterLostSec = anchored ? 9999 : baseMob.repositionAfterLostSec;
+    ally.combat.coverSearchRange = confined ? 0 : baseCombat.coverSearchRange;
+    ally.mobility.repositionAfterLostSec = confined ? 9999 : baseMob.repositionAfterLostSec;
   }
 
   private tryEngage(ally: AllyUnit, dt: number): void {
@@ -3795,7 +4065,13 @@ export class SquadSystem {
   private triggerRush(pos: Vec3, reason: 'blind' | 'reload' | 'pepper' | 'lowHp'): boolean {
     if (this.rushCd > 0) return false;
     const candidates = this.allies
-      .filter((a) => !a.down && a.blindLeft <= 0 && !this.isOrderLockedForAutonomousMove(a))
+      .filter(
+        (a) =>
+          !a.down &&
+          a.blindLeft <= 0 &&
+          !this.isOrderLockedForAutonomousMove(a) &&
+          !(this.isRoomConfined(a) && !this.isPointInRoom(pos.x, pos.z, pos.y, a.targetRoom!)),
+      )
       .map((a) => ({
         a,
         dist: Math.hypot(a.body.px - pos.x, a.body.pz - pos.z) + Math.abs(a.body.footY - pos.y) * 3,
@@ -3901,7 +4177,11 @@ export class SquadSystem {
     const pinGroup = pinIdx === 0 ? alpha : bravo;
     const flankGroup = pinIdx === 0 ? bravo : alpha;
     const eligibleFlankers = flankGroup.filter(
-      (a) => !a.sees && a.blindLeft <= 0 && !this.isOrderLockedForAutonomousMove(a),
+      (a) =>
+        !a.sees &&
+        a.blindLeft <= 0 &&
+        !this.isOrderLockedForAutonomousMove(a) &&
+        !(this.isRoomConfined(a) && !this.isPointInRoom(targetPos.x, targetPos.z, targetPos.y, a.targetRoom!)),
     );
     if (eligibleFlankers.length === 0) return;
 
