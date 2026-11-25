@@ -1,6 +1,7 @@
 import type { PlayerController } from './PlayerController';
 import type { Subtitle } from '../ui/Subtitle';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
+import { t } from '../core/i18n';
 
 /** 1 発あたりの蓄積と毎秒の減衰 */
 const PER_HIT = 24;
@@ -38,7 +39,7 @@ export class PepperEffect {
     const first = this.level < 5;
     this.level = Math.min(100, this.level + PER_HIT);
     this.player.addViewKick(0.01, (Math.random() - 0.5) * 0.05);
-    if (first) this.subtitle.show('ペッパーボールを浴びた！ 目が…！', 1.4);
+    if (first) this.subtitle.show(t('ペッパーボールを浴びた！ 目が…！', 'Hit by pepperball! My eyes...!'), 1.4);
   }
 
   update(rawDt: number): void {
@@ -53,7 +54,7 @@ export class PepperEffect {
       this.coughCd -= dt;
       if (k > 0.45 && this.coughCd <= 0) {
         this.coughCd = 2.5 + Math.random() * 2;
-        this.subtitle.show('ゴホッ、ゴホッ…！ 目が開けられない', 1.0);
+        this.subtitle.show(t('ゴホッ、ゴホッ…！ 目が開けられない', "*Cough, cough*...! I can't open my eyes!"), 1.0);
         this.player.addViewKick(0.025 * k, (Math.random() - 0.5) * 0.04);
       }
     }

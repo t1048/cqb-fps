@@ -1,5 +1,6 @@
 import type { EntityManager } from '../ai/EntityManager';
 import type { GameEventBus } from '../core/events';
+import { t } from '../core/i18n';
 import type { InputManager } from '../core/InputManager';
 import type { MapData, PlayerSpawn, WeaponDef } from '../core/types';
 import type { PlayerController } from '../player/PlayerController';
@@ -74,15 +75,23 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   const keptIds = new Set(kept.map((s) => s.id));
   const civilians = map.entities.filter((e) => e.type === 'civilian').length;
   const swatCount = swatSpawns.length;
-  const allyLine = kept.length > 0 ? `仲間の容疑者 ${kept.length} 名が同じ建物にいる。` : '';
-  const summary =
+  const holdMin = Math.round(SUSPECT_MODE.holdSec / 60);
+  const summary = t(
     'あなたは立てこもり犯だ。' +
-    allyLine +
-    `まもなく SWAT ${swatCount} 名が入口から突入してくる。` +
-    `突入から ${Math.round(SUSPECT_MODE.holdSec / 60)} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
-    '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
-    'ドアを施錠（F 長押し）、窓を板で塞ぎ（窓の前で F 長押し）、ドアにトラップを仕掛けろ（しゃがみ + F 長押し）。時間を稼げば仲間が補強・武器改造を進める。' +
-    '人質を盾にもできる（民間人の前で F 長押し）が、人質は暴れて振りほどこうとし、SWAT はペッパーボールで盾ごと崩してくる。';
+      (kept.length > 0 ? `仲間の容疑者 ${kept.length} 名が同じ建物にいる。` : '') +
+      `まもなく SWAT ${swatCount} 名が入口から突入してくる。` +
+      `突入から ${holdMin} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
+      '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
+      'ドアを施錠（F 長押し）、窓を板で塞ぎ（窓の前で F 長押し）、ドアにトラップを仕掛けろ（しゃがみ + F 長押し）。時間を稼げば仲間が補強・武器改造を進める。' +
+      '人質を盾にもできる（民間人の前で F 長押し）が、人質は暴れて振りほどこうとし、SWAT はペッパーボールで盾ごと崩してくる。',
+    'You are a barricaded suspect. ' +
+      (kept.length > 0 ? `${kept.length} armed ${kept.length === 1 ? 'accomplice is' : 'accomplices are'} inside the building with you. ` : '') +
+      `${swatCount} SWAT officers will breach the entrance soon. ` +
+      `Hold out for ${holdMin} minutes after the breach, or neutralize all SWAT officers. ` +
+      'You only have a low-capacity modded auto pistol. Negotiate before the breach to buy time, or trade hostages for body armor and ammo. ' +
+      'Lock doors (Hold F), board up windows (Hold F at a window), and rig door traps (Crouch + Hold F). Buying time lets your accomplices craft traps and upgrade weapons. ' +
+      'You can also take a hostage as a human shield (Hold F near a civilian), but they will struggle to break free and SWAT will use pepperballs to disrupt your grip.',
+  );
   return {
     map: {
       ...map,
@@ -167,6 +176,7 @@ export class SuspectMission {
   private endingIn = -1;
   private outcome: SuspectOutcome | null = null;
   private readonly entries: { time: number; label: string; points: number }[] = [];
+  private readonly killedCivIds = new Set<string>();
   private readonly unsubs: (() => void)[] = [];
   private shotsFired = 0;
   private hitsTaken = 0;
@@ -200,10 +210,24 @@ export class SuspectMission {
         priority: 250,
         resolve: () => (this.player.alive && !this.ended ? this.doors.aimed(2.6) : null),
         label: (d) => {
-          const trap = this.fortify?.isTrapped(d.id) ? ' [トラップ設置済]' : '';
-          if (d.locked) return `ドア: 施錠中（F 長押しで解錠 / しゃがみ+F 長押しでトラップ）${trap}`;
-          if (d.angle > 1 || d.targetAngle > 1) return `ドア: F 開閉 / ホイール 段階${trap}`;
-          return `ドア: F 開閉 / F 長押しで施錠 / しゃがみ+F 長押しでトラップ${trap}`;
+          const trap = this.fortify?.isTrapped(d.id) ? t(' [トラップ設置済]', ' [Trapped]') : '';
+          if (d.locked) {
+            return (
+              t(
+                'ドア: 施錠中（F 長押しで解錠 / しゃがみ+F 長押しでトラップ）',
+                'Door: Locked (Hold F: Unlock / Crouch+Hold F: Trap)',
+              ) + trap
+            );
+          }
+          if (d.angle > 1 || d.targetAngle > 1) {
+            return t('ドア: F 開閉 / ホイール 段階', 'Door: F Open/Close / Wheel: Peek') + trap;
+          }
+          return (
+            t(
+              'ドア: F 開閉 / F 長押しで施錠 / しゃがみ+F 長押しでトラップ',
+              'Door: F Open/Close / Hold F: Lock / Crouch+Hold F: Trap',
+            ) + trap
+          );
         },
         onPress: () => {
           this.lockDone = false;
@@ -220,11 +244,19 @@ export class SuspectMission {
           if (this.lockDone) return;
           const closed = d.angle <= 1 && d.targetAngle <= 1;
           if (!closed && !d.locked) return; // 開いているドアは施錠できない（タップ扱い）
-          this.showGauge(d.locked ? '解錠中...' : '施錠中...', (sec - TAP_SEC) / (LOCK_HOLD_SEC - TAP_SEC));
+          this.showGauge(
+            d.locked ? t('解錠中...', 'Unlocking...') : t('施錠中...', 'Locking...'),
+            (sec - TAP_SEC) / (LOCK_HOLD_SEC - TAP_SEC),
+          );
           if (sec >= LOCK_HOLD_SEC) {
             this.lockDone = true;
             d.locked = !d.locked;
-            this.subtitle.show(d.locked ? 'ドアを施錠した（SWAT はブリーチが必要）' : 'ドアの施錠を解除した', 1.6);
+            this.subtitle.show(
+              d.locked
+                ? t('ドアを施錠した（SWAT はブリーチが必要）', 'Door locked (SWAT must breach)')
+                : t('ドアの施錠を解除した', 'Door unlocked'),
+              1.6,
+            );
           }
         },
         onRelease: (d, sec) => {
@@ -248,8 +280,13 @@ export class SuspectMission {
       bus.on('entityHit', (e) => {
         if (e.shooter !== 'player') return;
         const c = this.entities.civilians.get(e.targetId);
-        if (c && !c.alive && !this.entries.some((x) => x.label === `民間人殺害 (${e.targetId})`)) {
-          this.entries.push({ time: this.elapsed, label: `民間人殺害 (${e.targetId})`, points: -400 });
+        if (c && !c.alive && !this.killedCivIds.has(e.targetId)) {
+          this.killedCivIds.add(e.targetId);
+          this.entries.push({
+            time: this.elapsed,
+            label: t(`民間人殺害 (${e.targetId})`, `Civilian Killed (${e.targetId})`),
+            points: -400,
+          });
         }
       }),
     );
@@ -305,14 +342,14 @@ export class SuspectMission {
       if (this.input.wasPressed('warningCall') && this.elapsed > 0.5) this.assaultAt = this.elapsed;
       if (this.elapsed >= this.assaultAt) {
         this.team.beginAssault();
-        this.subtitle.show('SWAT が突入を開始した！', 2.5);
+        this.subtitle.show(t('SWAT が突入を開始した！', 'SWAT has initiated the breach!'), 2.5);
       }
     } else if (this.player.alive && this.input.isDown('warningCall')) {
       // Space 長押し: 両手を上げて投降
       this.surrenderHold += dt;
-      this.showGauge('両手を上げて投降...', this.surrenderHold / SURRENDER_HOLD_SEC);
+      this.showGauge(t('両手を上げて投降...', 'Surrendering (hands up)...'), this.surrenderHold / SURRENDER_HOLD_SEC);
       if (this.surrenderHold >= SURRENDER_HOLD_SEC) {
-        this.subtitle.show('容疑者「わかった、投降する！撃つな！」', 2.0);
+        this.subtitle.show(t('容疑者「わかった、投降する！撃つな！」', 'Suspect: "Okay, I surrender! Don\'t shoot!"'), 2.0);
         this.conclude('arrested', 1.2);
       }
     } else {
@@ -328,7 +365,7 @@ export class SuspectMission {
     else if (this.team.hasStarted && this.team.aliveCount === 0 && !this.team.hasPendingReinforcements) {
       this.conclude('repelled', 2.0);
     } else if (this.team.hasStarted && this.holdLeft <= 0) {
-      this.subtitle.show('SWAT「撤退だ！包囲を維持しろ！」', 2.0);
+      this.subtitle.show(t('SWAT「撤退だ！包囲を維持しろ！」', 'SWAT: "Fall back! Maintain the perimeter!"'), 2.0);
       this.conclude('survived', 2.0);
     }
     this.renderHud();
@@ -342,22 +379,29 @@ export class SuspectMission {
     let text: string;
     if (this.endingIn >= 0) {
       const labels: Record<SuspectOutcome, string> = {
-        repelled: 'SWAT 撃退！',
-        survived: '籠城成功 — SWAT が撤退していく',
-        killed: '制圧された...',
-        arrested: '投降 — 拘束される...',
+        repelled: t('SWAT 撃退！', 'SWAT REPELLED!'),
+        survived: t('籠城成功 — SWAT が撤退していく', 'STANDOFF WON — SWAT is falling back'),
+        killed: t('制圧された...', 'Neutralized...'),
+        arrested: t('投降 — 拘束される...', 'Surrendered — Being restrained...'),
       };
       text = labels[this.outcome ?? 'killed'];
     } else if (!this.team.hasStarted) {
-      text = `SWAT 突入まで ${fmt(this.assaultAt - this.elapsed)}　|　F 長押しでドア施錠 / Space で準備完了`;
+      text = t(
+        `SWAT 突入まで ${fmt(this.assaultAt - this.elapsed)}　|　F 長押しでドア施錠 / Space で準備完了`,
+        `SWAT Breach in ${fmt(this.assaultAt - this.elapsed)}  |  Hold F: Lock Door / Space: Ready`,
+      );
     } else {
       const waveSuffix =
         this.team.reinforcementWavesSpawned > 0
-          ? `　|　増援 第${this.team.reinforcementWavesSpawned}波`
+          ? t(`　|　増援 第${this.team.reinforcementWavesSpawned}波`, `  |  Reinforcements Wave ${this.team.reinforcementWavesSpawned}`)
           : this.team.hasPendingReinforcements
-            ? '　|　増援あり'
+            ? t('　|　増援あり', '  |  Reinforcements Incoming')
             : '';
-      text = `籠城 残り ${fmt(this.holdLeft)}　|　SWAT 残り ${this.team.aliveCount}/${this.team.total}${waveSuffix}`;
+      text =
+        t(
+          `籠城 残り ${fmt(this.holdLeft)}　|　SWAT 残り ${this.team.aliveCount}/${this.team.total}`,
+          `Hold Out: ${fmt(this.holdLeft)}  |  SWAT Remaining: ${this.team.aliveCount}/${this.team.total}`,
+        ) + waveSuffix;
     }
     if (text !== this.lastHud) {
       this.lastHud = text;
@@ -401,10 +445,21 @@ export class SuspectMission {
     const survived = Math.max(0, Math.min(SUSPECT_MODE.holdSec, this.elapsed - this.assaultAt));
     const kills = this.team.kills;
     const entries = [...this.entries];
-    if (kills > 0) entries.push({ time: this.elapsed, label: `SWAT 無力化 ×${kills}`, points: kills * 500 });
-    entries.push({ time: this.elapsed, label: `生存時間 ${fmt(survived)}`, points: Math.round(survived * 2) });
+    if (kills > 0) entries.push({ time: this.elapsed, label: t(`SWAT 無力化 ×${kills}`, `SWAT Neutralized ×${kills}`), points: kills * 500 });
+    entries.push({ time: this.elapsed, label: t(`生存時間 ${fmt(survived)}`, `Time Survived ${fmt(survived)}`), points: Math.round(survived * 2) });
     const bonus: Record<SuspectOutcome, number> = { repelled: 1500, survived: 1000, killed: 0, arrested: 200 };
-    if (bonus[o] > 0) entries.push({ time: this.elapsed, label: o === 'repelled' ? '撃退ボーナス' : o === 'survived' ? '籠城成功ボーナス' : '投降（生存）', points: bonus[o] });
+    if (bonus[o] > 0) {
+      entries.push({
+        time: this.elapsed,
+        label:
+          o === 'repelled'
+            ? t('撃退ボーナス', 'Repel Bonus')
+            : o === 'survived'
+              ? t('籠城成功ボーナス', 'Standoff Victory Bonus')
+              : t('投降（生存）', 'Surrendered (Alive)'),
+        points: bonus[o],
+      });
+    }
     let deadCivs = 0;
     for (const c of this.entities.civilians.values()) if (!c.alive) deadCivs++;
     const total = Math.max(0, entries.reduce((a, e) => a + e.points, 0));
@@ -417,27 +472,33 @@ export class SuspectMission {
       arrested: ['ARRESTED', '#ff9f5a'],
     };
     const subs: Record<SuspectOutcome, string> = {
-      repelled: '突入した SWAT を全員無力化した。',
-      survived: `${fmt(SUSPECT_MODE.holdSec)} 間の籠城に成功し、SWAT は撤退した。`,
-      killed: 'SWAT に制圧された。施錠ドア・遮蔽物・静音移動・民間人を活用しよう。',
-      arrested: '投降して身柄を拘束された。',
+      repelled: t('突入した SWAT を全員無力化した。', 'Neutralized all breaching SWAT officers.'),
+      survived: t(
+        `${fmt(SUSPECT_MODE.holdSec)} 間の籠城に成功し、SWAT は撤退した。`,
+        `Held out for ${fmt(SUSPECT_MODE.holdSec)} and forced SWAT to fall back.`,
+      ),
+      killed: t(
+        'SWAT に制圧された。施錠ドア・遮蔽物・静音移動・民間人を活用しよう。',
+        'Neutralized by SWAT. Use locked doors, cover, quiet movement, and hostages.',
+      ),
+      arrested: t('投降して身柄を拘束された。', 'Surrendered and taken into custody.'),
     };
     const report: ResultReport = {
       title: titles[o][0],
       titleColor: titles[o][1],
       subtitle: subs[o],
       subtitleGood: !failed,
-      scoreText: `総合スコア ${total}`,
+      scoreText: t(`総合スコア ${total}`, `Total Score ${total}`),
       rankText: o === 'killed' ? 'FAILED' : `RANK ${rank}`,
       rankColor: o === 'killed' ? '#ff6b6b' : '#ffd24d',
       stats: [
-        ['生存時間（突入後）', fmt(survived)],
-        ['SWAT 無力化', `${kills} / ${this.team.total}`],
-        ['トラップ（撃破 / 解除された）', `${this.team.trapKills} / ${this.team.trapsDisarmed}`],
-        ['発砲数', String(this.shotsFired)],
-        ['被弾数', String(this.hitsTaken)],
-        ['残り HP', String(Math.round(this.player.hp))],
-        ['民間人死亡', String(deadCivs)],
+        [t('生存時間（突入後）', 'Time Survived (Post-Breach)'), fmt(survived)],
+        [t('SWAT 無力化', 'SWAT Neutralized'), `${kills} / ${this.team.total}`],
+        [t('トラップ（撃破 / 解除された）', 'Traps (Kills / Disarmed)'), `${this.team.trapKills} / ${this.team.trapsDisarmed}`],
+        [t('発砲数', 'Shots Fired'), String(this.shotsFired)],
+        [t('被弾数', 'Hits Taken'), String(this.hitsTaken)],
+        [t('残り HP', 'Remaining HP'), String(Math.round(this.player.hp))],
+        [t('民間人死亡', 'Civilians Killed'), String(deadCivs)],
       ],
       entries,
     };

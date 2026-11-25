@@ -1,4 +1,5 @@
 /** 突入前交渉フェーズの汎用 UI（モード別のシナリオは modes/PreAssaultNegotiation.ts）。 */
+import { t } from '../core/i18n';
 
 export interface NegotiationMeter {
   label: string;
@@ -41,6 +42,8 @@ export interface NegotiationOption {
 export interface NegotiationLine {
   text: string;
   tone: 'me' | 'them' | 'good' | 'bad' | 'info';
+  /** 決裂・人質殺害など見込みに無い重大結果（オート交渉の結果ポップアップに原文を出す） */
+  critical?: boolean;
 }
 
 export interface NegotiationScenario {
@@ -156,7 +159,7 @@ export class NegotiationPhase {
   private readonly metersEl = el('div', 'ngp-meters');
   private readonly optionsEl = el('div', 'ngp-options');
   private readonly finishBtn = el('button', 'ngp-finish');
-  private readonly autoBtn = el('button', 'ngp-auto', '⚡ オート交渉 (A)');
+  private readonly autoBtn = el('button', 'ngp-auto', t('⚡ オート交渉 (A)', '⚡ Auto-Negotiate (A)'));
   private readonly actionsEl = el('div', 'ngp-actions');
   private popup: HTMLElement | null = null;
   private tip: HTMLElement | null = null;
@@ -179,21 +182,33 @@ export class NegotiationPhase {
     const card = el('div', 'ngp-card');
     const body = el('div', 'ngp-body');
     const side = el('div', 'ngp-side');
-    side.append(el('div', 'ngp-side-title', '通話ログ'), this.logEl);
+    side.append(el('div', 'ngp-side-title', t('通話ログ', 'CALL LOG')), this.logEl);
     body.append(this.optionsEl, side);
 
     const footer = el('div', 'ngp-footer');
-    footer.appendChild(el('div', 'ngp-help', '数字キー 1〜9 / クリックで選択 ・ 緑 = 得るもの　赤 = 失うもの　点線 = 失敗したとき'));
+    footer.appendChild(
+      el(
+        'div',
+        'ngp-help',
+        t(
+          '数字キー 1〜9 / クリックで選択 ・ 緑 = 得るもの　赤 = 失うもの　点線 = 失敗したとき',
+          'Keys 1–9 / Click to choose · Green = Gain · Red = Cost · Dashed = On Fail',
+        ),
+      ),
+    );
     this.finishBtn.type = 'button';
     this.finishBtn.addEventListener('click', this.finish);
     this.autoBtn.type = 'button';
-    this.autoBtn.title = '交渉をおまかせで数手進め、結果だけ見てすぐ突入する';
+    this.autoBtn.title = t(
+      '交渉をおまかせで数手進め、結果だけ見てすぐ突入する',
+      'Automatically run a few negotiation turns and jump straight into the breach',
+    );
     this.autoBtn.addEventListener('click', this.auto);
     this.actionsEl.append(this.autoBtn, this.finishBtn);
     footer.appendChild(this.actionsEl);
 
     card.append(
-      el('div', 'ngp-badge', 'NEGOTIATION — 突入前交渉'),
+      el('div', 'ngp-badge', t('NEGOTIATION — 突入前交渉', 'NEGOTIATION — PRE-ASSAULT')),
       el('div', 'ngp-title', scenario.title),
       el('div', 'ngp-sub', scenario.subtitle),
       this.metersEl,
@@ -230,12 +245,14 @@ export class NegotiationPhase {
     this.onTipDone = onDone;
     const tip = el('div', 'ngp-tip');
     const body = el('div', '');
-    body.innerHTML =
-      '交渉は <b>⚡ オート交渉 (A)</b> におまかせで大丈夫。良さそうな手を自動で選び、結果を見てそのまま突入できます。<br>各選択肢の意味は、慣れてから自分で選べば OK です。';
-    const close = el('button', 'ngp-tip-close', '閉じる');
+    body.innerHTML = t(
+      '交渉は <b>⚡ オート交渉 (A)</b> におまかせで大丈夫。良さそうな手を自動で選び、結果を見てそのまま突入できます。<br>各選択肢の意味は、慣れてから自分で選べば OK です。',
+      'You can let <b>⚡ Auto-Negotiate (A)</b> handle this for now. It picks sensible moves automatically and lets you breach right away.<br>Once you are comfortable, try choosing options yourself.',
+    );
+    const close = el('button', 'ngp-tip-close', t('閉じる', 'Close'));
     close.type = 'button';
     close.addEventListener('click', () => this.dismissTip());
-    tip.append(el('div', 'ngp-tip-title', '💡 はじめての方へ'), body, close);
+    tip.append(el('div', 'ngp-tip-title', t('💡 はじめての方へ', '💡 First-Time Tip')), body, close);
     this.actionsEl.classList.add('ngp-coached');
     this.actionsEl.appendChild(tip);
     this.autoBtn.classList.add('ngp-coach');
@@ -285,7 +302,14 @@ export class NegotiationPhase {
     const turns = this.scenario.turnsLeft();
     const meters: NegotiationMeter[] = [
       ...this.scenario.meters(),
-      { label: '残り交渉回数', value: turns, max: 6, color: '#7ce2f0', text: `${turns} 回`, hint: '1 回選ぶごとに 1 減る' },
+      {
+        label: t('残り交渉回数', 'Turns Remaining'),
+        value: turns,
+        max: 6,
+        color: '#7ce2f0',
+        text: t(`${turns} 回`, `${turns}`),
+        hint: t('1 回選ぶごとに 1 減る', 'Decreases by 1 per action'),
+      },
     ];
     for (const m of meters) {
       const box = el('div', 'ngp-meter');
@@ -305,7 +329,7 @@ export class NegotiationPhase {
   }
 
   private chips(row: HTMLElement, items: string[] | undefined, cls: string, prefix: string): void {
-    for (const t of items ?? []) row.appendChild(el('span', `ngp-chip ${cls}`, `${prefix}${t}`));
+    for (const item of items ?? []) row.appendChild(el('span', `ngp-chip ${cls}`, `${prefix}${item}`));
   }
 
   private render(): void {
@@ -313,7 +337,7 @@ export class NegotiationPhase {
     const over = this.scenario.isOver() || this.scenario.turnsLeft() <= 0;
     this.optionsEl.textContent = '';
     this.scenario.options.forEach((opt, i) => {
-      const reason = over ? '交渉は終了した' : opt.disabledReason();
+      const reason = over ? t('交渉は終了した', 'Negotiation ended') : opt.disabledReason();
       const btn = el('button', 'ngp-opt');
       btn.type = 'button';
       btn.disabled = reason !== null;
@@ -321,7 +345,11 @@ export class NegotiationPhase {
       const head = el('div', 'ngp-opt-head');
       head.append(el('span', 'ngp-key', String(i + 1)), el('span', 'ngp-opt-label', `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`));
       const chance = opt.chance?.() ?? null;
-      const pill = el('span', 'ngp-chance', chance === null ? '確実' : `成功率 ${Math.round(chance * 100)}%`);
+      const pill = el(
+        'span',
+        'ngp-chance',
+        chance === null ? t('確実', 'Guaranteed') : t(`成功率 ${Math.round(chance * 100)}%`, `${Math.round(chance * 100)}% Chance`),
+      );
       const c = chance ?? 1;
       const pc = c >= 0.65 ? '#5cd67d' : c >= 0.4 ? '#f2c14e' : '#ff6b6b';
       pill.style.cssText = `color:${pc};background:${pc}22;border:1px solid ${pc}88`;
@@ -331,14 +359,14 @@ export class NegotiationPhase {
       const fx = opt.effects?.() ?? {};
       if ((fx.gain?.length ?? 0) + (fx.cost?.length ?? 0) > 0) {
         const row = el('div', 'ngp-row');
-        if (chance !== null) row.appendChild(el('span', 'ngp-row-label', '成功時'));
+        if (chance !== null) row.appendChild(el('span', 'ngp-row-label', t('成功時', 'On Success')));
         this.chips(row, fx.gain, 'ngp-gain', '▲ ');
         this.chips(row, fx.cost, 'ngp-cost', '▼ ');
         btn.appendChild(row);
       }
       if (fx.fail?.length) {
         const row = el('div', 'ngp-row');
-        row.appendChild(el('span', 'ngp-row-label', '失敗時'));
+        row.appendChild(el('span', 'ngp-row-label', t('失敗時', 'On Fail')));
         this.chips(row, fx.fail, 'ngp-fail', '');
         btn.appendChild(row);
       }
@@ -376,14 +404,20 @@ export class NegotiationPhase {
       const name = `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`;
       const lines = this.lastLines;
       const failed = chance !== null && lines.some((l) => l.tone === 'bad') && !lines.some((l) => l.tone === 'good');
+      const colon = t('：', ': ');
       if (failed) {
-        bad.push(`${name} — 失敗${fx.fail?.length ? '：' + fx.fail.join(' / ') : ''}`);
+        bad.push(
+          t(
+            `${name} — 失敗${fx.fail?.length ? '：' + fx.fail.join(' / ') : ''}`,
+            `${name} — Failed${fx.fail?.length ? ': ' + fx.fail.join(' / ') : ''}`,
+          ),
+        );
       } else {
-        if (fx.gain?.length) good.push(`${name}：${fx.gain.join(' / ')}`);
-        if (fx.cost?.length) bad.push(`${name}：${fx.cost.join(' / ')}`);
+        if (fx.gain?.length) good.push(`${name}${colon}${fx.gain.join(' / ')}`);
+        if (fx.cost?.length) bad.push(`${name}${colon}${fx.cost.join(' / ')}`);
       }
       // 決裂など、見込みに無い重大な結果は原文で
-      for (const l of lines) if (l.tone === 'bad' && /決裂|殺害/.test(l.text)) bad.push(l.text);
+      for (const l of lines) if (l.critical) bad.push(l.text);
     }
     this.showPopup(good, bad);
   };
@@ -414,21 +448,24 @@ export class NegotiationPhase {
   private showPopup(good: string[], bad: string[]): void {
     const pop = el('div', 'ngp-pop');
     const card = el('div', 'ngp-pop-card');
-    card.append(el('div', 'ngp-pop-title', '📞 交渉結果'), el('div', 'ngp-pop-sub', 'おまかせで交渉を進めた。'));
+    card.append(
+      el('div', 'ngp-pop-title', t('📞 交渉結果', '📞 Negotiation Results')),
+      el('div', 'ngp-pop-sub', t('おまかせで交渉を進めた。', 'Auto-negotiation completed.')),
+    );
     let delay = 0;
     const section = (title: string, color: string, items: string[], cls: string, none: string): void => {
       const h = el('div', 'ngp-pop-sec', title);
       h.style.color = color;
       card.appendChild(h);
       if (items.length === 0) card.appendChild(el('div', 'ngp-pop-none', none));
-      for (const t of items) {
-        const it = el('div', `ngp-pop-item ${cls}`, t);
+      for (const item of items) {
+        const it = el('div', `ngp-pop-item ${cls}`, item);
         it.style.animationDelay = `${(delay += 0.12)}s`;
         card.appendChild(it);
       }
     };
-    section('▲ 得たもの', '#8ff0a8', good, 'ngp-pop-good', '特になし');
-    section('▼ デメリット', '#ff9a9a', bad, 'ngp-pop-bad', '特になし');
+    section(t('▲ 得たもの', '▲ Gained'), '#8ff0a8', good, 'ngp-pop-good', t('特になし', 'None'));
+    section(t('▼ デメリット', '▼ Drawbacks'), '#ff9a9a', bad, 'ngp-pop-bad', t('特になし', 'None'));
     const go = el('button', 'ngp-pop-go', `${this.scenario.finishLabel} (Enter)`);
     go.type = 'button';
     go.addEventListener('click', this.finish);

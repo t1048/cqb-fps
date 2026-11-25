@@ -4,6 +4,7 @@ import { blockedAtFiltered } from '../ai/SquadRoute';
 import type { EntityManager } from '../ai/EntityManager';
 import { CivilianState } from '../core/events';
 import type { GameEventBus } from '../core/events';
+import { onLocaleChange, t } from '../core/i18n';
 import type { Interaction } from '../player/Interaction';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import type { PlayerController } from '../player/PlayerController';
@@ -43,8 +44,16 @@ const HOLD_SPOTS: readonly (readonly [forward: number, side: number])[] = [
   [0.55, -0.36],
 ];
 
-const STRUGGLE_LINES = ['人質「離して！」', '人質「痛い、やめて！」', '人質が身をよじって暴れている', '人質「助けてくれ！」'];
-const pickLine = (): string => STRUGGLE_LINES[Math.floor(Math.random() * STRUGGLE_LINES.length)]!;
+const STRUGGLE_LINES: readonly [ja: string, en: string][] = [
+  ['人質「離して！」', 'Hostage: "Let me go!"'],
+  ['人質「痛い、やめて！」', 'Hostage: "Ow, stop it!"'],
+  ['人質が身をよじって暴れている', 'The hostage is thrashing and struggling!'],
+  ['人質「助けてくれ！」', 'Hostage: "Somebody help me!"'],
+];
+const pickLine = (): string => {
+  const [ja, en] = STRUGGLE_LINES[Math.floor(Math.random() * STRUGGLE_LINES.length)]!;
+  return t(ja, en);
+};
 
 /**
  * 容疑者モード: 民間人を人質として拘束し連れ回す（人間の盾）。
@@ -61,9 +70,11 @@ export class HostageGrab {
   private nextStruggle = 2;
   private phase = Math.random() * 10;
   private readonly el = document.createElement('div');
+  private readonly labelEl = document.createElement('div');
   private readonly fill = document.createElement('div');
   private shownResist = -1;
   private readonly unsubShot: () => void;
+  private readonly unsubLocale: () => void;
   private readonly eye = new THREE.Vector3();
   private readonly unreg: () => void;
 
@@ -87,8 +98,12 @@ export class HostageGrab {
     track.style.cssText = 'height:5px;margin-top:3px;background:rgba(255,255,255,.18)';
     this.fill.style.cssText = 'height:100%;width:0;background:#ff7b5a';
     track.appendChild(this.fill);
-    this.el.append(document.createTextNode('人質の抵抗'), track);
+    this.labelEl.textContent = t('人質の抵抗', 'Hostage Resistance');
+    this.el.append(this.labelEl, track);
     document.body.appendChild(this.el);
+    this.unsubLocale = onLocaleChange(() => {
+      this.labelEl.textContent = t('人質の抵抗', 'Hostage Resistance');
+    });
     this.unsubShot = bus.on('shotFired', (e) => {
       if (e.shooter === 'player' && this.held) this.addResist(this.held, RESIST_PER_SHOT);
     });
@@ -97,13 +112,16 @@ export class HostageGrab {
       // ドア操作より優先（人質を抱えている間の F は解放に使う）
       priority: 300,
       resolve: () => (this.held ? (this.aimingDoor() ? null : this.held) : this.findTarget()),
-      label: (c) => (c === this.held ? 'F: 人質を解放' : 'F 長押し: 人質を拘束して連れ回す'),
+      label: (c) =>
+        c === this.held
+          ? t('F: 人質を解放', 'F: Release Hostage')
+          : t('F 長押し: 人質を拘束して連れ回す', 'Hold F: Take Hostage as Shield'),
       onPress: (c) => {
-        if (c === this.held) this.release('人質を解放した');
+        if (c === this.held) this.release(t('人質を解放した', 'Hostage released'));
       },
       onHold: (c, _dt, sec) => {
         if (this.held || c === this.held) return;
-        this.onProgress('人質を拘束中...', sec / GRAB_HOLD_SEC);
+        this.onProgress(t('人質を拘束中...', 'Grabbing hostage...'), sec / GRAB_HOLD_SEC);
         if (sec >= GRAB_HOLD_SEC) this.grab(c);
       },
     });
@@ -123,7 +141,10 @@ export class HostageGrab {
     if (!this.held) return;
     this.addResist(this.held, RESIST_PER_PEPPER);
     this.struggleLeft = Math.max(this.struggleLeft, 0.9);
-    this.subtitle.show('人質「目が、目がぁっ！」— ペッパーボールで人質が暴れ出した', 1.4);
+    this.subtitle.show(
+      t('人質「目が、目がぁっ！」— ペッパーボールで人質が暴れ出した', 'Hostage: "My eyes, my eyes!" — Hostage panics from pepperball'),
+      1.4,
+    );
   }
 
   private addResist(c: Civilian, v: number): void {
@@ -160,7 +181,10 @@ export class HostageGrab {
     this.struggleLeft = 0;
     this.nextStruggle = 1.5 + Math.random() * 2;
     this.weapons.removeTarget(c);
-    this.subtitle.show('容疑者「動くな！来い！」— 人質を拘束した', 1.8);
+    this.subtitle.show(
+      t('容疑者「動くな！来い！」— 人質を拘束した', 'Suspect: "Don\'t move! Come here!" — Hostage taken'),
+      1.8,
+    );
   }
 
   release(msg?: string): void {
@@ -184,7 +208,7 @@ export class HostageGrab {
     if (!c) return;
     if (!c.alive || !this.player.alive) {
       this.held = null;
-      if (!c.alive) this.subtitle.show('人質が死亡した', 1.6);
+      if (!c.alive) this.subtitle.show(t('人質が死亡した', 'Hostage died'), 1.6);
       else {
         c.endShield();
         this.weapons.addTarget(c);
@@ -255,7 +279,7 @@ export class HostageGrab {
     this.resist.set(c.id, 55);
     this.cooldown.set(c.id, REGRAB_COOLDOWN);
     this.player.addViewKick(0.03, (Math.random() - 0.5) * 0.08);
-    this.subtitle.show('人質が拘束を振りほどいて逃げた！', 1.8);
+    this.subtitle.show(t('人質が拘束を振りほどいて逃げた！', 'The hostage broke free and escaped!'), 1.8);
   }
 
   private renderResist(r: number): void {
@@ -273,6 +297,7 @@ export class HostageGrab {
     this.release();
     this.unreg();
     this.unsubShot();
+    this.unsubLocale();
     this.el.remove();
   }
 }

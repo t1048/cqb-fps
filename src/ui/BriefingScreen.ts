@@ -2,6 +2,8 @@ import type { BriefingRange, MapData, StageEntry } from '../core/types';
 import { motifById } from '../world/Motif';
 import type { GameMode } from '../modes/SuspectMode';
 import { collectFloorLevels, drawFloorPlan, floorLabelAt, resolveActiveFloor } from './Minimap';
+import { getLocale, setLocale, t, tMotifLabel, tMotifSummary, tStageDesc, tStageName, tStageSize, tStageTagline } from '../core/i18n';
+import { buildSeedShareUrl, copyToClipboard, KOFI_URL, type SeedShareInfo } from './shareLinks';
 
 const PLAN_WIDTH = 560;
 const PLAN_HEIGHT = 420;
@@ -9,6 +11,9 @@ const PLAN_HEIGHT = 420;
 const STYLE_ID = 'briefing-screen-style';
 const CSS = `
 .bfs-card{width:100%;max-width:1280px;max-height:96vh;overflow:auto;background:#111822;border:1px solid #3a5170;border-radius:10px;padding:24px 30px;box-shadow:0 14px 40px rgba(0,0,0,.7);box-sizing:border-box}
+.bfs-topbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:10px}
+.bfs-topbtn{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:6px;background:#192534;border:1px solid #354a63;color:#dce6f2;font:bold 12px sans-serif;cursor:pointer;transition:background .12s,border-color .12s}
+.bfs-topbtn:hover{background:#23354b;border-color:#7fb4ec}
 .bfs-setup{display:grid;grid-template-columns:minmax(260px,2fr) minmax(320px,3fr);gap:18px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #263649}
 .bfs-step{display:flex;flex-direction:column;gap:8px}
 .bfs-step-title{font:bold 15px sans-serif;color:#b8cbe0;letter-spacing:.04em}
@@ -27,7 +32,10 @@ const CSS = `
 .bfs-seed{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font:13px sans-serif;color:#8399b0}
 .bfs-seed input{width:110px;padding:6px 8px;font:13px monospace;color:#e6eef8;background:#0b1118;border:1px solid #354a63;border-radius:5px}
 .bfs-seed button{padding:6px 10px;font:13px sans-serif;color:#d6e4f0;background:#192534;border:1px solid #354a63;border-radius:5px;cursor:pointer}
+.bfs-seed button:hover{background:#24364d;border-color:#6ea3db}
 .bfs-start{padding:15px 36px;font:bold 19px sans-serif;color:#0a121a;border:none;border-radius:8px;cursor:pointer;letter-spacing:.04em}
+.bfs-kofi{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border-radius:6px;border:1px solid rgba(255,118,115,.32);background:rgba(255,94,91,.08);color:rgba(255,204,202,.9);text-decoration:none;font:12px sans-serif;transition:background .12s,border-color .12s,color .12s}
+.bfs-kofi:hover{background:rgba(255,94,91,.2);border-color:rgba(255,118,115,.7);color:#fff}
 .bfs-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;padding:10px 12px;border-radius:8px;background:#192534;border:2px solid #34495f;color:#dce6f2;cursor:pointer;font:14px/1.4 sans-serif;transition:background .12s,border-color .12s}
 .bfs-toggle:hover,.bfs-toggle:focus-visible{background:#213248;border-color:#ff9d9d;outline:none}
 .bfs-toggle[aria-pressed="true"]{border-color:#ff7b7b;background:#ff7b7b22;box-shadow:0 0 0 1px #ff7b7b55 inset}
@@ -57,11 +65,17 @@ export interface BriefingScreenOptions {
   reinforcements?: boolean;
   /** 容疑者モード: 増援ウェーブ切替コールバック */
   onToggleReinforcements?: (enabled: boolean) => void;
+  /** 設定モーダルを開くコールバック */
+  onOpenSettings?: () => void;
+  /** シード共有 URL 生成用情報 */
+  seedShareInfo?: SeedShareInfo;
 }
 
 function formatRange(range: BriefingRange | undefined): string {
-  if (!range) return '不明';
-  return range.min === range.max ? `${range.min}名` : `${range.min}〜${range.max}名`;
+  if (!range) return t('不明', 'Unknown');
+  return range.min === range.max
+    ? t(`${range.min}名`, `${range.min}`)
+    : t(`${range.min}〜${range.max}名`, `${range.min}-${range.max}`);
 }
 
 /**
@@ -99,6 +113,36 @@ export class BriefingScreen {
     const card = document.createElement('div');
     card.className = 'bfs-card';
 
+    // 右上ユーティリティバー（言語切替・設定）
+    const topbar = document.createElement('div');
+    topbar.className = 'bfs-topbar';
+    const langBtn = document.createElement('button');
+    langBtn.type = 'button';
+    langBtn.className = 'bfs-topbtn';
+    langBtn.textContent = getLocale() === 'en' ? '🌐 日本語' : '🌐 English';
+    const onLangClick = (): void => {
+      if (this.disposed) return;
+      setLocale(getLocale() === 'en' ? 'ja' : 'en');
+    };
+    langBtn.addEventListener('click', onLangClick);
+    this.stageBtnCleanups.push(() => langBtn.removeEventListener('click', onLangClick));
+    topbar.appendChild(langBtn);
+
+    if (options.onOpenSettings) {
+      const settingsBtn = document.createElement('button');
+      settingsBtn.type = 'button';
+      settingsBtn.className = 'bfs-topbtn';
+      settingsBtn.textContent = t('⚙ 設定', '⚙ Settings');
+      const onSettingsClick = (): void => {
+        if (this.disposed) return;
+        options.onOpenSettings?.();
+      };
+      settingsBtn.addEventListener('click', onSettingsClick);
+      this.stageBtnCleanups.push(() => settingsBtn.removeEventListener('click', onSettingsClick));
+      topbar.appendChild(settingsBtn);
+    }
+    card.appendChild(topbar);
+
     // 上段: ミッション設定（① モード ② マップの広さ）
     const setup = document.createElement('div');
     setup.className = 'bfs-setup';
@@ -120,7 +164,9 @@ export class BriefingScreen {
     this.stageSlot.className = 'bfs-step';
     if (options.stages && options.stages.length > 0 && options.onSelectStage) {
       this.renderStageButtons(options.stages, options.currentStageId ?? map.id, options.onSelectStage, options.onSelectMode ? 2 : 1);
-      if (map.seed !== undefined && options.onRegenerate) this.stageSlot.appendChild(this.buildSeedRow(map.seed, options.onRegenerate));
+      if (map.seed !== undefined && options.onRegenerate) {
+        this.stageSlot.appendChild(this.buildSeedRow(map.seed, options.onRegenerate, options.seedShareInfo));
+      }
     }
     if (options.stageSelector) this.stageSlot.appendChild(options.stageSelector);
     setup.appendChild(this.stageSlot);
@@ -129,16 +175,16 @@ export class BriefingScreen {
     const header = document.createElement('div');
     header.style.cssText = 'margin-bottom:14px';
     const badge = document.createElement('div');
-    badge.textContent = suspectMode ? 'SUSPECT MODE — 籠城' : 'MISSION BRIEFING';
+    badge.textContent = suspectMode ? t('SUSPECT MODE — 籠城', 'SUSPECT MODE — BARRICADE') : 'MISSION BRIEFING';
     badge.style.cssText = `font:bold 13px monospace;letter-spacing:0.14em;color:${suspectMode ? '#ff7b7b' : '#56c8d8'};margin-bottom:2px`;
     const title = document.createElement('div');
-    title.textContent = map.name;
+    title.textContent = tStageName(map.id, map.name);
     title.style.cssText = 'font:bold 26px sans-serif;color:#f4f8fc';
     header.append(badge, title);
     if (map.motif) {
       const motif = motifById(map.motif);
       const chip = document.createElement('div');
-      chip.textContent = `モチーフ: ${motif.label}`;
+      chip.textContent = t(`モチーフ: ${motif.label}`, `Facility: ${tMotifLabel(motif.id, motif.label)}`);
       chip.style.cssText = `margin-top:4px;font:bold 13px sans-serif;letter-spacing:.08em;color:${motif.accentCss}`;
       header.appendChild(chip);
     }
@@ -154,7 +200,7 @@ export class BriefingScreen {
     const mapHeader = document.createElement('div');
     mapHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px';
     const mapLabel = document.createElement('div');
-    mapLabel.textContent = '建物間取り図（侵入前情報）';
+    mapLabel.textContent = t('建物間取り図（侵入前情報）', 'Building Floor Plan (Pre-Entry Intel)');
     mapLabel.style.cssText = 'font:bold 14px sans-serif;color:#9cb4cc;letter-spacing:0.04em';
     mapHeader.appendChild(mapLabel);
 
@@ -223,10 +269,10 @@ export class BriefingScreen {
     legend.style.cssText =
       'display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font:13px sans-serif;color:#9fb4c8';
     const legendItems: [string, string][] = [
-      ['#56c8d8', suspectMode ? 'あなたの潜伏位置' : '突入地点'],
-      ['#d89b3c', suspectMode ? 'ドア（F 長押しで施錠）' : 'ドア'],
-      ['#e05252', suspectMode ? '施錠ドア（SWAT はブリーチが必要）' : '施錠ドア（G/指示でブリーチ）'],
-      ['#967656', '遮蔽物'],
+      ['#56c8d8', suspectMode ? t('あなたの潜伏位置', 'Your Holdout Position') : t('突入地点', 'Entry Point')],
+      ['#d89b3c', suspectMode ? t('ドア（F 長押しで施錠）', 'Door (Hold F to Lock)') : t('ドア', 'Door')],
+      ['#e05252', suspectMode ? t('施錠ドア（SWAT はブリーチが必要）', 'Locked Door (SWAT Must Breach)') : t('施錠ドア（G/指示でブリーチ）', 'Locked Door (G / Order to Breach)')],
+      ['#967656', t('遮蔽物', 'Cover')],
     ];
     for (const [color, text] of legendItems) {
       const item = document.createElement('span');
@@ -248,8 +294,8 @@ export class BriefingScreen {
     const countsGrid = document.createElement('div');
     countsGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px';
     countsGrid.append(
-      this.makeStatBox(suspectMode ? '突入 SWAT' : '推定容疑者', formatRange(map.briefing?.estimatedSuspects), '#ff7b7b'),
-      this.makeStatBox(suspectMode ? '人質・民間人' : '推定人質・民間人', formatRange(map.briefing?.estimatedHostages), '#ffd24d'),
+      this.makeStatBox(suspectMode ? t('突入 SWAT', 'Incoming SWAT') : t('推定容疑者', 'Est. Suspects'), formatRange(map.briefing?.estimatedSuspects), '#ff7b7b'),
+      this.makeStatBox(suspectMode ? t('人質・民間人', 'Hostages / Civilians') : t('推定人質・民間人', 'Est. Hostages / Civilians'), formatRange(map.briefing?.estimatedHostages), '#ffd24d'),
     );
     intelCol.appendChild(countsGrid);
 
@@ -259,10 +305,12 @@ export class BriefingScreen {
       sumBox.style.cssText =
         'background:#16202c;border:1px solid #293b50;border-radius:6px;padding:12px 14px';
       const sumTitle = document.createElement('div');
-      sumTitle.textContent = '状況概要';
+      sumTitle.textContent = t('状況概要', 'Situation Overview');
       sumTitle.style.cssText = 'font:bold 14px sans-serif;color:#9cb4cc;margin-bottom:6px';
       const sumText = document.createElement('div');
-      sumText.textContent = map.briefing.summary;
+      sumText.textContent = suspectMode
+        ? map.briefing.summary
+        : tMotifSummary(map.motif, map.briefing.summary, map.seed ?? 0);
       sumText.style.cssText = 'font:15px/1.65 sans-serif;color:#dce6f2';
       sumBox.append(sumTitle, sumText);
       intelCol.appendChild(sumBox);
@@ -273,32 +321,32 @@ export class BriefingScreen {
     ctrlBox.style.cssText =
       'background:#16202c;border:1px solid #293b50;border-radius:6px;padding:12px 14px';
     const ctrlTitle = document.createElement('div');
-    ctrlTitle.textContent = '基本操作';
+    ctrlTitle.textContent = t('基本操作', 'Controls');
     ctrlTitle.style.cssText = 'font:bold 14px sans-serif;color:#9cb4cc;margin-bottom:6px';
     const ctrlList = document.createElement('div');
     ctrlList.style.cssText =
       'display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font:14px/1.5 sans-serif;color:#c7d6e6';
     const controls: [string, string][] = suspectMode
       ? [
-          ['WASD / Shift / C', '移動 / 静音（足音小） / しゃがみ（発見されにくい）'],
-          ['Q / E', '左右リーン'],
-          ['左クリック / R', '射撃（改造フルオート拳銃） / リロード（予備弾は有限）'],
-          ['F / F 長押し', 'ドア開閉 / 閉じたドアを施錠・解錠'],
-          ['民間人に F 長押し', '人質を拘束して連れ回す（もう一度 F で解放）'],
-          ['ホイール', 'ドア段階開閉'],
-          ['Space / Space 長押し', '準備完了（即突入） / 投降'],
-          ['M', 'ミニマップ ⇔ 全画面マップ切替'],
+          ['WASD / Shift / C', t('移動 / 静音（足音小） / しゃがみ（発見されにくい）', 'Move / Silent Walk / Crouch (Harder to spot)')],
+          ['Q / E', t('左右リーン', 'Lean Left / Right')],
+          [t('左クリック / R', 'LMB / R'), t('射撃（改造フルオート拳銃） / リロード（予備弾は有限）', 'Fire (Auto Pistol) / Reload (Limited mags)')],
+          [t('F / F 長押し', 'F / Hold F'), t('ドア開閉 / 閉じたドアを施錠・解錠', 'Open/Close Door / Lock or Unlock Closed Door')],
+          [t('民間人に F 長押し', 'Hold F on Civilian'), t('人質を拘束して連れ回す（もう一度 F で解放）', 'Grab Hostage as Shield (Press F to release)')],
+          [t('ホイール', 'Wheel'), t('ドア段階開閉', 'Incremental Door Open')],
+          [t('Space / Space 長押し', 'Space / Hold Space'), t('準備完了（即突入） / 投降', 'Ready Up (Start Assault) / Surrender')],
+          ['M / ESC', t('マップ切替 / ポーズ・設定', 'Toggle Map / Pause & Settings')],
         ]
       : [
-      ['WASD / Shift / C', '移動 / 静音 / しゃがみ（Ctrl は不使用）'],
-      ['Q / E', '左右リーン'],
-      ['左 / 右クリック', '射撃（高精度） / 部隊指揮メニュー（保持）'],
-      ['Z / X / T', 'クイック指示 / 隊員集合 / 指揮対象切替'],
-      ['Tab', '突入モード切替（ダイナミック ⇔ ステルス）'],
-      ['Space', '警告コール（投降勧告）'],
-      ['F / ホイール / G', '開閉・拘束 / 段階開閉 / ブリーチ'],
-      ['1 / 2 / 4', '主武器 / 非致死 / フラッシュ'],
-      ['M', 'ミニマップ ⇔ 全画面マップ切替'],
+          ['WASD / Shift / C', t('移動 / 静音 / しゃがみ（Ctrl は不使用）', 'Move / Silent Walk / Crouch (No Ctrl)')],
+          ['Q / E', t('左右リーン', 'Lean Left / Right')],
+          [t('左 / 右クリック', 'LMB / RMB'), t('射撃（高精度） / 部隊指揮メニュー（保持）', 'Fire / Squad Command Menu (Hold)')],
+          ['Z / X / T', t('クイック指示 / 隊員集合 / 指揮対象切替', 'Quick Order / Fall In / Switch Element')],
+          ['Tab', t('突入モード切替（ダイナミック ⇔ ステルス）', 'Entry Style (Dynamic ⇔ Stealth)')],
+          ['Space', t('警告コール（投降勧告）', 'Compliance Shout (Warning Call)')],
+          [t('F / ホイール / G', 'F / Wheel / G'), t('開閉・拘束 / 段階開閉 / ブリーチ', 'Interact & Arrest / Peek Door / Breach')],
+          ['1 / 2 / 3', t('主武器 / 非致死 / フラッシュ', 'Primary / Less-Lethal / Flashbang')],
+          ['M / ESC', t('マップ切替 / ポーズ・設定', 'Toggle Map / Pause & Settings')],
         ];
     for (const [k, desc] of controls) {
       const kEl = document.createElement('span');
@@ -313,17 +361,27 @@ export class BriefingScreen {
 
     body.append(mapCol, intelCol);
 
-    // フッター（突入開始ボタン）
+    // フッター（控えめな Ko-fi + 突入開始ボタン）
     const footer = document.createElement('div');
     footer.style.cssText = 'margin-top:20px;padding-top:14px;border-top:1px solid #263649;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap';
+    const footLeft = document.createElement('div');
+    footLeft.style.cssText = 'display:flex;align-items:center;gap:12px;flex-wrap:wrap';
     const footHelp = document.createElement('div');
-    footHelp.textContent = 'モードとマップの広さを選んだら、交渉フェーズへ進む';
+    footHelp.textContent = t('モードとマップの広さを選んだら、交渉フェーズへ進む', 'Select mode & map size, then proceed to negotiation');
     footHelp.style.cssText = 'font-size:14px;color:#8399b0';
+    const kofi = document.createElement('a');
+    kofi.className = 'bfs-kofi';
+    kofi.href = KOFI_URL;
+    kofi.target = '_blank';
+    kofi.rel = 'noopener noreferrer';
+    kofi.textContent = t('☕ Ko-fi で応援', '☕ Support on Ko-fi');
+    footLeft.append(footHelp, kofi);
+
     this.startBtn.type = 'button';
     this.startBtn.className = 'bfs-start';
-    this.startBtn.textContent = '交渉フェーズへ (Enter)';
+    this.startBtn.textContent = t('交渉フェーズへ (Enter)', 'Proceed to Negotiation (Enter)');
     this.startBtn.style.background = suspectMode ? '#ff7b7b' : '#56c8d8';
-    footer.appendChild(footHelp);
+    footer.appendChild(footLeft);
     this.startBtn.addEventListener('click', this.handleStart);
     footer.appendChild(this.startBtn);
 
@@ -333,12 +391,12 @@ export class BriefingScreen {
   }
 
   private stepTitle(num: number, text: string): HTMLElement {
-    const t = document.createElement('div');
-    t.className = 'bfs-step-title';
+    const tEl = document.createElement('div');
+    tEl.className = 'bfs-step-title';
     const b = document.createElement('b');
     b.textContent = String(num);
-    t.append(b, document.createTextNode(text));
-    return t;
+    tEl.append(b, document.createTextNode(text));
+    return tEl;
   }
 
   /** 選択カード（選択中はハイライトして押せない） */
@@ -367,7 +425,7 @@ export class BriefingScreen {
   private checkBadge(color: string): HTMLElement {
     const c = document.createElement('span');
     c.className = 'bfs-check';
-    c.textContent = '✓ 選択中';
+    c.textContent = t('✓ 選択中', '✓ Selected');
     c.style.cssText = `color:#0a121a;background:${color}`;
     return c;
   }
@@ -378,7 +436,7 @@ export class BriefingScreen {
     onSelectStage: (stageId: string) => void,
     stepNum: number,
   ): void {
-    this.stageSlot.appendChild(this.stepTitle(stepNum, 'マップの広さ（間取りは毎回ランダム）'));
+    this.stageSlot.appendChild(this.stepTitle(stepNum, t('マップの広さ（間取りは毎回ランダム）', 'Map Size (Procedural Layout)')));
     const grid = document.createElement('div');
     grid.className = 'bfs-choices';
     grid.style.gridTemplateColumns = `repeat(${Math.min(stages.length, 3)}, minmax(0, 1fr))`;
@@ -390,23 +448,23 @@ export class BriefingScreen {
         color,
         (b) => {
           b.dataset.stageId = stage.id;
-          b.title = stage.description ?? stage.name;
+          b.title = tStageDesc(stage.id, stage.description ?? stage.name);
           const head = document.createElement('div');
           head.className = 'bfs-choice-name';
           if (stage.size) {
             const sz = document.createElement('span');
             sz.className = 'bfs-size';
-            sz.textContent = stage.size;
+            sz.textContent = tStageSize(stage.id, stage.size);
             sz.style.color = active ? color : '#cfe0f0';
             head.appendChild(sz);
           } else {
-            head.appendChild(document.createTextNode(stage.name));
+            head.appendChild(document.createTextNode(tStageName(stage.id, stage.name)));
           }
           if (active) head.appendChild(this.checkBadge(color));
           b.appendChild(head);
           const desc = document.createElement('div');
           desc.className = 'bfs-choice-desc';
-          desc.textContent = stage.tagline ?? stage.description ?? '';
+          desc.textContent = tStageTagline(stage.id, stage.tagline ?? stage.description ?? '');
           b.appendChild(desc);
         },
         () => onSelectStage(stage.id),
@@ -424,12 +482,12 @@ export class BriefingScreen {
   ): HTMLElement {
     const step = document.createElement('div');
     step.className = 'bfs-step';
-    step.appendChild(this.stepTitle(1, 'モード'));
+    step.appendChild(this.stepTitle(1, t('モード', 'Mode')));
     const grid = document.createElement('div');
     grid.className = 'bfs-choices';
     const items: [GameMode, string, string, string][] = [
-      ['swat', '🛡 SWAT（突入側）', '隊長として部隊を指揮。人質を救出し容疑者を制圧する', '#56c8d8'],
-      ['suspect', '🔒 容疑者（籠城側）', '立てこもり犯として突入してくる SWAT をしのぐ', '#ff7b7b'],
+      ['swat', t('🛡 SWAT（突入側）', '🛡 SWAT (Assaulter)'), t('隊長として部隊を指揮。人質を救出し容疑者を制圧する', 'Lead your squad, rescue hostages, and neutralize threats'), '#56c8d8'],
+      ['suspect', t('🔒 容疑者（籠城側）', '🔒 Suspect (Defender)'), t('立てこもり犯として突入してくる SWAT をしのぐ', 'Hold out against an incoming SWAT tactical raid'), '#ff7b7b'],
     ];
     for (const [m, name, descText, color] of items) {
       const active = m === mode;
@@ -472,10 +530,13 @@ export class BriefingScreen {
     const copy = document.createElement('div');
     const head = document.createElement('div');
     head.style.cssText = 'font:bold 14px sans-serif;color:#f4f8fc';
-    head.textContent = '増援ウェーブ';
+    head.textContent = t('増援ウェーブ', 'Reinforcement Waves');
     const desc = document.createElement('div');
     desc.className = 'bfs-choice-desc';
-    desc.textContent = 'SWAT を倒しても残り時間があれば外周から 2 人組（盾持ち＋ライフル）が追加突入';
+    desc.textContent = t(
+      'SWAT を倒しても残り時間があれば外周から 2 人組（盾持ち＋ライフル）が追加突入',
+      'Additional 2-man SWAT teams (Shield + Rifle) breach while time remains',
+    );
     copy.append(head, desc);
 
     const badge = document.createElement('span');
@@ -492,23 +553,23 @@ export class BriefingScreen {
     return btn;
   }
 
-  private buildSeedRow(seed: number, onRegenerate: (seed?: number) => void): HTMLElement {
+  private buildSeedRow(seed: number, onRegenerate: (seed?: number) => void, seedShareInfo?: SeedShareInfo): HTMLElement {
     const row = this.seedRow;
     row.className = 'bfs-seed';
     const reroll = document.createElement('button');
     reroll.type = 'button';
     reroll.className = 'bfs-reroll';
-    reroll.textContent = '🎲 同じ広さで別の間取りにする';
+    reroll.textContent = t('🎲 同じ広さで別の間取りにする', '🎲 Reroll Floor Plan');
     const label = document.createElement('span');
     label.textContent = `SEED ${seed}`;
     label.style.cssText = 'font-family:monospace;color:#7ce2f0;margin-left:auto';
     const input = document.createElement('input');
     input.type = 'text';
     input.inputMode = 'numeric';
-    input.placeholder = 'シード指定';
+    input.placeholder = t('シード指定', 'Enter seed');
     const apply = document.createElement('button');
     apply.type = 'button';
-    apply.textContent = '適用';
+    apply.textContent = t('適用', 'Apply');
 
     const onReroll = (): void => {
       if (this.disposed || !this.visible) return;
@@ -538,6 +599,32 @@ export class BriefingScreen {
       input.removeEventListener('keydown', onInputKey);
     });
     row.append(reroll, label, input, apply);
+
+    if (seedShareInfo) {
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      const defaultText = t('📋 シードURLをコピー', '📋 Copy Seed URL');
+      copyBtn.textContent = defaultText;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const onCopy = (): void => {
+        if (this.disposed) return;
+        const url = buildSeedShareUrl(seedShareInfo);
+        void copyToClipboard(url).then((ok) => {
+          if (!ok || this.disposed) return;
+          copyBtn.textContent = t('✓ コピー完了', '✓ Copied!');
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (!this.disposed) copyBtn.textContent = defaultText;
+          }, 2000);
+        });
+      };
+      copyBtn.addEventListener('click', onCopy);
+      this.stageBtnCleanups.push(() => {
+        copyBtn.removeEventListener('click', onCopy);
+        if (timer) clearTimeout(timer);
+      });
+      row.appendChild(copyBtn);
+    }
     return row;
   }
 

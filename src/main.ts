@@ -45,6 +45,10 @@ import { PlayerAvatar } from './player/PlayerAvatar';
 import { SquadSystem } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
 import { applyMissionRoster } from './rules/MissionRoster';
+import { PauseMenu } from './ui/PauseMenu';
+import type { SeedShareInfo } from './ui/shareLinks';
+import { getSettings, subscribeSettings } from './core/Settings';
+import { t, tRoomName } from './core/i18n';
 import {
   SuspectMission,
   parseGameMode,
@@ -56,7 +60,7 @@ import {
   type ResultReport,
 } from './modes/SuspectMode';
 
-type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'ended';
+type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'paused' | 'ended';
 
 /** 1 回の起動で生成した全リソースをまとめて破棄できるアプリ。リトライ = destroy → 再 create。 */
 class App {
@@ -89,6 +93,9 @@ class App {
   private readonly minimap: Minimap;
   private readonly briefingScreen: BriefingScreen;
   private readonly negotiationPhase: NegotiationPhase;
+  private readonly pauseMenu: PauseMenu;
+  private readonly unsubSettings: () => void;
+  private wasLockedDuringPlay = false;
   /** 初回のみ: Z キーで仲間に指示するツアー（SWAT モード） */
   private squadTour: SquadTour | null = null;
   private readonly hostageGrab: HostageGrab | null = null;
@@ -142,13 +149,14 @@ class App {
       swatCount = setup.swatCount;
     }
     this.mapId = map.id;
+    const initialSettings = getSettings();
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.resolution = new AdaptiveResolution(this.renderer);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     // 室内の明暗差を潰さないトーンマップ + 近傍照明 1 灯だけの柔らかい影
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = initialSettings.shadowsEnabled;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
@@ -173,14 +181,18 @@ class App {
     this.scene.environment = this.envTex;
     this.scene.environmentIntensity = 0.35;
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);
+    this.postfx.setAO(initialSettings.aoEnabled);
     this.resolution.onChange = (r) => {
       this.postfx.setPixelRatio(r);
-      this.postfx.setAO(r > MIN_RATIO + 0.01);
+      this.postfx.setAO(getSettings().aoEnabled && r > MIN_RATIO + 0.01);
     };
 
     this.input = new InputManager(this.renderer.domElement);
+    this.input.allowAutoPointerLock = false;
     this.player = new PlayerController(this.camera, this.input, this.world.colliders, playerCfg, this.bus, map);
     this.audio = new AudioEngine();
+    this.audio.setMasterVolume(initialSettings.masterVolume);
+    this.audio.setMuted(initialSettings.muted);
     this.audioBridge = new AudioBridge(this.bus, this.audio, this.player, this.world.colliders, playerCfg.arrest.radioReportChance ?? 0.38);
     this.audioBridge.updateListener(this.camera);
     this.interaction = new Interaction(this.input, doorCfg.wheelStepThreshold);
@@ -259,11 +271,11 @@ class App {
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {
       const reply =
         from === 'SURRENDER' && to === 'ENGAGE'
-          ? '隙を見せたな！'
+          ? t('隙を見せたな！', 'Got an opening!')
           : to === 'HESITATE'
-            ? '待ってくれ……'
+            ? t('待ってくれ……', 'Wait, hold on...')
             : to === 'SURRENDER'
-              ? 'わかった、手を上げる！'
+              ? t('わかった、手を上げる！', 'Okay, hands up!')
               : '';
       const suspect = this.entities.suspects.get(id);
       if (!reply || !suspect) return;
@@ -271,7 +283,7 @@ class App {
       const screen = new THREE.Vector3(chest.x, chest.y, chest.z).project(this.camera);
       if (Math.max(Math.abs(screen.x), Math.abs(screen.y), Math.abs(screen.z)) <= 1 &&
           hasLineOfSight(this.world.colliders, this.player.getEyePosition(), chest)) {
-        this.pendingReply = '容疑者「' + reply + '」';
+        this.pendingReply = t(`容疑者「${reply}」`, `Suspect: "${reply}"`);
       }
     });
     if (!suspect) {
@@ -358,7 +370,7 @@ class App {
         entry: swatSpawns[0] ?? { x: 0, y: 0, z: 0 },
         isPrep: () => sm.preparing,
         showGauge: (label, ratio) => sm.showGauge(label, ratio),
-        onCivilianKilled: (c) => sm.addEntry(`民間人殺害・トラップ (${c.id})`, -400),
+        onCivilianKilled: (c) => sm.addEntry(t(`民間人殺害・トラップ (${c.id})`, `Civilian Killed by Trap (${c.id})`), -400),
       });
       sm.attachFortify(this.fortify);
       this.swatTeam.attachTraps(this.fortify);
@@ -394,13 +406,16 @@ class App {
           executeHostage: (c) => {
             if (c.damage(9999)) this.weapons.removeTarget(c);
           },
-          roomName: (s) =>
-            map.rooms.find(
-              (r) =>
-                Math.abs((r.floorY ?? 0) - s.body.footY) < 0.75 &&
-                Math.abs(s.body.px - r.x) <= r.width / 2 &&
-                Math.abs(s.body.pz - r.z) <= r.depth / 2,
-            )?.name ?? '不明な区画',
+          roomName: (s) => {
+            const raw =
+              map.rooms.find(
+                (r) =>
+                  Math.abs((r.floorY ?? 0) - s.body.footY) < 0.75 &&
+                  Math.abs(s.body.px - r.x) <= r.width / 2 &&
+                  Math.abs(s.body.pz - r.z) <= r.depth / 2,
+              )?.name ?? '不明な区画';
+            return tRoomName(raw);
+          },
         }),
         () => this.startMission(),
       );
@@ -423,7 +438,7 @@ class App {
       this.interaction,
       this.mission ?? undefined,
       suspect ? undefined : this.squad,
-      motif ? { label: motif.label, color: motif.accentCss } : undefined,
+      motif ? { id: motif.id, label: motif.label, color: motif.accentCss } : undefined,
     );
     this.minimap = new Minimap(
       document.body,
@@ -435,6 +450,19 @@ class App {
       () => this.squad.getMinimapWaypoints(),
     );
     this.minimap.setVisible(false);
+
+    const seedShareInfo: SeedShareInfo | undefined =
+      map.seed !== undefined
+        ? { stage: map.id, seed: map.seed, mode, reinforcements }
+        : undefined;
+
+    this.pauseMenu = new PauseMenu(document.body, {
+      onResume: () => this.resumeGame(),
+      onRetry: () => onRetry(),
+      onBackToBriefing: () => onRetry(),
+      seedInfo: seedShareInfo,
+    });
+
     this.briefingScreen = new BriefingScreen(document.body, map, {
       onStart: () => this.openNegotiation(),
       stages,
@@ -445,6 +473,8 @@ class App {
       onSelectMode,
       reinforcements,
       onToggleReinforcements,
+      onOpenSettings: () => this.pauseMenu.open('settings'),
+      seedShareInfo,
     });
     this.briefingScreen.show();
     if (isFirstRun('negotiation')) this.negotiationPhase.showFirstTimeTip(() => markSeen('negotiation'));
@@ -456,7 +486,36 @@ class App {
       stages,
       currentStageId: map.id,
       onSelectStage,
+      seedShareInfo,
     });
+
+    this.unsubSettings = subscribeSettings((s, prev) => {
+      this.audio.setMasterVolume(s.masterVolume);
+      this.audio.setMuted(s.muted);
+      this.postfx.setAO(s.aoEnabled && this.resolution.pixelRatio > MIN_RATIO + 0.01);
+      if (s.shadowsEnabled !== prev.shadowsEnabled) {
+        this.renderer.shadowMap.enabled = s.shadowsEnabled;
+        this.renderer.shadowMap.needsUpdate = true;
+      }
+      if (s.language !== prev.language) {
+        if (this.phase === 'briefing') {
+          onRetry();
+        } else {
+          this.hud.refreshLocale();
+        }
+      }
+    });
+
+    this.input.onPointerLockChange = (locked) => {
+      if (this.phase === 'playing') {
+        if (locked) {
+          this.wasLockedDuringPlay = true;
+        } else if (this.wasLockedDuringPlay) {
+          this.pauseGame();
+        }
+      }
+    };
+    window.addEventListener('keydown', this.onGlobalKeyDown);
     window.addEventListener('resize', this.onResize);
     Object.defineProperty(window, '__cqbDebug', {
       configurable: true,
@@ -485,6 +544,7 @@ class App {
   /** ブリーフィング → 突入前交渉 */
   private openNegotiation(): void {
     if (this.phase !== 'briefing') return;
+    this.pauseMenu.hide();
     this.phase = 'negotiation';
     this.audio.unlock();
     this.briefingScreen.hide();
@@ -493,7 +553,11 @@ class App {
 
   private startMission(): void {
     if (this.phase !== 'briefing' && this.phase !== 'negotiation') return;
+    this.pauseMenu.hide();
     this.phase = 'playing';
+    this.wasLockedDuringPlay = false;
+    this.input.allowAutoPointerLock = true;
+    this.hud.setPaused(false);
     this.audio.unlock();
     this.briefingScreen.hide();
     this.negotiationPhase.hide();
@@ -511,9 +575,64 @@ class App {
     }
   }
 
+  private pauseGame(): void {
+    if (this.phase !== 'playing') return;
+    this.phase = 'paused';
+    this.input.allowAutoPointerLock = false;
+    this.hud.setPaused(true);
+    if (document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch {
+        // ignore
+      }
+    }
+    this.pauseMenu.open('pause');
+  }
+
+  private resumeGame(): void {
+    if (this.phase !== 'paused') return;
+    this.pauseMenu.hide();
+    this.phase = 'playing';
+    this.wasLockedDuringPlay = false;
+    this.input.allowAutoPointerLock = true;
+    this.hud.setPaused(false);
+    try {
+      void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
+        // fallback to click-to-lock
+      });
+    } catch {
+      // fallback to click-to-lock
+    }
+  }
+
+  private onGlobalKeyDown = (e: KeyboardEvent): void => {
+    if (e.repeat) return;
+    if (e.code === 'Escape') {
+      if (this.pauseMenu.isOpen && this.pauseMenu.currentMode === 'settings') {
+        e.preventDefault();
+        this.pauseMenu.hide();
+      } else if (this.phase === 'paused') {
+        e.preventDefault();
+        this.resumeGame();
+      } else if (this.phase === 'playing') {
+        e.preventDefault();
+        this.pauseGame();
+      }
+    } else if (e.code === 'KeyP') {
+      if (this.phase === 'playing') {
+        e.preventDefault();
+        this.pauseGame();
+      } else if (this.phase === 'paused') {
+        e.preventDefault();
+        this.resumeGame();
+      }
+    }
+  };
+
   /** プレイ中の誤操作（Ctrl+W 等）によるタブ閉じ・離脱を確認する */
   private onBeforeUnload = (e: BeforeUnloadEvent): void => {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' && this.phase !== 'paused') return;
     e.preventDefault();
     e.returnValue = '';
   };
@@ -521,6 +640,9 @@ class App {
   private endMission(failed = false, report?: ResultReport): void {
     if (this.phase === 'ended') return;
     this.phase = 'ended';
+    this.input.allowAutoPointerLock = false;
+    this.pauseMenu.hide();
+    this.hud.setPaused(false);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.briefingScreen.hide();
     this.minimap.setVisible(false);
@@ -534,7 +656,7 @@ class App {
   }
 
   private update(dt: number): void {
-    if (this.phase === 'briefing' || this.phase === 'negotiation') {
+    if (this.phase === 'briefing' || this.phase === 'negotiation' || this.phase === 'paused') {
       this.input.consumeWheel();
       this.input.consumeMouseDelta();
       this.input.endFrame();
@@ -621,10 +743,11 @@ class App {
   }
 
   private render(): void {
+    const inWorld = this.phase === 'playing' || this.phase === 'paused';
     this.renderer.autoClear = true;
-    if (this.phase === 'playing') this.postfx.render();
+    if (inWorld) this.postfx.render();
     else this.renderer.render(this.scene, this.camera);
-    if (this.phase === 'playing') {
+    if (inWorld) {
       this.renderer.autoClear = false;
       this.renderer.clearDepth();
       this.renderer.render(this.equipmentScene, this.viewModel.camera);
@@ -665,6 +788,9 @@ class App {
     delete (window as unknown as { __cqbStep?: unknown }).__cqbStep;
     delete (window as unknown as { __cqbApp?: unknown }).__cqbApp;
     this.loop.destroy();
+    this.unsubSettings();
+    window.removeEventListener('keydown', this.onGlobalKeyDown);
+    this.pauseMenu.dispose();
     this.briefingScreen.dispose();
     this.squadTour?.dispose();
     this.minimap.dispose();

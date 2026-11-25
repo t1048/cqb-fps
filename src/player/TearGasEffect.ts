@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
+import { t } from '../core/i18n';
 import type { Vec3 } from '../core/types';
 import type { Subtitle } from '../ui/Subtitle';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
@@ -69,7 +70,7 @@ export class TearGasEffect {
     if (density > 0) {
       if (!this.warned && this.level < 8) {
         this.warned = true;
-        this.subtitle.show('催涙ガスだ！ この部屋から離れろ！', 1.8);
+        this.subtitle.show(t('催涙ガスだ！ この部屋から離れろ！', 'Tear gas! Get out of this room!'), 1.8);
       }
       this.level = Math.min(100, this.level + BUILD_PER_SEC * density * dt);
     } else {
@@ -92,7 +93,7 @@ export class TearGasEffect {
         const pos: Vec3 = { x: p.x, y: p.y + 1.2, z: p.z };
         this.bus.emit('playerCough', { pos });
         this.bus.emit('noise', { pos, radius: COUGH_NOISE_RADIUS, kind: 'voice', source: 'player' });
-        this.subtitle.show('ゲホッ、ゴホッ…！ 催涙ガスで息ができない！', 1.2);
+        this.subtitle.show(t('ゲホッ、ゴホッ…！ 催涙ガスで息ができない！', "*Cough, hack*...! Can't breathe in this gas!"), 1.2);
         this.player.addViewKick(0.022 * k, (Math.random() - 0.5) * 0.035);
       }
     }

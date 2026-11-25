@@ -2,6 +2,8 @@ import type { StageEntry } from '../core/types';
 import type { RoE } from '../rules/RoE';
 import type { ScoreEntry } from '../rules/ScoreBoard';
 import type { ResultReport } from '../modes/SuspectMode';
+import { t, tRoeLabel, tStageDesc, tStageName } from '../core/i18n';
+import { buildSeedShareUrl, copyToClipboard, KOFI_URL, type SeedShareInfo } from './shareLinks';
 
 const ROW_STYLE = 'display:flex;justify-content:space-between;gap:24px;padding:2px 0';
 
@@ -40,7 +42,7 @@ export class ScoreHud {
   private push(e: ScoreEntry): void {
     if (this.disposed) return;
     const line = document.createElement('div');
-    line.textContent = `${e.label} ${fmtPts(e.points)}`;
+    line.textContent = `${tRoeLabel(e.kind, e.label)} ${fmtPts(e.points)}`;
     line.style.color = e.points < 0 ? '#ff6b6b' : '#8fe38f';
     this.logEl.prepend(line);
     this.lines.unshift(line);
@@ -59,6 +61,7 @@ export interface ResultScreenOptions {
   stages?: readonly StageEntry[];
   currentStageId?: string;
   onSelectStage?: (stageId: string) => void;
+  seedShareInfo?: SeedShareInfo;
 }
 
 /** ミッション終了時のリザルト画面。リトライボタン / R / Enter で onRetry、または別ステージへ切替。 */
@@ -90,7 +93,14 @@ export class ResultScreen {
     title.style.cssText = `font:bold 28px sans-serif;margin-bottom:8px;color:${report ? report.titleColor : failed ? '#ff6b6b' : '#7ce2f0'}`;
     panel.appendChild(title);
 
-    const subText = report ? report.subtitle : failed ? '隊長が行動不能になりました。遮蔽物・リーン・隊員の先行突入を活用してください。' : undefined;
+    const subText = report
+      ? report.subtitle
+      : failed
+        ? t(
+            '隊長が行動不能になりました。遮蔽物・リーン・隊員の先行突入を活用してください。',
+            'Team Leader incapacitated. Use cover, leaning, and let your squad lead entries.',
+          )
+        : undefined;
     if (subText) {
       const good = report?.subtitleGood === true;
       const sub = document.createElement('div');
@@ -107,8 +117,8 @@ export class ResultScreen {
     score.textContent = report
       ? report.scoreText
       : b.maxPossibleScore > 0
-        ? `総合スコア ${b.total} / ${b.maxPossibleScore}`
-        : `総合スコア ${b.total}`;
+        ? t(`総合スコア ${b.total} / ${b.maxPossibleScore}`, `Total Score ${b.total} / ${b.maxPossibleScore}`)
+        : t(`総合スコア ${b.total}`, `Total Score ${b.total}`);
     score.style.cssText = 'font:bold 22px sans-serif';
     const rank = document.createElement('div');
     rank.textContent = report ? report.rankText : failed ? 'FAILED' : `RANK ${b.rank}`;
@@ -117,12 +127,12 @@ export class ResultScreen {
     panel.appendChild(summary);
 
     const stats: [string, string][] = report?.stats ?? [
-      ['クリアタイム', fmtTime(this.roe.elapsed)],
-      ['逮捕', String(b.count('arrest'))],
-      ['証拠回収', String(b.count('evidence'))],
-      ['無力化(正当防衛)', String(b.count('neutralize'))],
-      ['民間人保護', String(b.count('civilianSecured'))],
-      ['RoE違反', String(b.violations)],
+      [t('クリアタイム', 'Clear Time'), fmtTime(this.roe.elapsed)],
+      [t('逮捕', 'Arrests'), String(b.count('arrest'))],
+      [t('証拠回収', 'Evidence Collected'), String(b.count('evidence'))],
+      [t('無力化(正当防衛)', 'Neutralized (Authorized)'), String(b.count('neutralize'))],
+      [t('民間人保護', 'Civilians Secured'), String(b.count('civilianSecured'))],
+      [t('RoE違反', 'RoE Violations'), String(b.violations)],
     ];
     for (const [k, v] of stats) {
       const row = document.createElement('div');
@@ -136,20 +146,21 @@ export class ResultScreen {
     }
 
     const h = document.createElement('div');
-    h.textContent = '評価内訳';
+    h.textContent = t('評価内訳', 'Score Breakdown');
     h.style.cssText = 'font:bold 16px sans-serif;margin:14px 0 4px;border-top:1px solid #445;padding-top:10px';
     panel.appendChild(h);
-    const entries: { time: number; label: string; points: number; targetId?: string }[] = report?.entries ?? b.entries;
+    const entries: { time: number; label: string; points: number; targetId?: string; kind?: string }[] = report?.entries ?? b.entries;
     if (entries.length === 0) {
       const none = document.createElement('div');
-      none.textContent = '(なし)';
+      none.textContent = t('(なし)', '(None)');
       panel.appendChild(none);
     }
     for (const e of entries) {
       const row = document.createElement('div');
       row.style.cssText = ROW_STYLE + ';color:' + (e.points < 0 ? '#ff6b6b' : '#8fe38f');
       const a = document.createElement('span');
-      a.textContent = e.targetId ? `[${fmtTime(e.time)}] ${e.label} (${e.targetId})` : `[${fmtTime(e.time)}] ${e.label}`;
+      const lbl = e.kind ? tRoeLabel(e.kind, e.label) : e.label;
+      a.textContent = e.targetId ? `[${fmtTime(e.time)}] ${lbl} (${e.targetId})` : `[${fmtTime(e.time)}] ${lbl}`;
       const c = document.createElement('span');
       c.textContent = fmtPts(e.points);
       row.append(a, c);
@@ -158,11 +169,61 @@ export class ResultScreen {
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = 'リトライ (R / Enter)';
+    btn.textContent = t('リトライ (R / Enter)', 'Retry (R / Enter)');
     btn.style.cssText = 'margin-top:18px;width:100%;padding:10px;font:bold 16px sans-serif;cursor:pointer';
     btn.addEventListener('click', this.retry);
     this.cleanups.push(() => btn.removeEventListener('click', this.retry));
     panel.appendChild(btn);
+
+    // 共有・サポート行（控えめなシードコピー＆Ko-fi）
+    const highRank =
+      !failed &&
+      ((!report && (b.rank === 'S' || b.rank === 'A')) ||
+        (report?.subtitleGood === true && /S|A/.test(report.rankText)));
+    const shareBar = document.createElement('div');
+    shareBar.style.cssText =
+      'margin-top:12px;padding-top:10px;border-top:1px solid #2b3540;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap';
+
+    const seedInfo = this.options?.seedShareInfo;
+    if (seedInfo) {
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      const defaultLabel = t(`📋 このシードをコピー (#${seedInfo.seed})`, `📋 Copy Seed URL (#${seedInfo.seed})`);
+      copyBtn.textContent = defaultLabel;
+      copyBtn.style.cssText =
+        'padding:6px 11px;font:12px sans-serif;color:#cfe2f5;background:#1b2633;border:1px solid #3c526b;border-radius:5px;cursor:pointer';
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const onCopy = (): void => {
+        if (this.disposed) return;
+        void copyToClipboard(buildSeedShareUrl(seedInfo)).then((ok) => {
+          if (!ok || this.disposed) return;
+          copyBtn.textContent = t('✓ シードURLをコピーしました', '✓ Seed URL Copied!');
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (!this.disposed) copyBtn.textContent = defaultLabel;
+          }, 2200);
+        });
+      };
+      copyBtn.addEventListener('click', onCopy);
+      this.cleanups.push(() => {
+        copyBtn.removeEventListener('click', onCopy);
+        if (timer) clearTimeout(timer);
+      });
+      shareBar.appendChild(copyBtn);
+    }
+
+    const kofi = document.createElement('a');
+    kofi.href = KOFI_URL;
+    kofi.target = '_blank';
+    kofi.rel = 'noopener noreferrer';
+    kofi.textContent = highRank
+      ? t('☕ お見事！Ko-fi で制作を応援', '☕ Great run! Support on Ko-fi')
+      : t('☕ Ko-fi で応援', '☕ Support on Ko-fi');
+    kofi.style.cssText = highRank
+      ? 'padding:6px 12px;font:bold 12px sans-serif;color:#ffe6e5;background:rgba(255,94,91,0.18);border:1px solid rgba(255,118,115,0.65);border-radius:5px;text-decoration:none;margin-left:auto'
+      : 'padding:6px 11px;font:12px sans-serif;color:rgba(255,204,202,0.88);background:rgba(255,94,91,0.08);border:1px solid rgba(255,118,115,0.32);border-radius:5px;text-decoration:none;margin-left:auto';
+    shareBar.appendChild(kofi);
+    panel.appendChild(shareBar);
 
     const stages = this.options?.stages;
     const onSelectStage = this.options?.onSelectStage;
@@ -170,7 +231,7 @@ export class ResultScreen {
       const stageSection = document.createElement('div');
       stageSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid #445';
       const stageTitle = document.createElement('div');
-      stageTitle.textContent = 'ステージ選択';
+      stageTitle.textContent = t('ステージ選択', 'Select Stage');
       stageTitle.style.cssText = 'font:bold 13px sans-serif;color:#9cb4cc;margin-bottom:8px';
       const stageRow = document.createElement('div');
       stageRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px';
@@ -179,8 +240,9 @@ export class ResultScreen {
         const active = stage.id === currentId;
         const sBtn = document.createElement('button');
         sBtn.type = 'button';
-        sBtn.textContent = active ? `${stage.name} (現在)` : stage.name;
-        sBtn.title = stage.description ?? stage.name;
+        const sName = tStageName(stage.id, stage.name);
+        sBtn.textContent = active ? `${sName} ${t('(現在)', '(Current)')}` : sName;
+        sBtn.title = tStageDesc(stage.id, stage.description ?? stage.name);
         sBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
         sBtn.dataset.stageId = stage.id;
         sBtn.disabled = active;

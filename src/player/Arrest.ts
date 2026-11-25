@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
+import { t } from '../core/i18n';
 import type { ArrestConfig } from '../core/types';
 import type { EntityManager } from '../ai/EntityManager';
 import type { Civilian } from '../ai/Civilian';
@@ -40,29 +41,33 @@ export class Arrest {
     this.el.append(this.txt, track);
     document.body.appendChild(this.el);
 
+    const arrestLabel = (): string => t(this.cfg.arrestText, 'Hold F: Restrain Suspect');
+    const civilianLabel = (): string => t(this.cfg.civilianText, 'Hold F: Secure Civilian');
+    const evidenceLabel = (): string => t(this.cfg.evidenceText, 'Hold F: Bag Evidence');
+
     this.unregs.push(
       interaction.register<Suspect>({
         id: 'arrest',
         priority: ARREST_PRIORITY,
         resolve: () => this.findArrestTarget(),
-        label: () => this.cfg.arrestText,
-        onHold: (s, _dt, sec) => this.progress(sec, this.cfg.holdSec, this.cfg.arrestText, () => this.doArrest(s)),
+        label: arrestLabel,
+        onHold: (s, _dt, sec) => this.progress(sec, this.cfg.holdSec, arrestLabel(), () => this.doArrest(s)),
         onRelease: () => undefined,
       }),
       interaction.register<Civilian>({
         id: 'secureCivilian',
         priority: CIVILIAN_PRIORITY,
         resolve: () => this.findCivilianTarget(),
-        label: () => this.cfg.civilianText,
-        onHold: (c, _dt, sec) => this.progress(sec, this.cfg.civilianHoldSec, this.cfg.civilianText, () => this.doSecure(c)),
+        label: civilianLabel,
+        onHold: (c, _dt, sec) => this.progress(sec, this.cfg.civilianHoldSec, civilianLabel(), () => this.doSecure(c)),
         onRelease: () => undefined,
       }),
       interaction.register<Suspect>({
         id: 'evidence',
         priority: EVIDENCE_PRIORITY,
         resolve: () => this.findEvidenceTarget(),
-        label: () => this.cfg.evidenceText,
-        onHold: (s, _dt, sec) => this.progress(sec, this.cfg.evidenceHoldSec, this.cfg.evidenceText, () => this.doEvidence(s)),
+        label: evidenceLabel,
+        onHold: (s, _dt, sec) => this.progress(sec, this.cfg.evidenceHoldSec, evidenceLabel(), () => this.doEvidence(s)),
       }),
     );
   }

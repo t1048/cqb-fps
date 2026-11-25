@@ -8,6 +8,7 @@ import { hasLineOfSight } from '../weapons/Flashbang';
 import { blockedAt } from '../ai/EngageBehavior';
 import type { EntityManager } from '../ai/EntityManager';
 import { SuspectState } from '../core/events';
+import { t, tElementLabel, tRoomName } from '../core/i18n';
 
 export interface GroundTarget {
   x: number;
@@ -149,6 +150,7 @@ export class CommandMenu {
   readonly root = new THREE.Group();
   private readonly styleEl = document.createElement('style');
   private readonly menuEl = document.createElement('div');
+  private readonly titleEl = document.createElement('strong');
   private readonly elBadge = document.createElement('span');
   private readonly ctxEl = document.createElement('div');
   private readonly listEl = document.createElement('div');
@@ -188,14 +190,16 @@ export class CommandMenu {
     this.menuEl.hidden = true;
     const head = document.createElement('div');
     head.className = 'cqb-cmd-head';
-    const title = document.createElement('strong');
-    title.textContent = '部隊指揮';
+    this.titleEl.textContent = t('部隊指揮', 'SQUAD COMMAND');
     this.elBadge.className = 'cqb-cmd-el';
-    head.append(title, this.elBadge);
+    head.append(this.titleEl, this.elBadge);
 
     this.ctxEl.className = 'cqb-cmd-ctx';
     this.footEl.className = 'cqb-cmd-foot';
-    this.footEl.textContent = '[1-9 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止';
+    this.footEl.textContent = t(
+      '[1-9 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止',
+      '[1-9 / LMB / Release RMB] Execute   [T] Switch Team   [MMB] Cancel',
+    );
     this.menuEl.append(head, this.ctxEl, this.listEl, this.footEl);
     document.body.appendChild(this.menuEl);
 
@@ -476,7 +480,14 @@ export class CommandMenu {
         const d = testPoint(c.x, c.y, c.z);
         if (d !== null) {
           bestDist = d;
-          best = { id: s.id, kind: 'suspect', label: '投降した容疑者', x: s.body.px, y: s.body.footY, z: s.body.pz };
+          best = {
+            id: s.id,
+            kind: 'suspect',
+            label: t('投降した容疑者', 'Surrendered Suspect'),
+            x: s.body.px,
+            y: s.body.footY,
+            z: s.body.pz,
+          };
         }
       }
       if (s.hasUncollectedEvidence) {
@@ -485,7 +496,14 @@ export class CommandMenu {
           const d = testPoint(wp.x, wp.y + 0.08, wp.z);
           if (d !== null) {
             bestDist = d;
-            best = { id: s.id, kind: 'evidence', label: '証拠品', x: wp.x, y: s.body.footY, z: wp.z };
+            best = {
+              id: s.id,
+              kind: 'evidence',
+              label: t('証拠品', 'Evidence'),
+              x: wp.x,
+              y: s.body.footY,
+              z: wp.z,
+            };
           }
         }
       }
@@ -497,7 +515,14 @@ export class CommandMenu {
       const d = testPoint(ch.x, ch.y, ch.z);
       if (d !== null) {
         bestDist = d;
-        best = { id: c.id, kind: 'civilian', label: '人質・民間人', x: c.body.px, y: c.body.footY, z: c.body.pz };
+        best = {
+          id: c.id,
+          kind: 'civilian',
+          label: t('人質・民間人', 'Hostage / Civilian'),
+          x: c.body.px,
+          y: c.body.footY,
+          z: c.body.pz,
+        };
       }
     }
 
@@ -532,50 +557,89 @@ export class CommandMenu {
     };
 
     if (ctx.restrainTarget) {
-      add('restrain', `対象を確保（${ctx.restrainTarget.label}）`, true);
+      add(
+        'restrain',
+        t(`対象を確保（${ctx.restrainTarget.label}）`, `Secure Target (${ctx.restrainTarget.label})`),
+        true,
+      );
     } else if (ctx.door) {
-      add('stack', 'スタックアップ（扉脇で待機）', true);
-      add('clear', ctx.door.locked ? 'オープン＆クリア（蹴破り突入）' : 'オープン＆クリア（2名突入制圧）', true);
-      add('flashClear', 'フラッシュ＆クリア（閃光→突入）', true);
-      add('gasClear', 'ガス＆クリア（催涙ガス→突入）', true);
-      add('c2Clear', 'C2＆クリア（爆破ブリーチ突入）', true);
-      add('breachClear', 'ブリーチ＆クリア（強行突入）', true);
-      add('pieDoor', '扉開放・外から警戒', !ctx.door.locked);
+      add('stack', t('スタックアップ（扉脇で待機）', 'Stack Up (Hold by Door)'), true);
+      add(
+        'clear',
+        ctx.door.locked
+          ? t('オープン＆クリア（蹴破り突入）', 'Open & Clear (Kick Breach)')
+          : t('オープン＆クリア（2名突入制圧）', 'Open & Clear (2-Man Entry)'),
+        true,
+      );
+      add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);
+      add('gasClear', t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)'), true);
+      add('c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
+      add('breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
+      add('pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
     } else if (ctx.areaTarget) {
-      add('clear', '突入＆クリア（2名突入制圧）', true);
-      add('flashClear', 'フラッシュ＆クリア（閃光→突入）', true);
-      add('gasClear', 'ガス＆クリア（催涙ガス→突入）', true);
-      add('stack', 'スタックアップ（入口脇で待機）', true);
+      add('clear', t('突入＆クリア（2名突入制圧）', 'Breach & Clear (2-Man Entry)'), true);
+      add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);
+      add('gasClear', t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)'), true);
+      add('stack', t('スタックアップ（入口脇で待機）', 'Stack Up (Hold by Entry)'), true);
       if (ctx.groundPoint) {
-        add('move', `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`, true);
+        add(
+          'move',
+          t(
+            `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`,
+            `Move & Cover (${ctx.groundPoint.dist.toFixed(1)}m)`,
+          ),
+          true,
+        );
       }
-      add('overwatch', '現在位置から照準方向をロック', true);
+      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
     } else if (ctx.groundPoint) {
-      add('move', `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`, true);
-      add('overwatch', '現在位置から照準方向をロック', true);
+      add(
+        'move',
+        t(
+          `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`,
+          `Move & Cover (${ctx.groundPoint.dist.toFixed(1)}m)`,
+        ),
+        true,
+      );
+      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
     } else {
-      add('overwatch', '現在位置から照準方向をロック', true);
+      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
     }
 
-    add('hold', '現在位置で待機・周囲警戒', true);
-    add('follow', '追従・隊形復帰', true);
-    add(null, 'キャンセル', true);
+    add('hold', t('現在位置で待機・周囲警戒', 'Hold Position & Cover'), true);
+    add('follow', t('追従・隊形復帰', 'Fall In / Follow'), true);
+    add(null, t('キャンセル', 'Cancel'), true);
     return out;
   }
 
   private refreshHeader(element: SquadElement, ctx: OrderContext): void {
-    this.elBadge.textContent = `[T] ${this.cfg.elementLabels[element]}`;
+    this.titleEl.textContent = t('部隊指揮', 'SQUAD COMMAND');
+    this.footEl.textContent = t(
+      '[1-9 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止',
+      '[1-9 / LMB / Release RMB] Execute   [T] Switch Team   [MMB] Cancel',
+    );
+    this.elBadge.textContent = `[T] ${tElementLabel(element, this.cfg.elementLabels[element])}`;
     this.elBadge.style.color = ELEMENT_CSS[element];
     if (ctx.restrainTarget) {
-      this.ctxEl.textContent = `照準対象: ${ctx.restrainTarget.label}`;
+      this.ctxEl.textContent = t(`照準対象: ${ctx.restrainTarget.label}`, `Target: ${ctx.restrainTarget.label}`);
     } else if (ctx.door) {
-      this.ctxEl.textContent = `照準対象: ドア${ctx.door.locked ? ' [施錠]' : ` (${ctx.door.stage})`}`;
+      this.ctxEl.textContent = t(
+        `照準対象: ドア${ctx.door.locked ? ' [施錠]' : ` (${ctx.door.stage})`}`,
+        `Target: Door${ctx.door.locked ? ' [Locked]' : ` (${ctx.door.stage})`}`,
+      );
     } else if (ctx.areaTarget) {
-      this.ctxEl.textContent = `照準対象: ${ctx.areaTarget.room.name}${ctx.areaTarget.door ? '（開放ドア）' : '（別エリア）'}`;
+      const roomLabel = tRoomName(ctx.areaTarget.room.name);
+      this.ctxEl.textContent = t(
+        `照準対象: ${roomLabel}${ctx.areaTarget.door ? '（開放ドア）' : '（別エリア）'}`,
+        `Target: ${roomLabel}${ctx.areaTarget.door ? ' (Open Door)' : ' (Adjacent Area)'}`,
+      );
     } else if (ctx.groundPoint) {
-      this.ctxEl.textContent = `照準対象: 移動地点 (${ctx.groundPoint.dist.toFixed(1)}m)`;
+      this.ctxEl.textContent = t(
+        `照準対象: 移動地点 (${ctx.groundPoint.dist.toFixed(1)}m)`,
+        `Target: Waypoint (${ctx.groundPoint.dist.toFixed(1)}m)`,
+      );
     } else {
-      this.ctxEl.textContent = '照準対象: なし（全隊共通コマンド）';
+      this.ctxEl.textContent = t('照準対象: なし（全隊共通コマンド）', 'Target: None (General Commands)');
     }
   }
 

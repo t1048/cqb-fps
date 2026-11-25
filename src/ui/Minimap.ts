@@ -2,6 +2,7 @@ import type { Cell } from '../ai/Squad';
 import type { BoxDef, MapData } from '../core/types';
 import type { PlayerController } from '../player/PlayerController';
 import type { DoorStage, DoorSystem } from '../world/Door';
+import { t, tRoomName } from '../core/i18n';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
@@ -484,10 +485,11 @@ export function drawFloorPlan(
       if (options.floorY !== undefined && Math.abs((room.floorY ?? 0) - options.floorY) > 1.3) continue;
       const cx = toX(room.x);
       const cy = toY(room.z);
+      const label = tRoomName(room.name);
       ctx.fillStyle = 'rgba(8, 12, 18, 0.65)';
-      ctx.fillText(room.name, cx + 1, cy + 1);
+      ctx.fillText(label, cx + 1, cy + 1);
       ctx.fillStyle = compact ? 'rgba(210, 228, 245, 0.78)' : 'rgba(224, 238, 252, 0.92)';
-      ctx.fillText(room.name, cx, cy);
+      ctx.fillText(label, cx, cy);
     }
     ctx.restore();
   }
@@ -584,7 +586,7 @@ export function drawFloorPlan(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillStyle = '#7ce2f0';
-      ctx.fillText('突入地点', sx, sy + 9);
+      ctx.fillText(t('突入地点', 'Entry Point'), sx, sy + 9);
       ctx.restore();
     }
   }
@@ -678,7 +680,7 @@ export class Minimap {
     header.style.cssText =
       'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font:600 10px monospace;letter-spacing:0.06em;color:rgba(188,214,240,0.85)';
     const title = document.createElement('span');
-    title.textContent = '間取り';
+    title.textContent = t('間取り', 'FLOOR PLAN');
     this.floorTitle = title;
     const key = document.createElement('span');
     key.textContent = '[M]';
@@ -707,14 +709,14 @@ export class Minimap {
       this.root.style.cssText =
         `position:fixed;inset:${margin}px;z-index:6;pointer-events:none;background:rgba(6,10,16,0.35);border:1px solid rgba(120,155,195,0.4);border-radius:8px;padding:8px;box-sizing:border-box;display:${display}`;
       this.canvas.style.opacity = '0.72';
-      this.keyHint.textContent = '[M] ミニマップに戻す';
+      this.keyHint.textContent = t('[M] ミニマップに戻す', '[M] Minimap');
     } else {
       this.viewW = MINIMAP_SIZE;
       this.viewH = MINIMAP_SIZE;
       this.root.style.cssText =
         `position:fixed;top:12px;left:12px;z-index:5;pointer-events:none;background:rgba(10,14,20,0.78);border:1px solid rgba(120,155,195,0.45);border-radius:6px;padding:6px;box-shadow:0 2px 10px rgba(0,0,0,0.45);display:${display}`;
       this.canvas.style.opacity = '1';
-      this.keyHint.textContent = '[M] 拡大';
+      this.keyHint.textContent = t('[M] 拡大', '[M] Expand');
     }
     this.canvas.width = Math.round(this.viewW * this.dpr);
     this.canvas.height = Math.round(this.viewH * this.dpr);
@@ -798,8 +800,11 @@ export class Minimap {
     });
     ctx.restore();
     if (this.floorTitle) {
-      this.floorTitle.textContent = this.floorLevels.length > 1 ? `間取り ${floor.label}` : '間取り';
+      const base = t('間取り', 'FLOOR PLAN');
+      this.floorTitle.textContent = this.floorLevels.length > 1 ? `${base} ${floor.label}` : base;
     }
+    const hint = this.expanded ? t('[M] ミニマップに戻す', '[M] Minimap') : t('[M] 拡大', '[M] Expand');
+    if (this.keyHint.textContent !== hint) this.keyHint.textContent = hint;
   }
 
   dispose(): void {

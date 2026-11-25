@@ -4,6 +4,7 @@ import type { Suspect } from '../ai/Suspect';
 import { disposeObject } from '../core/dispose';
 import type { GameEventBus } from '../core/events';
 import { SuspectState } from '../core/events';
+import { t } from '../core/i18n';
 import type { Vec3, WindowDef } from '../core/types';
 import type { InputManager } from '../core/InputManager';
 import type { Interaction } from '../player/Interaction';
@@ -157,18 +158,31 @@ export class Fortify {
         id: 'barricade',
         priority: 240,
         resolve: () => (this.d.player.alive ? this.aimedWindow() : null),
-        label: (b) => (b.boarded ? `窓: F 長押しで板を外す（耐久 ${Math.max(0, Math.round((b.hp / BARRICADE_HP) * 100))}%）` : b.def.interior ? '窓口: F 長押しで板を打ち付ける（射線を塞ぐ）' : '窓: F 長押しで板を打ち付ける（射線を塞ぐ）'),
+        label: (b) => {
+          const pct = Math.max(0, Math.round((b.hp / BARRICADE_HP) * 100));
+          if (b.boarded) {
+            return t(`窓: F 長押しで板を外す（耐久 ${pct}%）`, `Window: Hold F to Remove Boards (HP ${pct}%)`);
+          }
+          return b.def.interior
+            ? t('窓口: F 長押しで板を打ち付ける（射線を塞ぐ）', 'Interior Window: Hold F to Board Up (Block LOS)')
+            : t('窓: F 長押しで板を打ち付ける（射線を塞ぐ）', 'Window: Hold F to Board Up (Block LOS)');
+        },
         onPress: () => {
           this.holdDone = false;
         },
         onHold: (b, _dt, sec) => {
           if (this.holdDone) return;
           const need = b.boarded ? UNBOARD_SEC : BOARD_SEC;
-          this.d.showGauge(b.boarded ? '板を外している...' : '板を打ち付けている...', sec / need);
+          this.d.showGauge(b.boarded ? t('板を外している...', 'Removing boards...') : t('板を打ち付けている...', 'Boarding up...'), sec / need);
           if (sec >= need) {
             this.holdDone = true;
             this.setBoarded(b, !b.boarded);
-            this.d.subtitle.show(b.boarded ? '窓を板で塞いだ — この窓越しには撃てない・見えない' : '板を外した', 1.6);
+            this.d.subtitle.show(
+              b.boarded
+                ? t('窓を板で塞いだ — この窓越しには撃てない・見えない', 'Window boarded up — blocks sightlines and gunfire')
+                : t('板を外した', 'Boards removed'),
+              1.6,
+            );
             this.d.bus.emit('noise', { pos: { x: b.cx, y: b.floorY, z: b.cz }, radius: 9, kind: 'door', source: 'suspect' });
           }
         },
@@ -305,7 +319,14 @@ export class Fortify {
         this.setBoarded(b, false);
         this.d.bus.emit('noise', { pos: { x: b.cx, y: b.floorY, z: b.cz }, radius: 14, kind: 'door', source: 'suspect' });
         const p = this.d.player.position;
-        if (Math.hypot(p.x - b.cx, p.z - b.cz) < 14) this.d.subtitle.show(`${b.def.interior ? '窓口' : '窓'}のバリケードが撃ち破られた！`, 1.6);
+        if (Math.hypot(p.x - b.cx, p.z - b.cz) < 14) {
+          this.d.subtitle.show(
+            b.def.interior
+              ? t('窓口のバリケードが撃ち破られた！', 'Interior window barricade shot through!')
+              : t('窓のバリケードが撃ち破られた！', 'Window barricade shot through!'),
+            1.6,
+          );
+        }
         return;
       }
       // 残り耐久に応じて表板を剥がす（裏板は残るので視線は通らない）
@@ -354,18 +375,18 @@ export class Fortify {
   /** 戻り値: 処理した（ゲージ表示中/設置完了）なら true */
   holdTrap(door: Door, sec: number): boolean {
     if (this.traps.has(door.id)) {
-      this.d.showGauge('トラップ設置済み（SWAT が開けると爆発）', 1);
+      this.d.showGauge(t('トラップ設置済み（SWAT が開けると爆発）', 'Trap already set (detonates when SWAT opens)'), 1);
       return true;
     }
     if (this.trapKits <= 0) {
-      this.d.showGauge('トラップの部材がない（時間を稼ぐと仲間が作る）', 0);
+      this.d.showGauge(t('トラップの部材がない（時間を稼ぐと仲間が作る）', 'No trap kits left (allies craft more if you buy time)'), 0);
       return true;
     }
     if (door.angle > 1 || door.targetAngle > 1) {
-      this.d.showGauge('閉じたドアにしか仕掛けられない', 0);
+      this.d.showGauge(t('閉じたドアにしか仕掛けられない', 'Door must be closed to set trap'), 0);
       return true;
     }
-    this.d.showGauge('ブービートラップを仕掛けている...', sec / TRAP_SEC);
+    this.d.showGauge(t('ブービートラップを仕掛けている...', 'Rigging booby trap...'), sec / TRAP_SEC);
     if (sec >= TRAP_SEC) this.placeTrap(door);
     return true;
   }
@@ -385,7 +406,13 @@ export class Fortify {
     g.rotation.y = Math.atan2(door.normalX, door.normalZ);
     this.root.add(g);
     this.traps.set(door.id, { doorId: door.id, mesh: g });
-    this.d.subtitle.show(`ドアにブービートラップを仕掛けた（残り部材 ${this.trapKits}）— SWAT が開けると爆発する`, 2.2);
+    this.d.subtitle.show(
+      t(
+        `ドアにブービートラップを仕掛けた（残り部材 ${this.trapKits}）— SWAT が開けると爆発する`,
+        `Booby trap rigged on door (${this.trapKits} kits left) — detonates when SWAT opens`,
+      ),
+      2.2,
+    );
   }
 
   /** SWAT が解除に成功した */
@@ -433,7 +460,7 @@ export class Fortify {
         const dmg = Math.round(75 * (1 - 0.6 * (dist / r)));
         const hp = pl.takeDamage(dmg);
         this.d.bus.emit('playerHit', { shooter: 'trap', damage: dmg, from: pos, hp });
-        this.d.subtitle.show('自分のトラップの爆風に巻き込まれた！', 1.6);
+        this.d.subtitle.show(t('自分のトラップの爆風に巻き込まれた！', 'Caught in your own trap blast!'), 1.6);
       }
     }
     for (const c of this.d.civilians()) {
@@ -494,7 +521,13 @@ export class Fortify {
       this.applyUpgrade(allies);
     } else {
       this.trapKits++;
-      this.d.subtitle.show(`仲間「トラップをもう 1 個こしらえた」（部材 ${this.trapKits}）`, 1.6);
+      this.d.subtitle.show(
+        t(
+          `仲間「トラップをもう 1 個こしらえた」（部材 ${this.trapKits}）`,
+          `Ally: "Rigged up another trap kit!" (${this.trapKits} kits)`,
+        ),
+        1.6,
+      );
     }
   }
 
@@ -505,7 +538,7 @@ export class Fortify {
     this.d.weapons.upgradeWeapons((w) =>
       w.faction === 'suspect'
         ? {
-            name: `${w.name}（改）`,
+            name: `${w.name}${t('（改）', ' (Mod)')}`,
             damage: Math.round(w.damage * 1.25),
             magazineSize: Math.round(w.magazineSize * 1.4),
             adsSpread: w.adsSpread * 0.65,
@@ -516,20 +549,38 @@ export class Fortify {
           }
         : null,
     );
-    this.d.subtitle.show('仲間「全員の銃を改造した！ 精度も威力も上がったぞ」— 武器アップグレード', 2.4);
+    this.d.subtitle.show(
+      t(
+        '仲間「全員の銃を改造した！ 精度も威力も上がったぞ」— 武器アップグレード',
+        'Ally: "Modified all our guns! Better accuracy and firepower!" — Weapons Upgraded',
+      ),
+      2.4,
+    );
   }
 
   private renderStatus(): void {
-    let text = `窓の封鎖 ${this.boardedCount}/${this.barricades.length}　｜　トラップ部材 ${this.trapKits}（設置 ${this.traps.size}）　｜　武器改造 ${this.upgraded ? '済' : '未'}`;
+    let text = t(
+      `窓の封鎖 ${this.boardedCount}/${this.barricades.length}　｜　トラップ部材 ${this.trapKits}（設置 ${this.traps.size}）　｜　武器改造 ${this.upgraded ? '済' : '未'}`,
+      `Windows Boarded: ${this.boardedCount}/${this.barricades.length}  |  Trap Kits: ${this.trapKits} (Set: ${this.traps.size})  |  Weapon Mod: ${this.upgraded ? 'Done' : 'Pending'}`,
+    );
     if (this.d.isPrep()) {
       const allies = this.activeAllies().length;
       const task = this.tasks[0];
       if (allies > 0 && task) {
         const cost = task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
-        const what = task.kind === 'upgrade' ? '武器を改造中' : 'トラップを製作中';
-        text = `仲間 ${allies} 名が${what} ${Math.round((this.work / cost) * 100)}%　｜　` + text;
+        const pct = Math.round((this.work / cost) * 100);
+        const whatJa = task.kind === 'upgrade' ? '武器を改造中' : 'トラップを製作中';
+        const whatEn = task.kind === 'upgrade' ? 'modding weapons' : 'crafting trap kit';
+        text =
+          t(
+            `仲間 ${allies} 名が${whatJa} ${pct}%　｜　`,
+            `${allies} ${allies === 1 ? 'Ally' : 'Allies'} ${whatEn} (${pct}%)  |  `,
+          ) + text;
       }
-      text += '　｜　窓の前で F 長押し: 板 / しゃがみ+F 長押し（ドア）: トラップ';
+      text += t(
+        '　｜　窓の前で F 長押し: 板 / しゃがみ+F 長押し（ドア）: トラップ',
+        '  |  Hold F at Window: Board / Crouch+Hold F at Door: Trap',
+      );
     }
     if (text !== this.lastText) {
       this.lastText = text;

@@ -1,3 +1,5 @@
+import { t } from '../core/i18n';
+
 /**
  * 初回プレイ時だけ出す「Z キーで仲間に指示」ツアー（SWAT モード）。
  * 画面下の「Z : 〜」表示の真上に吹き出しを出し、Z を押すたびに次の段階へ進む。
@@ -15,21 +17,38 @@ const CSS = `
 @keyframes sqt-pulse{0%,100%{box-shadow:0 0 0 0 rgba(143,211,255,.6)}50%{box-shadow:0 0 0 8px rgba(143,211,255,0)}}
 `;
 
-const STEPS: { title: string; body: string; sub?: string }[] = [
-  {
-    title: '仲間への指示は <kbd>Z</kbd> だけで OK',
-    body: '見ている場所に合わせて、下の「Z : ○○」の指示を仲間が実行します。ドアに近づいて、ドアを見ながら <kbd>Z</kbd> を押してみよう。',
-    sub: 'ドアを見る → 整列・突入 ／ 床を見る → 移動 ／ 投降した容疑者を見る → 拘束',
-  },
-  {
-    title: 'いいね！ 続けて <kbd>Z</kbd> で次の行動',
-    body: 'ドアの前で整列したら、もう一度 <kbd>Z</kbd> で突入・クリアリング。迷ったら画面下の表示を見て <kbd>Z</kbd>。',
-  },
-  {
-    title: 'これで指揮はバッチリ',
-    body: '仲間を呼び戻すときは <kbd>X</kbd>。ほかの操作は、慣れてから少しずつで大丈夫です。',
-  },
-];
+const STEP_COUNT = 3;
+
+function getStep(index: number): { title: string; body: string; sub?: string } {
+  const steps: { title: string; body: string; sub?: string }[] = [
+    {
+      title: t('仲間への指示は <kbd>Z</kbd> だけで OK', 'Just press <kbd>Z</kbd> to command your squad'),
+      body: t(
+        '見ている場所に合わせて、下の「Z : ○○」の指示を仲間が実行します。ドアに近づいて、ドアを見ながら <kbd>Z</kbd> を押してみよう。',
+        'Your squad executes the context action shown at the bottom ("Z : ..."). Walk up to a door, look at it, and press <kbd>Z</kbd>.',
+      ),
+      sub: t(
+        'ドアを見る → 整列・突入 ／ 床を見る → 移動 ／ 投降した容疑者を見る → 拘束',
+        'Look at door → Stack / Breach · Floor → Move · Surrendered suspect → Restrain',
+      ),
+    },
+    {
+      title: t('いいね！ 続けて <kbd>Z</kbd> で次の行動', 'Nice! Press <kbd>Z</kbd> again for the next step'),
+      body: t(
+        'ドアの前で整列したら、もう一度 <kbd>Z</kbd> で突入・クリアリング。迷ったら画面下の表示を見て <kbd>Z</kbd>。',
+        'Once stacked up at the door, press <kbd>Z</kbd> again to breach and clear. Check the bottom prompt whenever you are unsure.',
+      ),
+    },
+    {
+      title: t('これで指揮はバッチリ', 'You have got the basics!'),
+      body: t(
+        '仲間を呼び戻すときは <kbd>X</kbd>。ほかの操作は、慣れてから少しずつで大丈夫です。',
+        'Press <kbd>X</kbd> to recall your squad. You can pick up the rest of the controls as you go.',
+      ),
+    },
+  ];
+  return steps[index]!;
+}
 
 /** 最終段階を表示しておく秒数 */
 const LAST_STEP_SEC = 6;
@@ -62,16 +81,17 @@ export class SquadTour {
 
   setVisible(v: boolean): void {
     if (this.finished) return;
+    if (v) this.render();
     this.root.style.display = v ? 'block' : 'none';
   }
 
   /** 毎フレーム。zPressed: このフレームで Z（クイック指示）が押されたか。 */
   update(dt: number, zPressed: boolean): void {
     if (this.finished) return;
-    if (this.step < STEPS.length - 1) {
+    if (this.step < STEP_COUNT - 1) {
       if (zPressed) {
         this.step++;
-        if (this.step === STEPS.length - 1) {
+        if (this.step === STEP_COUNT - 1) {
           this.lastTimer = LAST_STEP_SEC;
           this.root.classList.remove('sqt-pulse');
           // 最後まで見せたら既読（途中でページを閉じても最低限は覚えている）
@@ -100,9 +120,9 @@ export class SquadTour {
   }
 
   private render(): void {
-    const s = STEPS[this.step]!;
+    const s = getStep(this.step);
     this.root.innerHTML =
-      `<div class="sqt-step">TUTORIAL ${this.step + 1}/${STEPS.length}</div>` +
+      `<div class="sqt-step">TUTORIAL ${this.step + 1}/${STEP_COUNT}</div>` +
       `<div class="sqt-title">${s.title}</div><div>${s.body}</div>` +
       (s.sub ? `<div class="sqt-sub">${s.sub}</div>` : '');
   }

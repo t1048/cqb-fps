@@ -7,6 +7,7 @@ import type { WeaponSystem } from '../weapons/WeaponSystem';
 import type { Flashbang } from '../weapons/Flashbang';
 import type { Mission } from '../rules/Mission';
 import type { SquadSystem } from '../ai/Squad';
+import { getLocale, isEn, t, tMotifLabel, tWeaponName } from '../core/i18n';
 
 const MAX_DT = 0.05;
 const HIT_MARKER_SEC = 0.2;
@@ -91,6 +92,7 @@ export class Hud {
   private readonly dmgDirEl = document.createElement('div');
   private readonly ammoEl = document.createElement('div');
   private readonly objPanelEl = document.createElement('div');
+  private readonly objTitleEl = document.createElement('span');
   private readonly objBadgeEl = document.createElement('span');
   private readonly objNowEl = document.createElement('div');
   private readonly objListEl = document.createElement('div');
@@ -99,10 +101,13 @@ export class Hud {
   private readonly hpFillEl = document.createElement('div');
   private readonly stanceEl = document.createElement('span');
   private readonly rosterEl = document.createElement('div');
+  private readonly rosterTitleEl = document.createElement('span');
   private readonly rosterModeEl = document.createElement('span');
   private readonly rosterElLabel = document.createElement('span');
   private readonly rosterListEl = document.createElement('div');
   private readonly rosterLookEl = document.createElement('div');
+  private readonly motifChipEl: HTMLDivElement | null = null;
+  private readonly motifInfo?: { id?: string; label: string; color: string };
   private readonly radioEl = document.createElement('div');
   private readonly promptEl = document.createElement('div');
   private readonly interactEl = document.createElement('div');
@@ -126,6 +131,7 @@ export class Hud {
   private lastObjectivesKey = '';
   private lastRosterKey = '';
   private lastGap = -1;
+  private paused = false;
   private disposed = false;
 
   constructor(
@@ -139,16 +145,17 @@ export class Hud {
     private readonly interaction?: Interaction,
     private readonly mission?: Mission,
     private readonly squad?: SquadSystem,
-    motif?: { label: string; color: string },
+    motif?: { id?: string; label: string; color: string },
   ) {
+    this.motifInfo = motif;
     this.styleEl.textContent = STYLE;
     this.root.className = 'cqb-hud';
 
     for (let i = 0; i < 4; i++) {
-      const t = document.createElement('div');
-      t.className = 'tick';
-      this.ticks.push(t);
-      this.root.appendChild(t);
+      const tick = document.createElement('div');
+      tick.className = 'tick';
+      this.ticks.push(tick);
+      this.root.appendChild(tick);
     }
     const dot = document.createElement('div');
     dot.className = 'dot';
@@ -163,15 +170,13 @@ export class Hud {
     this.rosterEl.className = 'roster';
     const rHead = document.createElement('div');
     rHead.className = 'roster-head';
-    const rTitle = document.createElement('span');
-    rTitle.textContent = 'SQUAD [右クリック指示 / Z簡易 / X集合]';
     const rBadges = document.createElement('span');
     rBadges.className = 'roster-badges';
     this.rosterModeEl.className = 'roster-mode dynamic';
     this.rosterModeEl.textContent = '[Tab] DYNAMIC';
     this.rosterElLabel.className = 'roster-el';
     rBadges.append(this.rosterModeEl, this.rosterElLabel);
-    rHead.append(rTitle, rBadges);
+    rHead.append(this.rosterTitleEl, rBadges);
     this.rosterLookEl.className = 'squad-hint';
     this.rosterLookEl.style.display = 'none';
     this.rosterEl.append(rHead, this.rosterListEl, this.rosterLookEl);
@@ -193,18 +198,16 @@ export class Hud {
     if (motif) {
       const chip = document.createElement('div');
       chip.className = 'panel motif-chip';
-      chip.textContent = motif.label === '民家' || motif.label === '和風民家' ? motif.label : `施設 ${motif.label}`;
       chip.style.color = motif.color;
       chip.style.borderColor = motif.color;
+      this.motifChipEl = chip;
       this.topRightSlot.appendChild(chip);
     }
     this.objPanelEl.className = 'obj-panel';
     const oHead = document.createElement('div');
     oHead.className = 'obj-head';
-    const oTitle = document.createElement('span');
-    oTitle.textContent = '作戦目標 / OBJECTIVES';
     this.objBadgeEl.className = 'obj-badge';
-    oHead.append(oTitle, this.objBadgeEl);
+    oHead.append(this.objTitleEl, this.objBadgeEl);
     this.objNowEl.className = 'obj-now';
     this.objListEl.className = 'obj-list';
     this.objSubHintEl.className = 'obj-subhint';
@@ -214,8 +217,6 @@ export class Hud {
 
     this.radioEl.className = 'radio';
     this.promptEl.className = 'panel prompt';
-    this.promptEl.textContent =
-      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-3装備';
     this.interactEl.className = 'panel interact';
     this.quickOrderEl.className = 'panel quick-order';
     this.missionHintEl.className = 'panel mission-hint';
@@ -226,6 +227,8 @@ export class Hud {
     this.leanR.style.right = '24px';
     this.leanR.textContent = '▶';
     this.leanL.style.visibility = this.leanR.style.visibility = 'hidden';
+
+    this.applyStaticLabels();
 
     this.root.append(
       this.dmgVigEl,
@@ -257,7 +260,8 @@ export class Hud {
       bus.on('allyRadio', (e) => {
         const line = document.createElement('div');
         line.className = 'radio-line';
-        line.textContent = `【${e.name}】${e.text}`;
+        const msg = isEn() && e.voiceText ? e.voiceText : e.text;
+        line.textContent = isEn() ? `[${e.name}] ${msg}` : `【${e.name}】${msg}`;
         this.radioEl.appendChild(line);
         this.radioEntries.push({ el: line, ttl: RADIO_LINE_SEC });
         while (this.radioEntries.length > 3) {
@@ -265,6 +269,43 @@ export class Hud {
         }
       }),
     );
+    this.update(0);
+  }
+
+  private applyStaticLabels(): void {
+    this.rosterTitleEl.textContent = t(
+      'SQUAD [右クリック指示 / Z簡易 / X集合]',
+      'SQUAD [RMB Order / Z Quick / X Fall In]',
+    );
+    this.objTitleEl.textContent = t('作戦目標 / OBJECTIVES', 'OBJECTIVES');
+    this.promptEl.textContent = t(
+      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-3装備 / ESCポーズ',
+      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-3 Gear / ESC Pause',
+    );
+    if (this.motifChipEl && this.motifInfo) {
+      const m = this.motifInfo;
+      const isHouse = m.id === 'residence' || m.id === 'japanese_house';
+      this.motifChipEl.textContent = isEn()
+        ? tMotifLabel(m.id ?? '', m.label)
+        : isHouse
+          ? m.label
+          : `施設 ${m.label}`;
+    }
+  }
+
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    if (paused) this.promptEl.style.display = 'none';
+  }
+
+  refreshLocale(): void {
+    if (this.disposed) return;
+    this.applyStaticLabels();
+    this.lastAmmoText = '';
+    this.lastHp = -1;
+    this.lastMissionKey = '';
+    this.lastObjectivesKey = '';
+    this.lastRosterKey = '';
     this.update(0);
   }
 
@@ -298,13 +339,16 @@ export class Hud {
     // 弾数・武器・装備
     const fb = this.flashbang;
     const reserve = w.reserveAmmo;
+    const wName = fb?.equipped
+      ? tWeaponName(fb.weapon.id, fb.weapon.name)
+      : tWeaponName(w.weapon.id, w.weapon.name);
     const ammoText = fb?.equipped
-      ? `${fb.weapon.name}|${fb.remaining}/${fb.weapon.magazineSize}`
+      ? `${wName}|${fb.remaining}/${fb.weapon.magazineSize}`
       : w.isReloading
-        ? `${w.weapon.name}|RELOADING`
+        ? `${wName}|RELOADING`
         : reserve !== null
-          ? `${w.weapon.name}  予備 ${reserve}|${w.ammoInMagazine}/${w.weapon.magazineSize}`
-          : `${w.weapon.name}|${w.ammoInMagazine}/${w.weapon.magazineSize}`;
+          ? `${wName}  ${t('予備', 'RES')} ${reserve}|${w.ammoInMagazine}/${w.weapon.magazineSize}`
+          : `${wName}|${w.ammoInMagazine}/${w.weapon.magazineSize}`;
     if (ammoText !== this.lastAmmoText) {
       this.lastAmmoText = ammoText;
       const [name, val] = ammoText.split('|');
@@ -321,7 +365,7 @@ export class Hud {
     if (hp * 1000 + armor !== this.lastHp) {
       this.lastHp = hp * 1000 + armor;
       const pct = Math.max(0, Math.min(100, (hp / Math.max(1, this.player.maxHp)) * 100));
-      this.hpTextEl.textContent = armor > 0 ? `HP ${hp}  防弾 ${armor}` : `HP ${hp}`;
+      this.hpTextEl.textContent = armor > 0 ? `HP ${hp}  ${t('防弾', 'ARM')} ${armor}` : `HP ${hp}`;
       this.hpFillEl.style.width = `${pct}%`;
       this.hpFillEl.style.background = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
     }
@@ -339,6 +383,8 @@ export class Hud {
       const lookText = this.squad.hudText();
       const entryMode = this.squad.getEntryMode();
       const key =
+        getLocale() +
+        '|' +
         this.squad.elementLabel +
         '|' +
         entryMode +
@@ -422,11 +468,11 @@ export class Hud {
       this.dmgDirEl.style.opacity = '0';
     }
 
-    this.promptEl.style.display = this.input.isPointerLocked || !this.player.alive ? 'none' : 'block';
+    this.promptEl.style.display = this.paused || this.input.isPointerLocked || !this.player.alive ? 'none' : 'block';
 
     // インタラクト対象プロンプト
     const target =
-      this.input.isPointerLocked && !this.input.isOrderMenuOpen && this.player.alive
+      !this.paused && this.input.isPointerLocked && !this.input.isOrderMenuOpen && this.player.alive
         ? (this.interaction?.getInteractTarget() ?? null)
         : null;
     const interactKey = target && target.label ? `${target.providerId}:${target.label}` : '';
@@ -442,7 +488,7 @@ export class Hud {
 
     // Zクイック指示ヒント（画面下部）
     const quickHint =
-      this.squad && this.input.isPointerLocked && !this.input.isOrderMenuOpen && !this.input.suppressSquadShortcuts && this.player.alive
+      !this.paused && this.squad && this.input.isPointerLocked && !this.input.isOrderMenuOpen && !this.input.suppressSquadShortcuts && this.player.alive
         ? this.squad.quickOrderHint(dt)
         : '';
     if (quickHint !== this.lastQuickHint) {
@@ -457,16 +503,22 @@ export class Hud {
     if (this.mission && !this.mission.ended) {
       const st = this.mission.status;
       if (st.phase === 'failing') {
-        missionHint = '隊長行動不能 — 作戦中止...';
+        missionHint = t('隊長行動不能 — 作戦中止...', 'TEAM LEADER DOWN — MISSION ABORTED...');
         missionTone = 'red';
       } else if (st.phase === 'completing') {
-        missionHint = `ALL CLEAR — 本部へ作戦完了を報告中... (${st.countdownSec.toFixed(1)}s)`;
+        missionHint = t(
+          `ALL CLEAR — 本部へ作戦完了を報告中... (${st.countdownSec.toFixed(1)}s)`,
+          `ALL CLEAR — Reporting mission complete to TOC... (${st.countdownSec.toFixed(1)}s)`,
+        );
         missionTone = 'green';
       } else if (st.phase === 'post_clear') {
         const parts: string[] = [];
-        if (st.remainingCivilians > 0) parts.push(`民間人保護 ${st.remainingCivilians}`);
-        if (st.remainingEvidence > 0) parts.push(`証拠回収 ${st.remainingEvidence}`);
-        missionHint = `全脅威制圧完了 — 隊員が現場確保を実施中（残: ${parts.join(' / ')}） [Enter で完了報告]`;
+        if (st.remainingCivilians > 0) parts.push(t(`民間人保護 ${st.remainingCivilians}`, `Civilians ${st.remainingCivilians}`));
+        if (st.remainingEvidence > 0) parts.push(t(`証拠回収 ${st.remainingEvidence}`, `Evidence ${st.remainingEvidence}`));
+        missionHint = t(
+          `全脅威制圧完了 — 隊員が現場確保を実施中（残: ${parts.join(' / ')}） [Enter で完了報告]`,
+          `ALL THREATS NEUTRALIZED — Securing scene (${parts.join(' / ')}) [Enter to Complete]`,
+        );
         missionTone = 'teal';
       }
     }
@@ -506,50 +558,69 @@ export class Hud {
       return;
     }
 
-    let badge = '交戦・制圧中';
+    let badge = t('交戦・制圧中', 'IN PROGRESS');
     let badgeBg = 'rgba(86,200,216,.16)';
     let badgeFg = '#8be4f2';
     let nowText = '';
     let nowColor = '#f2c14e';
 
     if (st.phase === 'failing') {
-      badge = '作戦中止';
+      badge = t('作戦中止', 'ABORTED');
       badgeBg = 'rgba(255,90,90,.24)';
       badgeFg = '#ffb8b8';
-      nowText = '✖ 隊長行動不能 — 作戦中止';
+      nowText = t('✖ 隊長行動不能 — 作戦中止', '✖ Team Leader Down — Aborting');
       nowColor = '#ff6b6b';
     } else if (st.phase === 'completing') {
-      badge = '完了報告';
+      badge = t('完了報告', 'COMPLETING');
       badgeBg = 'rgba(92,214,125,.2)';
       badgeFg = '#b9ffd0';
-      nowText = `✓ 全目標完了 — 本部へ報告中 (${st.countdownSec.toFixed(1)}s)`;
+      nowText = t(
+        `✓ 全目標完了 — 本部へ報告中 (${st.countdownSec.toFixed(1)}s)`,
+        `✓ All Objectives Complete — Reporting (${st.countdownSec.toFixed(1)}s)`,
+      );
       nowColor = '#5cd67d';
     } else if (st.activeSuspects > 0) {
-      badge = '交戦・制圧中';
-      nowText = `▶ 武装容疑者を制圧せよ（残 ${st.activeSuspects}名）`;
+      badge = t('交戦・制圧中', 'ENGAGING');
+      nowText = t(
+        `▶ 武装容疑者を制圧せよ（残 ${st.activeSuspects}名）`,
+        `▶ Neutralize armed suspects (${st.activeSuspects} left)`,
+      );
       nowColor = '#f2c14e';
     } else if (st.surrenderedSuspects > 0) {
-      badge = '要拘束あり';
+      badge = t('要拘束あり', 'RESTRAIN');
       badgeBg = 'rgba(242,193,78,.22)';
       badgeFg = '#ffe08a';
-      nowText = `▶ 投降した容疑者を拘束せよ [F長押し]（残 ${st.surrenderedSuspects}名）`;
+      nowText = t(
+        `▶ 投降した容疑者を拘束せよ [F長押し]（残 ${st.surrenderedSuspects}名）`,
+        `▶ Restrain surrendered suspects [Hold F] (${st.surrenderedSuspects} left)`,
+      );
       nowColor = '#f2c14e';
     } else if (st.remainingCivilians > 0) {
-      badge = '現場確保中';
+      badge = t('現場確保中', 'SECURING');
       badgeBg = 'rgba(86,200,216,.2)';
       badgeFg = '#a5f0ff';
-      nowText = `▶ 人質・民間人を確保せよ [F長押し]（残 ${st.remainingCivilians}名）`;
+      nowText = t(
+        `▶ 人質・民間人を確保せよ [F長押し]（残 ${st.remainingCivilians}名）`,
+        `▶ Secure hostages / civilians [Hold F] (${st.remainingCivilians} left)`,
+      );
       nowColor = '#56c8d8';
     } else if (st.remainingEvidence > 0) {
-      badge = '現場確保中';
+      badge = t('現場確保中', 'SECURING');
       badgeBg = 'rgba(86,200,216,.2)';
       badgeFg = '#a5f0ff';
-      nowText = `▶ 証拠品（銃器）を押収せよ [F長押し]（残 ${st.remainingEvidence}点）`;
+      nowText = t(
+        `▶ 証拠品（銃器）を押収せよ [F長押し]（残 ${st.remainingEvidence}点）`,
+        `▶ Collect dropped weapons [Hold F] (${st.remainingEvidence} left)`,
+      );
       nowColor = '#56c8d8';
     }
 
-    const subHint = st.phase === 'post_clear' ? '[Enter / Backspace] 現時点で完了報告して終了' : '';
+    const subHint =
+      st.phase === 'post_clear'
+        ? t('[Enter / Backspace] 現時点で完了報告して終了', '[Enter / Backspace] Report & Finish Now')
+        : '';
     const key = [
+      getLocale(),
       st.phase,
       st.neutralizedSuspects,
       st.totalSuspects,
@@ -603,28 +674,28 @@ export class Hud {
 
     const suspectsDone = st.allSuspectsNeutralized;
     addRow(
-      '容疑者制圧',
+      t('容疑者制圧', 'Neutralize Suspects'),
       `${st.neutralizedSuspects} / ${st.totalSuspects}`,
       suspectsDone,
-      st.surrenderedSuspects > 0 ? `要拘束 ${st.surrenderedSuspects}` : undefined,
+      st.surrenderedSuspects > 0 ? t(`要拘束 ${st.surrenderedSuspects}`, `Cuff ${st.surrenderedSuspects}`) : undefined,
     );
 
     if (st.totalCivilians > 0 || st.deadCivilians > 0) {
       addRow(
-        '人質確保',
+        t('人質確保', 'Secure Civilians'),
         `${st.securedCivilians} / ${st.totalCivilians}`,
         st.remainingCivilians === 0,
-        st.deadCivilians > 0 ? `犠牲 ${st.deadCivilians}` : undefined,
+        st.deadCivilians > 0 ? t(`犠牲 ${st.deadCivilians}`, `KIA ${st.deadCivilians}`) : undefined,
         true,
       );
     }
 
     const evDone = st.activeSuspects === 0 && st.droppedEvidence === 0 && st.totalEvidence > 0;
     addRow(
-      '証拠品押収',
+      t('証拠品押収', 'Collect Evidence'),
       `${st.collectedEvidence} / ${st.totalEvidence}`,
       evDone,
-      st.droppedEvidence > 0 ? `未回収 ${st.droppedEvidence}` : undefined,
+      st.droppedEvidence > 0 ? t(`未回収 ${st.droppedEvidence}`, `Left ${st.droppedEvidence}`) : undefined,
     );
 
     if (subHint) {

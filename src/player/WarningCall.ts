@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
+import { t } from '../core/i18n';
 import type { InputManager } from '../core/InputManager';
 import type { WarningConfig } from '../core/types';
 import type { Subtitle } from '../ui/Subtitle';
@@ -35,7 +36,7 @@ export class WarningCall {
     const pos = { x: this.eye.x, y: this.eye.y, z: this.eye.z };
     this.bus.emit('warningCall', { pos, dir: { x: dx, y: 0, z: dz } });
     this.bus.emit('noise', { pos, radius: this.cfg.noiseRadius, kind: 'voice' });
-    this.subtitle.show(this.cfg.text, this.cfg.subtitleSec);
+    this.subtitle.show(t(this.cfg.text, 'Police! Drop your weapon!'), this.cfg.subtitleSec);
   }
 
   update(rawDt: number): void {

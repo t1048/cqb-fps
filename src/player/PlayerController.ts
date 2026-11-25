@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getSettings } from '../core/Settings';
 import type { InputManager } from '../core/InputManager';
 import type { GameEventBus } from '../core/events';
 import type { MapData, MoveMode, PlayerConfig } from '../core/types';
@@ -127,9 +128,12 @@ export class PlayerController {
 
     // 視点
     const md = this.input.consumeMouseDelta();
-    this.yaw -= md.x * cfg.mouseSensitivity;
+    const settings = getSettings();
+    const sens = cfg.mouseSensitivity * settings.mouseSensitivity;
+    const ySign = settings.invertY ? -1 : 1;
+    this.yaw -= md.x * sens;
     const maxPitch = cfg.maxPitchDeg * DEG2RAD;
-    this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch - md.y * cfg.mouseSensitivity));
+    this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch - md.y * sens * ySign));
 
     // しゃがみ（押している間）
     this.crouching = this.input.isDown('crouch');

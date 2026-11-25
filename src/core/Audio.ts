@@ -108,7 +108,10 @@ export class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterLowpass: BiquadFilterNode | null = null;
   private masterGain: GainNode | null = null;
+  private userGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private userVolume = 1.0;
+  private userMuted = false;
 
   private unlocked = false;
   private disposed = false;
@@ -146,6 +149,37 @@ export class AudioEngine {
     return this.disposed;
   }
 
+  /** Effective user output gain (0 when muted). */
+  public get effectiveVolume(): number {
+    return this.userMuted ? 0 : this.userVolume;
+  }
+
+  /** Sets master output volume (0.0 - 1.0). */
+  public setMasterVolume(volume: number): void {
+    this.userVolume = clamp(Number.isFinite(volume) ? volume : 1, 0, 1);
+    this.applyUserGain();
+  }
+
+  /** Sets master mute state. */
+  public setMuted(muted: boolean): void {
+    this.userMuted = muted;
+    this.applyUserGain();
+    if (muted) {
+      this.cancelAllyRadio();
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private applyUserGain(): void {
+    if (this.userGain) {
+      this.userGain.gain.value = this.effectiveVolume;
+    }
+  }
+
   /**
    * Lazily creates and/or resumes the AudioContext. Safe to call from user gesture handlers
    * or manually. No-ops gracefully in headless/non-browser environments or after `dispose()`.
@@ -175,12 +209,17 @@ export class AudioEngine {
       const gain = ctx.createGain();
       gain.gain.value = NOMINAL_MASTER_GAIN;
 
+      const userGain = ctx.createGain();
+      userGain.gain.value = this.effectiveVolume;
+
       lowpass.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(userGain);
+      userGain.connect(ctx.destination);
 
       this.ctx = ctx;
       this.masterLowpass = lowpass;
       this.masterGain = gain;
+      this.userGain = userGain;
       this.noiseBuffer = this.createNoiseBuffer(ctx);
 
       this.applyListenerToContext(ctx);
@@ -972,12 +1011,14 @@ export class AudioEngine {
         'Drop the gun! Get on the ground!',
         'SWAT! Hands up now!',
       ];
+      const vol = this.effectiveVolume;
+      if (vol <= 0) return;
       const utter = new SpeechSynthesisUtterance(lines[Math.floor(Math.random() * lines.length)]!);
       utter.voice = speech.voice;
       utter.lang = 'en-US';
       utter.pitch = 0.82;
       utter.rate = 1.22;
-      utter.volume = 0.85;
+      utter.volume = clamp(0.85 * vol, 0, 1);
       try {
         speech.synth.speak(utter);
         return;
@@ -1588,8 +1629,9 @@ export class AudioEngine {
     gain.gain.value = MAX_TINNITUS_GAIN * this.ringingIntensity;
 
     osc.connect(gain);
-    // Bypass masterLowpass so high-frequency ringing remains audible while world SFX are muffled.
-    gain.connect(ctx.destination);
+    // Bypass masterLowpass so high-frequency ringing remains audible while world SFX are muffled,
+    // but still respect user master volume & mute via userGain.
+    gain.connect(this.userGain ?? ctx.destination);
     osc.start(ctx.currentTime);
 
     this.tinnitusOsc = osc;
@@ -1680,6 +1722,8 @@ export class AudioEngine {
     rate: number,
     volume: number,
   ): boolean {
+    const effVol = this.effectiveVolume;
+    if (effVol <= 0) return true;
     const speech = this.resolveEnglishSpeech();
     if (!speech) return false;
     const { synth, voice: enVoice } = speech;
@@ -1720,7 +1764,7 @@ export class AudioEngine {
     const utter = new SpeechSynthesisUtterance(text);
     utter.voice = enVoice;
     utter.lang = 'en-US';
-    utter.volume = volume;
+    utter.volume = clamp(volume * effVol, 0, 1);
     utter.pitch = pitch;
     utter.rate = rate;
     utter.onend = () => finish(true);

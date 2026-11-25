@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
 import { disposeObject } from '../core/dispose';
+import { t as tr } from '../core/i18n';
 import { batchStaticMeshes } from './StaticBatcher';
 import type { DoorConfig, DoorDef, MapData } from '../core/types';
 import type { InputManager } from '../core/InputManager';
@@ -807,8 +808,13 @@ export class DoorSystem {
       id: 'door',
       priority: 200,
       resolve: () => this.resolveTarget(),
-      label: (t) =>
-        t.door.locked ? 'ドア: 施錠 (G 蹴破り)' : `ドア(${t.door.stage}): F 開閉 / ホイール 段階${t.fast ? ' [ノブ]' : ''}`,
+      label: (target) =>
+        target.door.locked
+          ? tr('ドア: 施錠 (G 蹴破り)', 'Door: Locked (G Kick)')
+          : tr(
+              `ドア(${target.door.stage}): F 開閉 / ホイール 段階${target.fast ? ' [ノブ]' : ''}`,
+              `Door (${target.door.stage}): F Open/Close / Wheel Step${target.fast ? ' [Knob]' : ''}`,
+            ),
       onPress: (t) => t.door.toggle(t.fast, this.player.position.x, this.player.position.z),
       // ホイール上(deltaY<0)=開く方向 / 下(deltaY>0)=閉じる方向
       onWheel: (t, steps) => {

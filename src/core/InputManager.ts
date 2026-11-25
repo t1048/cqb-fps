@@ -260,16 +260,23 @@ export class InputManager {
     }
     this.wheel += e.deltaY;
   };
+  /** false の間は canvas クリックでの自動ポインタロックを抑止する（ポーズ・ブリーフィング中） */
+  allowAutoPointerLock = true;
+  /** ポインタロック状態変化コールバック */
+  onPointerLockChange: ((locked: boolean) => void) | null = null;
+
   private onClick = (): void => {
-    if (!this.isPointerLocked) this.requestPointerLock();
+    if (this.allowAutoPointerLock && !this.isPointerLocked) this.requestPointerLock();
   };
   private onLockChange = (): void => {
-    if (!this.isPointerLocked) {
+    const locked = this.isPointerLocked;
+    if (!locked) {
       this.cancelGesture();
       this.blockFireUntilRelease = false;
       this.buttons.clear();
       this.mouseDX = 0;
       this.mouseDY = 0;
     }
+    this.onPointerLockChange?.(locked);
   };
 }
