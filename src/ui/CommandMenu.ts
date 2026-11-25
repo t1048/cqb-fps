@@ -619,53 +619,55 @@ export class CommandMenu {
     if (ctx.restrainTarget) {
       add(
         'restrain',
-        t(`その対象を確保（${ctx.restrainTarget.label}）`, `Cuff them (${ctx.restrainTarget.label})`),
+        t(`対象を確保（${ctx.restrainTarget.label}）`, `Secure Target (${ctx.restrainTarget.label})`),
         true,
       );
     } else if (ctx.door) {
-      add('stack', t('ドアにスタック', 'Stack on the door'), true);
+      add('stack', t('スタックアップ（扉脇で待機）', 'Stack Up (Hold by Door)'), true);
       add(
         'clear',
-        ctx.door.locked ? t('蹴って入れ', 'Kick it and go') : t('開けて入れ', 'Open and go'),
+        ctx.door.locked
+          ? t('オープン＆クリア（蹴破り突入）', 'Open & Clear (Kick Breach)')
+          : t('オープン＆クリア（2名突入制圧）', 'Open & Clear (2-Man Entry)'),
         true,
       );
-      add('flashClear', t('フラッシュを投げろ', 'Throw a bang'), true);
-      add('gasClear', t('ガスを入れろ', 'Put gas in'), true);
-      add('c2Clear', t('爆薬を付けろ', 'Charge the door'), true);
-      add('breachClear', t('ブリーチしろ', 'Breach it'), true);
-      add('pieDoor', t('外から押さえろ', 'Hold from outside'), !ctx.door.locked);
+      add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);
+      add('gasClear', t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)'), true);
+      add('c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
+      add('breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
+      add('pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
     } else if (ctx.areaTarget) {
-      add('clear', t('部屋に入れ', 'Go in'), true);
-      add('flashClear', t('フラッシュを投げろ', 'Throw a bang'), true);
-      add('gasClear', t('ガスを入れろ', 'Put gas in'), true);
-      add('stack', t('入口にスタック', 'Stack on the entry'), true);
+      add('clear', t('突入＆クリア（2名突入制圧）', 'Breach & Clear (2-Man Entry)'), true);
+      add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);
+      add('gasClear', t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)'), true);
+      add('stack', t('スタックアップ（入口脇で待機）', 'Stack Up (Hold by Entry)'), true);
       if (ctx.groundPoint) {
         add(
           'move',
           t(
-            `その地点へ動け (${ctx.groundPoint.dist.toFixed(1)}m)`,
-            `Move there (${ctx.groundPoint.dist.toFixed(1)}m)`,
+            `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`,
+            `Move & Cover (${ctx.groundPoint.dist.toFixed(1)}m)`,
           ),
           true,
         );
       }
-      add('overwatch', t('照準の先を見ろ', 'Watch where I\'m aimed'), true);
+      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
     } else if (ctx.groundPoint) {
       add(
         'move',
         t(
-          `その地点へ動け (${ctx.groundPoint.dist.toFixed(1)}m)`,
-          `Move there (${ctx.groundPoint.dist.toFixed(1)}m)`,
+          `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`,
+          `Move & Cover (${ctx.groundPoint.dist.toFixed(1)}m)`,
         ),
         true,
       );
-      add('overwatch', t('照準の先を見ろ', 'Watch where I\'m aimed'), true);
+      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
     } else {
-      add('overwatch', t('照準の先を見ろ', 'Watch where I\'m aimed'), true);
+      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
     }
 
-    add('hold', t('そこで止まれ', 'Hold there'), true);
-    add('follow', t('後ろに付け', 'On me'), true);
+    add('hold', t('現在位置で待機・周囲警戒', 'Hold Position & Cover'), true);
+    add('follow', t('追従・隊形復帰', 'Fall In / Follow'), true);
     add(null, t('キャンセル', 'Cancel'), true);
     return out;
   }

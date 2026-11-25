@@ -792,7 +792,7 @@ export class SquadSystem implements SquadContext {
         const goal = ally.followGoal!;
         if (ally.dodge) {
           // プレイヤー射線から退避中は退避位置を保持（applySeparation が移動を担当）
-          ally.progress = t('射線を外している', 'Off the line');
+          ally.progress = t('射線退避', 'Clearing Line of Fire');
           return;
         }
         const dist = Math.hypot(goal.x - body.px, goal.z - body.pz);
@@ -808,7 +808,7 @@ export class SquadSystem implements SquadContext {
           ally.stalled = 0;
           ally.stuckStage = 0;
           ally.anchor = { x: body.px, z: body.pz };
-          ally.progress = t('隊列で待っている', 'In formation');
+          ally.progress = t('隊列待機', 'Holding Formation');
           if (!ally.idleLook) {
             // 停止中の視線: 2名以上なら最後尾は後方警戒（360°セキュリティ）、前方はプレイヤー向き±0.42 に固定
             let aliveCount = 0;
@@ -846,7 +846,7 @@ export class SquadSystem implements SquadContext {
       }
 
       case 'hold': {
-        ally.progress = t('ここで見ている', 'Holding here');
+        ally.progress = t('現在地警戒', 'Holding Position');
         if (!ally.engaging) {
           const lx = body.px - Math.sin(ally.watchYaw) * 4;
           const lz = body.pz - Math.cos(ally.watchYaw) * 4;
@@ -856,7 +856,7 @@ export class SquadSystem implements SquadContext {
       }
 
       case 'overwatch': {
-        ally.progress = t('その方向を見ている', 'Watching that way');
+        ally.progress = t('射線ロック中', 'Holding Security');
         if (!ally.engaging) {
           const lx = body.px - Math.sin(ally.watchYaw) * 6;
           const lz = body.pz - Math.cos(ally.watchYaw) * 6;
@@ -879,10 +879,10 @@ export class SquadSystem implements SquadContext {
           ally.settled = true;
         }
         if (!ally.settled) {
-          ally.progress = t('その地点へ移動している', 'Moving there');
+          ally.progress = t('指定位置へ移動中', 'Moving to Position');
           navigateTo(this, ally, mt.x, mt.z, mt.y, dt, true, true);
         } else {
-          ally.progress = t('その地点で見ている', 'Watching from there');
+          ally.progress = t('指定位置で警戒中', 'Covering Position');
           if (!ally.engaging) {
             const lx = body.px - Math.sin(ally.watchYaw) * 5;
             const lz = body.pz - Math.cos(ally.watchYaw) * 5;
@@ -933,7 +933,7 @@ export class SquadSystem implements SquadContext {
         return;
 
       case 'secured': {
-        ally.progress = t('部屋を押さえている', 'Holding the room');
+        ally.progress = t('室確保・警戒中', 'Room Secured');
         // 位置は PoD 固定（離れていれば戻る。静止中は分離力もほぼ無効）
         const portal = ally.entryPortal;
         if (!ally.engaging && portal) holdAtPod(this, ally, portal, dt);
