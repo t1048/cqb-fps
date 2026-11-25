@@ -66,6 +66,7 @@ export class SwatEntryCoordinator {
   private readonly reportedStackCells = new Set<number>();
   private readonly entryGroups: EntryGroup[] = [];
   private entryStyleOverride: EntryMode | null = null;
+  private readonly passableScratch = new Set<Collider>();
 
   constructor(private readonly host: SwatEntryHost) {}
 
@@ -141,17 +142,7 @@ export class SwatEntryCoordinator {
 
   portals(): EntryPortal[] {
     if (!this.entryCache) {
-      this.entryCache = listExteriorEntries(
-        this.host.d.rooms,
-        this.host.d.doors.doors.map((door) => ({
-          id: door.id,
-          centerX: door.centerX,
-          centerZ: door.centerZ,
-          normalX: door.normalX,
-          normalZ: door.normalZ,
-          sillY: door.sillY,
-        })),
-      );
+      this.entryCache = listExteriorEntries(this.host.d.rooms, this.host.d.doors.doors);
     }
     return this.entryCache;
   }
@@ -517,7 +508,12 @@ export class SwatEntryCoordinator {
       }
       if (!group.plans) {
         if (group.cqb && group.room && group.slots.length > 0) {
-          const passable = door && !door.locked ? new Set<Collider>(door.colliders) : undefined;
+          let passable: ReadonlySet<Collider> | undefined;
+          if (door && !door.locked) {
+            this.passableScratch.clear();
+            for (const c of door.colliders) this.passableScratch.add(c);
+            passable = this.passableScratch;
+          }
           group.plans = planEntry(group.cqb, cqbRoomFromRoomDef(group.room), group.slots, {
             isStandable: (p) => !blockedAtFiltered(this.host.d.colliders, p.x, p.z, 0.3, p.y, passable),
             reachable: (a, b) => pathSegmentClear(this.host.d.colliders, a, b, 0.25, group.portal.sillY, passable),

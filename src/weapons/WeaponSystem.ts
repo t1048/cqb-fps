@@ -4,6 +4,7 @@ import type { GameEventBus } from '../core/events';
 import type { WeaponDef } from '../core/types';
 import type { PlayerController } from '../player/PlayerController';
 import type { AABB, Collider } from '../world/WorldBuilder';
+import { raycastColliders } from '../world/ColliderIndex';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
@@ -242,18 +243,9 @@ export class WeaponSystem {
   trace(origin: THREE.Vector3, dir: THREE.Vector3, range: number): ShotResult {
     this.ray.origin.copy(origin);
     this.ray.direction.copy(dir);
-    let best = range;
+    let best = raycastColliders(this.colliders, origin, dir, range);
     let bestId: string | null = null;
     let shielded = false;
-
-    for (const c of this.colliders) {
-      const d = this.rayDistance(c.aabb);
-      if (d !== null && d < best) {
-        best = d;
-        bestId = null;
-        shielded = false;
-      }
-    }
     for (const t of this.targets) {
       const d = this.rayDistance(t.getAABB());
       if (d !== null && d < best) {

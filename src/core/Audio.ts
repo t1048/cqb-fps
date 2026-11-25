@@ -37,6 +37,17 @@ const NOMINAL_MASTER_GAIN = 1.0;
 const TINNITUS_FREQ_HZ = 4500;
 const MAX_TINNITUS_GAIN = 0.12;
 const NOISE_BUFFER_SEC = 2.0;
+const MAX_AMBIENT_DIST_SQ = 42 * 42;
+const MAX_LOUD_DIST_SQ = 85 * 85;
+
+const RADIO_DISTORTION_CURVE: Float32Array<ArrayBuffer> = (() => {
+  const curve = new Float32Array(65);
+  for (let i = 0; i < curve.length; i++) {
+    const x = (i * 2) / (curve.length - 1) - 1;
+    curve[i] = Math.tanh(x * 2.2);
+  }
+  return curve;
+})();
 
 function clamp(v: number, min: number, max: number): number {
   if (!Number.isFinite(v)) return min;
@@ -291,7 +302,7 @@ export class AudioEngine {
    * Volume and spatial falloff scale with `radius` (e.g. run=12m vs quiet/crouch=3m).
    */
   public playFootstep(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    if (!isFiniteVec3(pos) || !Number.isFinite(radius) || !this.isAudibleAt(pos, MAX_AMBIENT_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -344,7 +355,7 @@ export class AudioEngine {
    * Pitch, duration, and volume scale with `radius` (e.g. slow=4m vs fast/knob=9m).
    */
   public playDoorCreak(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    if (!isFiniteVec3(pos) || !Number.isFinite(radius) || !this.isAudibleAt(pos, MAX_AMBIENT_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -490,7 +501,13 @@ export class AudioEngine {
    * - `radius < 10` (taser=6): brief high-frequency electric buzz/zap.
    */
   public playGunshot(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    if (
+      !isFiniteVec3(pos) ||
+      !Number.isFinite(radius) ||
+      !this.isAudibleAt(pos, radius >= 25 ? MAX_LOUD_DIST_SQ : MAX_AMBIENT_DIST_SQ)
+    ) {
+      return;
+    }
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -507,13 +524,13 @@ export class AudioEngine {
    * Procedural heavy door kick / breach: deep sub-bass thump + wood splinter noise burst.
    */
   public playBreach(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    if (!isFiniteVec3(pos) || !Number.isFinite(radius) || !this.isAudibleAt(pos, MAX_LOUD_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
     const { ctx, noiseBuffer } = ready;
     const now = ctx.currentTime;
-    const panner = this.createPanner(ctx, pos, Math.max(radius, 12));
+    const panner = this.createPanner(ctx, pos, Math.max(radius, 12), true);
 
     // Deep sub-bass door kick thump
     const thumpDur = 0.2;
@@ -589,13 +606,13 @@ export class AudioEngine {
    * Procedural flashbang detonation: intense concussive bang (sharp impulse + decaying boom).
    */
   public playFlashbang(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    if (!isFiniteVec3(pos) || !Number.isFinite(radius) || !this.isAudibleAt(pos, MAX_LOUD_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
     const { ctx, noiseBuffer } = ready;
     const now = ctx.currentTime;
-    const panner = this.createPanner(ctx, pos, Math.max(radius, 30));
+    const panner = this.createPanner(ctx, pos, Math.max(radius, 30), true);
 
     // Sharp impulse crack
     const crackDur = 0.065;
@@ -671,7 +688,7 @@ export class AudioEngine {
    * `urgent = true` shifts pitch upward and sharpens attack for imminent detonation.
    */
   public playC2Beep(pos: Vec3, urgent: boolean): void {
-    if (!isFiniteVec3(pos)) return;
+    if (!isFiniteVec3(pos) || !this.isAudibleAt(pos, MAX_AMBIENT_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -702,13 +719,19 @@ export class AudioEngine {
    * Procedural C2 breaching blast: deep sub-bass shockwave + concussive lowpass boom + wood/frame debris crack.
    */
   public playC2Blast(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius)) return;
+    if (
+      !isFiniteVec3(pos) ||
+      !Number.isFinite(radius) ||
+      !this.isAudibleAt(pos, Math.max(MAX_LOUD_DIST_SQ, radius * radius * 2.25))
+    ) {
+      return;
+    }
     const ready = this.getReadyContext();
     if (!ready) return;
 
     const { ctx, noiseBuffer } = ready;
     const now = ctx.currentTime;
-    const panner = this.createPanner(ctx, pos, Math.max(radius, 35));
+    const panner = this.createPanner(ctx, pos, Math.max(radius, 35), true);
 
     // Sub-bass shockwave
     const subDur = 0.45;
@@ -776,7 +799,7 @@ export class AudioEngine {
    * - Deeper low-end boot impact + sole scuff + optional heavy gear rattle.
    */
   public playSwatFootstep(pos: Vec3, heavy: boolean): void {
-    if (!isFiniteVec3(pos)) return;
+    if (!isFiniteVec3(pos) || !this.isAudibleAt(pos, MAX_AMBIENT_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -851,7 +874,14 @@ export class AudioEngine {
    * Procedural CS tear gas canister pop + sustained pressurized gas hiss.
    */
   public playGasHiss(pos: Vec3, radius: number): void {
-    if (!isFiniteVec3(pos) || !Number.isFinite(radius) || radius <= 0) return;
+    if (
+      !isFiniteVec3(pos) ||
+      !Number.isFinite(radius) ||
+      radius <= 0 ||
+      !this.isAudibleAt(pos, Math.max(MAX_AMBIENT_DIST_SQ, radius * radius * 12.25))
+    ) {
+      return;
+    }
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -924,7 +954,7 @@ export class AudioEngine {
    * Procedural two-burst dry cough (CS gas / pepper exposure).
    */
   public playCough(pos: Vec3): void {
-    if (!isFiniteVec3(pos)) return;
+    if (!isFiniteVec3(pos) || !this.isAudibleAt(pos, MAX_AMBIENT_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -993,7 +1023,7 @@ export class AudioEngine {
    * brief radio squelch click + formant-filtered two-syllable command cadence + tail click.
    */
   public playWarningCall(pos: Vec3): void {
-    if (!isFiniteVec3(pos)) return;
+    if (!isFiniteVec3(pos) || !this.isAudibleAt(pos, MAX_AMBIENT_DIST_SQ)) return;
     const ready = this.getReadyContext();
     if (!ready) return;
 
@@ -1200,27 +1230,39 @@ export class AudioEngine {
   }
 
   /**
+   * Stops all active voices, flashbang ear-ringing/tinnitus, and active radio speech
+   * while keeping the AudioContext and shared noise buffer alive across mission restarts.
+   */
+  public stopAll(): void {
+    if (this.disposed) return;
+    this.ringingElapsed = 0;
+    this.ringingDuration = 0;
+    this.ringingIntensity = 0;
+    this.stopTinnitus();
+    this.restoreMasterBus();
+    this.cancelAllyRadio();
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {
+      // Ignore speechSynthesis cancel errors.
+    }
+    for (const cleanup of Array.from(this.activeCleanups)) {
+      cleanup();
+    }
+    this.activeCleanups.clear();
+  }
+
+  /**
    * Idempotently disposes all gesture listeners, active audio nodes, tinnitus oscillator,
    * and closes the underlying AudioContext.
    */
   public dispose(): void {
     if (this.disposed) return;
+    this.stopAll();
     this.disposed = true;
     this.unlocked = false;
 
     this.detachUnlockListeners();
-
-    this.ringingElapsed = 0;
-    this.ringingDuration = 0;
-    this.ringingIntensity = 0;
-    this.stopTinnitus();
-    this.cancelAllyRadio();
-
-    // Stop and disconnect all active procedural voices
-    for (const cleanup of Array.from(this.activeCleanups)) {
-      cleanup();
-    }
-    this.activeCleanups.clear();
 
     if (this.masterLowpass) {
       try {
@@ -1238,6 +1280,15 @@ export class AudioEngine {
         // Ignore disconnect errors on teardown.
       }
       this.masterGain = null;
+    }
+
+    if (this.userGain) {
+      try {
+        this.userGain.disconnect();
+      } catch {
+        // Ignore disconnect errors on teardown.
+      }
+      this.userGain = null;
     }
 
     this.noiseBuffer = null;
@@ -1266,7 +1317,7 @@ export class AudioEngine {
     const { ctx, noiseBuffer } = ready;
     const now = ctx.currentTime;
     const heavy = clamp((radius - 25) / 15, 0, 1);
-    const panner = this.createPanner(ctx, pos, radius);
+    const panner = this.createPanner(ctx, pos, radius, true);
 
     // Sharp transient crack
     const crackDur = 0.045 + heavy * 0.025;
@@ -1513,11 +1564,22 @@ export class AudioEngine {
     return Math.random() * maxOffset;
   }
 
-  private createPanner(ctx: AudioContext, pos: Vec3, radius: number): PannerNode {
+  private isAudibleAt(pos: Vec3, maxDistSq: number): boolean {
+    const dx = pos.x - this.listenerPos.x;
+    const dy = pos.y - this.listenerPos.y;
+    const dz = pos.z - this.listenerPos.z;
+    return dx * dx + dy * dy + dz * dz <= maxDistSq;
+  }
+
+  private createPanner(ctx: AudioContext, pos: Vec3, radius: number, hrtf = false): PannerNode {
     const panner = ctx.createPanner();
-    try {
-      panner.panningModel = 'HRTF';
-    } catch {
+    if (hrtf) {
+      try {
+        panner.panningModel = 'HRTF';
+      } catch {
+        panner.panningModel = 'equalpower';
+      }
+    } else {
       panner.panningModel = 'equalpower';
     }
     panner.distanceModel = 'inverse';
@@ -1907,12 +1969,7 @@ export class AudioEngine {
     f2.Q.value = 4.5;
 
     const shaper = ctx.createWaveShaper();
-    const curve = new Float32Array(65);
-    for (let i = 0; i < curve.length; i++) {
-      const x = (i * 2) / (curve.length - 1) - 1;
-      curve[i] = Math.tanh(x * 2.2);
-    }
-    shaper.curve = curve;
+    shaper.curve = RADIO_DISTORTION_CURVE;
 
     const vg = ctx.createGain();
     vg.gain.setValueAtTime(EPSILON, voiceStart);

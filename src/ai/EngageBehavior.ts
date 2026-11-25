@@ -6,7 +6,7 @@ import type { Door, DoorSystem } from '../world/Door';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { HumanoidBody } from './HumanoidBody';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
-import { collidersNear } from '../world/ColliderIndex';
+import { collidersNear, raycastColliders } from '../world/ColliderIndex';
 import {
   blockedAtFiltered,
   distToSegment,
@@ -114,6 +114,10 @@ export function blockedAt(colliders: readonly Collider[], x: number, z: number, 
 }
 
 const PUSH_EPS = 1e-4;
+const coverScratch: Collider[] = [];
+const threatPlayerEyeTmp = new THREE.Vector3();
+const threatFromTmp: Vec3 = { x: 0, y: 0, z: 0 };
+const threatPtTmp: Vec3 = { x: 0, y: 0, z: 0 };
 
 /** 円(半径 r)と歩行高さ帯の AABB 群の重なりを法線方向へ押し出す（最大 maxPasses パス）。 */
 function pushOutCircleAABB(
@@ -128,10 +132,12 @@ function pushOutCircleAABB(
   let pz = z;
   let pushed = false;
   const r2 = r * r;
+  const span = r * 4 + 0.5;
+  const near = collidersNear(colliders, x - span, z - span, x + span, z + span);
   for (let pass = 0; pass < maxPasses; pass++) {
     let hit = false;
-    for (const c of colliders) {
-      const a = c.aabb;
+    for (let i = 0; i < near.length; i++) {
+      const a = near[i]!.aabb;
       if (a.max.y <= feetY + STEP_HEIGHT) continue;
       if (a.min.y >= feetY + 1.6) continue;
       const cx = Math.max(a.min.x, Math.min(px, a.max.x));
@@ -269,35 +275,51 @@ export function findNearestVisibleThreat(
   eyeY: number,
   range: number,
 ): CombatThreat | null {
-  const from = { x, y: eyeY, z };
+  threatFromTmp.x = x;
+  threatFromTmp.y = eyeY;
+  threatFromTmp.z = z;
   let best: CombatThreat | null = null;
   let bestD = range;
 
   if (!ctx.ignorePlayer && ctx.player.alive !== false) {
-    const eye = ctx.player.getEyePosition();
+    const eye = ctx.player.getEyePosition(threatPlayerEyeTmp);
     const pos = ctx.player.position;
     const d = Math.hypot(pos.x - x, pos.z - z);
     if (d <= bestD) {
-      const pts = [
-        { x: eye.x, y: eye.y, z: eye.z },
-        { x: pos.x, y: eye.y - PLAYER_BODY_DROP, z: pos.z },
-      ];
-      const hitPt = pts.find((p) => hasLineOfSight(ctx.colliders, from, p));
-      if (hitPt) {
+      threatPtTmp.x = eye.x;
+      threatPtTmp.y = eye.y;
+      threatPtTmp.z = eye.z;
+      if (hasLineOfSight(ctx.colliders, threatFromTmp, threatPtTmp)) {
         bestD = d;
-        best = { id: 'player', x: pos.x, z: pos.z, point: hitPt, isPlayer: true };
+        best = { id: 'player', x: pos.x, z: pos.z, point: { x: eye.x, y: eye.y, z: eye.z }, isPlayer: true };
+      } else {
+        threatPtTmp.x = pos.x;
+        threatPtTmp.y = eye.y - PLAYER_BODY_DROP;
+        threatPtTmp.z = pos.z;
+        if (hasLineOfSight(ctx.colliders, threatFromTmp, threatPtTmp)) {
+          bestD = d;
+          best = {
+            id: 'player',
+            x: pos.x,
+            z: pos.z,
+            point: { x: pos.x, y: eye.y - PLAYER_BODY_DROP, z: pos.z },
+            isPlayer: true,
+          };
+        }
       }
     }
   }
 
   if (ctx.allies) {
-    for (const a of ctx.allies()) {
+    const allies = ctx.allies();
+    for (let i = 0; i < allies.length; i++) {
+      const a = allies[i]!;
       const d = Math.hypot(a.px - x, a.pz - z);
       if (d > bestD) continue;
       const chest = a.getChest();
-      if (hasLineOfSight(ctx.colliders, from, chest)) {
+      if (hasLineOfSight(ctx.colliders, threatFromTmp, chest)) {
         bestD = d;
-        best = { id: a.id, x: a.px, z: a.pz, point: chest, isPlayer: false };
+        best = { id: a.id, x: a.px, z: a.pz, point: { x: chest.x, y: chest.y, z: chest.z }, isPlayer: false };
       }
     }
   }
@@ -321,29 +343,44 @@ export function findAlertCover(
 ): XZ | null {
   let best: XZ | null = null;
   let bestD = Infinity;
-  const threatEye = { x: threat.x, y: feetY + 1.5, z: threat.z };
-  for (const c of colliders) {
+  const m = 0.45;
+  const pad = Math.max(2, m + 0.5);
+  const near = collidersNear(colliders, px - searchRange - pad, pz - searchRange - pad, px + searchRange + pad, pz + searchRange + pad);
+  coverScratch.length = 0;
+  for (let i = 0; i < near.length; i++) {
+    const c = near[i]!;
     if (c.kind !== 'cover') continue;
     const a = c.aabb;
     if (a.min.y > feetY + 1.2 || a.max.y < feetY + 0.35) continue;
+    if (
+      a.max.x + m < px - searchRange ||
+      a.min.x - m > px + searchRange ||
+      a.max.z + m < pz - searchRange ||
+      a.min.z - m > pz + searchRange
+    ) {
+      continue;
+    }
+    coverScratch.push(c);
+  }
+  const threatEye: Vec3 = { x: threat.x, y: feetY + 1.5, z: threat.z };
+  const targetPt: Vec3 = { x: 0, y: feetY + 1.1, z: 0 };
+  for (let i = 0; i < coverScratch.length; i++) {
+    const a = coverScratch[i]!.aabb;
     const cx = (a.min.x + a.max.x) / 2;
     const cz = (a.min.z + a.max.z) / 2;
     const hx = (a.max.x - a.min.x) / 2;
     const hz = (a.max.z - a.min.z) / 2;
-    const m = 0.45;
-    const cands: XZ[] = [
-      { x: cx + hx + m, z: cz },
-      { x: cx - hx - m, z: cz },
-      { x: cx, z: cz + hz + m },
-      { x: cx, z: cz - hz - m },
-    ];
-    for (const h of cands) {
-      const d = Math.hypot(h.x - px, h.z - pz);
+    for (let k = 0; k < 4; k++) {
+      const hxPos = k === 0 ? cx + hx + m : k === 1 ? cx - hx - m : cx;
+      const hzPos = k === 2 ? cz + hz + m : k === 3 ? cz - hz - m : cz;
+      const d = Math.hypot(hxPos - px, hzPos - pz);
       if (d > searchRange || d >= bestD) continue;
-      if (blockedAt(colliders, h.x, h.z, BODY_RADIUS, feetY)) continue;
-      if (hasLineOfSight(colliders, threatEye, { x: h.x, y: feetY + 1.1, z: h.z })) continue;
+      if (blockedAt(colliders, hxPos, hzPos, BODY_RADIUS, feetY)) continue;
+      targetPt.x = hxPos;
+      targetPt.z = hzPos;
+      if (hasLineOfSight(colliders, threatEye, targetPt)) continue;
       bestD = d;
-      best = h;
+      best = { x: hxPos, z: hzPos };
     }
   }
   return best;
@@ -449,6 +486,14 @@ export class SuspectNavigator {
   private steppedThisFrame = false;
   /** restartDist 指定時の到着済み目標（ヒステリシス） */
   private settledAt: XZ | null = null;
+  private readonly passableSet = new Set<Collider>();
+  private passableDirty = true;
+  private readonly doorSegPts: XZ[] = [
+    { x: 0, z: 0 },
+    { x: 0, z: 0 },
+    { x: 0, z: 0 },
+    { x: 0, z: 0 },
+  ];
 
   constructor(
     private readonly body: HumanoidBody,
@@ -515,28 +560,41 @@ export class SuspectNavigator {
     return this.curSpeed * dt;
   }
 
-  private passableUnlockedDoors(): Set<Collider> | undefined {
+  private getPassable(opts: SuspectNavOptions): ReadonlySet<Collider> | undefined {
+    if (!opts.canOpenDoors) return undefined;
     const doors = this.ctx.doors?.doors;
     if (!doors) return undefined;
-    const set = new Set<Collider>();
-    for (const d of doors) {
-      if (this.skippedDoors.has(d.id)) continue;
-      if (!d.locked && d.angle < NAV_DOOR_OPEN_ANGLE) {
-        for (const c of d.colliders) set.add(c);
+    if (this.passableDirty) {
+      this.passableDirty = false;
+      this.passableSet.clear();
+      for (const d of doors) {
+        if (this.skippedDoors.has(d.id)) continue;
+        if (!d.locked && d.angle < NAV_DOOR_OPEN_ANGLE) {
+          for (const c of d.colliders) this.passableSet.add(c);
+        }
       }
     }
-    return set;
+    return this.passableSet;
   }
 
   private pickDoorOnPath(routeDest: XZ): Door | null {
     const doors = this.ctx.doors?.doors;
     if (!doors) return null;
-    const pts: XZ[] = [{ x: this.body.px, z: this.body.pz }];
+    const pts = this.doorSegPts;
+    pts[0]!.x = this.body.px;
+    pts[0]!.z = this.body.pz;
+    let ptCount = 1;
     if (this.path.length > 0) {
       const limit = Math.min(this.path.length, 3);
-      for (let i = 0; i < limit; i++) pts.push(this.path[i]!);
+      for (let i = 0; i < limit; i++) {
+        pts[ptCount]!.x = this.path[i]!.x;
+        pts[ptCount]!.z = this.path[i]!.z;
+        ptCount++;
+      }
     } else {
-      pts.push(routeDest);
+      pts[1]!.x = routeDest.x;
+      pts[1]!.z = routeDest.z;
+      ptCount = 2;
     }
 
     let best: Door | null = null;
@@ -549,7 +607,7 @@ export class SuspectNavigator {
       const dist = Math.hypot(this.body.px - door.centerX, this.body.pz - door.centerZ);
       if (dist >= 1.35) continue;
       let segDist = Infinity;
-      for (let i = 0; i < pts.length - 1; i++) {
+      for (let i = 0; i < ptCount - 1; i++) {
         const d = distToSegment(door.centerX, door.centerZ, pts[i]!, pts[i + 1]!);
         if (d < segDist) segDist = d;
       }
@@ -566,7 +624,7 @@ export class SuspectNavigator {
   private chooseStair(
     up: boolean,
     dt: number,
-    passable: ReadonlySet<Collider> | undefined,
+    opts: SuspectNavOptions,
     dest: Vec3,
   ): StairMark | null {
     const stairs = this.ctx.stairs;
@@ -592,7 +650,7 @@ export class SuspectNavigator {
       this.ctx.colliders,
       bounds,
       BODY_RADIUS,
-      passable,
+      this.getPassable(opts),
       dest,
     );
     if (!choice) return null;
@@ -613,6 +671,7 @@ export class SuspectNavigator {
     const body = this.body;
     const arriveDist = opts.arriveDist ?? 0.55;
     this.steppedThisFrame = true;
+    this.passableDirty = true;
     this.repathCd = Math.max(0, this.repathCd - dt);
     this.doorWait = Math.max(0, this.doorWait - dt);
     for (const [doorId, left] of this.skippedDoors) {
@@ -661,7 +720,6 @@ export class SuspectNavigator {
       }
     }
 
-    const passable = opts.canOpenDoors ? this.passableUnlockedDoors() : undefined;
     let routeDest: XZ = { x: dest.x, z: dest.z };
     let onStairRun = false;
 
@@ -688,7 +746,7 @@ export class SuspectNavigator {
         return 'blocked';
       }
       const up = dest.y > body.footY;
-      const stair = this.chooseStair(up, dt, passable, dest);
+      const stair = this.chooseStair(up, dt, opts, dest);
       if (!stair) return 'blocked';
       const entry = stairEntry(stair, up);
       const onFlight =
@@ -696,7 +754,14 @@ export class SuspectNavigator {
         distToSegment(body.px, body.pz, stair.approachLow, stair.approachHigh) <= 1.0;
       const entryClear =
         Math.hypot(body.px - entry.x, body.pz - entry.z) <= NAV_STAIR_ARRIVE &&
-        pathSegmentClear(this.ctx.colliders, { x: body.px, z: body.pz }, entry, BODY_RADIUS, body.footY, passable);
+        pathSegmentClear(
+          this.ctx.colliders,
+          { x: body.px, z: body.pz },
+          entry,
+          BODY_RADIUS,
+          body.footY,
+          this.getPassable(opts),
+        );
       if (entryClear || onFlight) {
         this.activeStair = { id: stair.id, up };
         this.stairPick = null;
@@ -725,7 +790,7 @@ export class SuspectNavigator {
           this.ctx.colliders,
           this.ctx.bounds,
           BODY_RADIUS,
-          passable,
+          this.getPassable(opts),
         );
         this.pathGoal = { x: routeDest.x, z: routeDest.z };
         this.repathCd = this.repathInterval;
@@ -821,6 +886,7 @@ export class EngageBehavior {
   private readonly tmpHit = new THREE.Vector3();
   private readonly shotOrigin = new THREE.Vector3();
   private readonly shotDir = new THREE.Vector3();
+  private readonly localRay = new THREE.Vector3();
   private readonly quat = new THREE.Quaternion();
   private readonly forwardAxis = new THREE.Vector3(0, 0, -1);
 
@@ -1138,23 +1204,18 @@ export class EngageBehavior {
     const spreadRad = this.p.baseSpreadDeg * (Math.PI / 180);
     const angle = Math.acos(1 - Math.random() * (1 - Math.cos(spreadRad)));
     const around = Math.random() * Math.PI * 2;
-    const localRay = new THREE.Vector3(
+    this.localRay.set(
       Math.sin(angle) * Math.cos(around),
       Math.sin(angle) * Math.sin(around),
       -Math.cos(angle),
     );
     this.quat.setFromUnitVectors(this.forwardAxis, this.shotDir);
-    localRay.applyQuaternion(this.quat).normalize();
+    this.localRay.applyQuaternion(this.quat).normalize();
 
-    this.ray.set(this.shotOrigin, localRay);
-    let bestT = this.p.engageRange;
+    this.ray.set(this.shotOrigin, this.localRay);
+    let bestT = raycastColliders(this.ctx.colliders, this.shotOrigin, this.localRay, this.p.engageRange);
     let hitKind: 'wall' | 'player' | 'ally' = 'wall';
     let hitAllyId = '';
-
-    for (const c of this.ctx.colliders) {
-      const d = this.rayDist(c.aabb);
-      if (d !== null && d < bestT) bestT = d;
-    }
 
     if (!this.ctx.ignorePlayer && this.ctx.player.alive !== false && this.ctx.player.getBodyBounds) {
       const d = this.rayDist(this.ctx.player.getBodyBounds());
@@ -1165,7 +1226,9 @@ export class EngageBehavior {
     }
 
     if (this.ctx.allies) {
-      for (const a of this.ctx.allies()) {
+      const allies = this.ctx.allies();
+      for (let i = 0; i < allies.length; i++) {
+        const a = allies[i]!;
         const d = this.rayDist(a.getAABB());
         if (d !== null && d < bestT) {
           if (a.shieldBlocks) {
@@ -1264,37 +1327,57 @@ export class EngageBehavior {
 
   /** 最後に把握したプレイヤー位置から射線が切れる最寄りの遮蔽物の裏を探す。 */
   private findCover(known: Vec3): CoverSpot | null {
+    const range = this.p.coverSearchRange;
+    if (range <= 0) return null;
     const m = this.p.coverMargin;
-    let best: CoverSpot | null = null;
-    let bestD = Infinity;
-    for (const c of this.ctx.colliders) {
+    const px = this.body.px;
+    const pz = this.body.pz;
+    const feetY = this.body.footY;
+    const pad = Math.max(2, m + 0.5);
+    const near = collidersNear(this.ctx.colliders, px - range - pad, pz - range - pad, px + range + pad, pz + range + pad);
+    coverScratch.length = 0;
+    for (let i = 0; i < near.length; i++) {
+      const c = near[i]!;
       if (c.kind !== 'cover') continue;
       const a = c.aabb;
+      if (a.min.y > feetY + 1.2 || a.max.y < feetY + 0.25) continue;
+      if (
+        a.max.x + m < px - range ||
+        a.min.x - m > px + range ||
+        a.max.z + m < pz - range ||
+        a.min.z - m > pz + range
+      ) {
+        continue;
+      }
+      coverScratch.push(c);
+    }
+
+    let best: CoverSpot | null = null;
+    let bestD = Infinity;
+    const candTmp: XZ = { x: 0, z: 0 };
+    for (let i = 0; i < coverScratch.length; i++) {
+      const a = coverScratch[i]!.aabb;
       const cx = (a.min.x + a.max.x) / 2;
       const cz = (a.min.z + a.max.z) / 2;
       const hx = (a.max.x - a.min.x) / 2;
       const hz = (a.max.z - a.min.z) / 2;
-      if (a.min.y > this.body.footY + 1.2 || a.max.y < this.body.footY + 0.25) continue;
-      const crouch = a.max.y - this.body.footY < this.p.crouchCoverMaxHeight;
-      const chestY = this.body.footY + (crouch ? CROUCH_CHEST : STAND_CHEST);
-      const cands: XZ[] = [
-        { x: cx + hx + m, z: cz },
-        { x: cx - hx - m, z: cz },
-        { x: cx, z: cz + hz + m },
-        { x: cx, z: cz - hz - m },
-        { x: cx + hx + m, z: cz + hz + m },
-        { x: cx - hx - m, z: cz + hz + m },
-        { x: cx + hx + m, z: cz - hz - m },
-        { x: cx - hx - m, z: cz - hz - m },
-      ];
-      for (const h of cands) {
-        const d = Math.hypot(h.x - this.body.px, h.z - this.body.pz);
-        if (d > this.p.coverSearchRange || d >= bestD) continue;
-        if (blockedAt(this.ctx.colliders, h.x, h.z, BODY_RADIUS, this.body.footY)) continue;
-        if (this.seesFrom(h, known, chestY)) continue; // プレイヤーから隠れていない
-        if (!this.pathClear(this.body.px, this.body.pz, h.x, h.z)) continue;
+      const crouch = a.max.y - feetY < this.p.crouchCoverMaxHeight;
+      const chestY = feetY + (crouch ? CROUCH_CHEST : STAND_CHEST);
+      for (let k = 0; k < 8; k++) {
+        const xOff = k === 0 || k === 4 || k === 6 ? hx + m : k === 1 || k === 5 || k === 7 ? -(hx + m) : 0;
+        const zOff = k === 2 || k === 4 || k === 5 ? hz + m : k === 3 || k === 6 || k === 7 ? -(hz + m) : 0;
+        const hxPos = cx + xOff;
+        const hzPos = cz + zOff;
+        const d = Math.hypot(hxPos - px, hzPos - pz);
+        if (d > range || d >= bestD) continue;
+        if (blockedAt(this.ctx.colliders, hxPos, hzPos, BODY_RADIUS, feetY)) continue;
+        candTmp.x = hxPos;
+        candTmp.z = hzPos;
+        if (this.seesFrom(candTmp, known, chestY)) continue; // プレイヤーから隠れていない
+        if (!this.pathClear(px, pz, hxPos, hzPos)) continue;
         bestD = d;
-        best = { hide: h, crouch, peek: this.peekCandidates(h, known, hx, hz, m) };
+        const hide: XZ = { x: hxPos, z: hzPos };
+        best = { hide, crouch, peek: this.peekCandidates(hide, known, hx, hz, m) };
       }
     }
     return best;

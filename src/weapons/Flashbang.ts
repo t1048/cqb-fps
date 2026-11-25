@@ -7,7 +7,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { FlashOverlay } from '../ui/FlashOverlay';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { WeaponSystem } from './WeaponSystem';
-import { someColliderAlongSegment } from '../world/ColliderIndex';
+import { collidersNear, someColliderAlongSegment } from '../world/ColliderIndex';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
@@ -303,7 +303,10 @@ export class Flashbang {
   private lowestColliderY(): number {
     if (this.lowestY !== null) return this.lowestY;
     let min = Infinity;
-    for (const c of this.colliders) if (c.aabb.min.y < min) min = c.aabb.min.y;
+    for (const c of this.colliders) {
+      if (c.aabb.max.y <= -500) continue;
+      if (c.aabb.min.y < min) min = c.aabb.min.y;
+    }
     this.lowestY = Number.isFinite(min) ? Math.min(min, 0) : 0;
     return this.lowestY;
   }
@@ -326,8 +329,9 @@ export class Flashbang {
       this.contact(g, 0, -1, 0);
     }
 
-    for (const col of this.colliders) {
-      const a = col.aabb;
+    const near = collidersNear(this.colliders, p.x - r - 0.05, p.z - r - 0.05, p.x + r + 0.05, p.z + r + 0.05);
+    for (let i = 0; i < near.length; i++) {
+      const a = near[i]!.aabb;
       if (p.x < a.min.x - r || p.x > a.max.x + r || p.y < a.min.y - r || p.y > a.max.y + r) continue;
       if (p.z < a.min.z - r || p.z > a.max.z + r) continue;
       const qx = Math.max(a.min.x, Math.min(a.max.x, p.x));
@@ -346,21 +350,43 @@ export class Flashbang {
         dz /= d;
         pen = r - d;
       } else {
-        // 中心が箱内部: 最小貫通軸で押し出す
-        const cands: [number, number, number, number][] = [
-          [p.x - a.min.x, -1, 0, 0],
-          [a.max.x - p.x, 1, 0, 0],
-          [p.y - a.min.y, 0, -1, 0],
-          [a.max.y - p.y, 0, 1, 0],
-          [p.z - a.min.z, 0, 0, -1],
-          [a.max.z - p.z, 0, 0, 1],
-        ];
-        let best = cands[0];
-        for (const cd of cands) if (cd[0] < best[0]) best = cd;
-        dx = best[1];
-        dy = best[2];
-        dz = best[3];
-        pen = best[0] + r;
+        // 中心が箱内部: 最小貫通軸で押し出す（配列確保なし）
+        let bestDist = p.x - a.min.x;
+        dx = -1;
+        dy = 0;
+        dz = 0;
+        const dMaxX = a.max.x - p.x;
+        if (dMaxX < bestDist) {
+          bestDist = dMaxX;
+          dx = 1;
+        }
+        const dMinY = p.y - a.min.y;
+        if (dMinY < bestDist) {
+          bestDist = dMinY;
+          dx = 0;
+          dy = -1;
+        }
+        const dMaxY = a.max.y - p.y;
+        if (dMaxY < bestDist) {
+          bestDist = dMaxY;
+          dx = 0;
+          dy = 1;
+        }
+        const dMinZ = p.z - a.min.z;
+        if (dMinZ < bestDist) {
+          bestDist = dMinZ;
+          dx = 0;
+          dy = 0;
+          dz = -1;
+        }
+        const dMaxZ = a.max.z - p.z;
+        if (dMaxZ < bestDist) {
+          bestDist = dMaxZ;
+          dx = 0;
+          dy = 0;
+          dz = 1;
+        }
+        pen = bestDist + r;
       }
       p.x += dx * pen;
       p.y += dy * pen;

@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 import type { Civilian } from '../ai/Civilian';
 import type { Suspect } from '../ai/Suspect';
-import { disposeObject } from '../core/dispose';
 import type { GameEventBus } from '../core/events';
 import { SuspectState } from '../core/events';
-import { t } from '../core/i18n';
+import { getLocale, isEn, t } from '../core/i18n';
 import type { Vec3, WindowDef } from '../core/types';
 import type { InputManager } from '../core/InputManager';
 import type { Interaction } from '../player/Interaction';
@@ -12,6 +11,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { Subtitle } from '../ui/Subtitle';
 import { hasLineOfSight } from '../weapons/Flashbang';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
+import { invalidateColliderIndex } from '../world/ColliderIndex';
 import type { Door, DoorSystem } from '../world/Door';
 import type { TextureLibrary } from '../world/Materials';
 import type { Collider } from '../world/WorldBuilder';
@@ -57,6 +57,7 @@ interface Barricade {
   /** 有効時の AABB */
   on: Collider['aabb'];
   mesh: THREE.Group;
+  built: boolean;
   boarded: boolean;
   hp: number;
   /** 被弾で剥がれ落ちる板（裏板は壊れるまで残り、視線を通さない） */
@@ -116,6 +117,9 @@ export interface FortifyDeps {
 export class Fortify {
   readonly root = new THREE.Group();
   private readonly barricades: Barricade[] = [];
+  private boardedCountNum = 0;
+  private boardedCache: BarricadeInfo[] = [];
+  private boardedDirty = false;
   private readonly traps = new Map<string, DoorTrap>();
   private trapKits = BASE_TRAPS;
   private readonly tasks: PrepTask[] = [];
@@ -124,11 +128,13 @@ export class Fortify {
   private receiver: BlastReceiver | null = null;
   private readonly el = document.createElement('div');
   private lastText = '';
+  private lastStatusSig = '';
   private holdDone = false;
   private readonly blasts: { mesh: THREE.Mesh; t: number }[] = [];
-  /** 爆発の閃光。ライト数が変わると全マテリアルのシェーダが再コンパイルされて固まるので 1 灯を常設して使い回す。 */
-  private readonly blastLight = new THREE.PointLight(0xffa050, 0, 14, 2);
   private readonly unsubs: (() => void)[] = [];
+  private readonly unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+  private readonly blastGeo = new THREE.SphereGeometry(1, 10, 8);
+  private readonly eye = new THREE.Vector3();
   private readonly woodMat: THREE.MeshStandardMaterial;
   private readonly backMat: THREE.MeshStandardMaterial;
   private readonly trapMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2a, roughness: 0.7 });
@@ -137,7 +143,6 @@ export class Fortify {
   constructor(private readonly d: FortifyDeps) {
     this.root.name = 'fortify';
     d.scene.add(this.root);
-    this.root.add(this.blastLight);
     this.woodMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x9a7a52, roughness: 0.85 });
     this.backMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x6e5236, roughness: 0.9 });
     for (let i = 0; i < d.windows.length; i++) this.barricades.push(this.makeBarricade(d.windows[i]!, i));
@@ -202,7 +207,7 @@ export class Fortify {
   }
 
   get boardedCount(): number {
-    return this.barricades.filter((b) => b.boarded).length;
+    return this.boardedCountNum;
   }
 
   get windowCount(): number {
@@ -223,16 +228,20 @@ export class Fortify {
 
   /** 現在板張りされている窓バリケードの一覧を返す（SwatTeam の積極破壊用） */
   listBoarded(): BarricadeInfo[] {
-    return this.barricades
-      .filter((b) => b.boarded)
-      .map((b) => ({
-        id: b.id,
-        center: { x: b.cx, y: b.cy, z: b.cz },
-        normal: { ...b.normal },
-        floorY: b.floorY,
-        hp: b.hp,
-        boarded: b.boarded,
-      }));
+    if (this.boardedDirty) {
+      this.boardedDirty = false;
+      this.boardedCache = this.barricades
+        .filter((b) => b.boarded)
+        .map((b) => ({
+          id: b.id,
+          center: { x: b.cx, y: b.cy, z: b.cz },
+          normal: { ...b.normal },
+          floorY: b.floorY,
+          hp: b.hp,
+          boarded: b.boarded,
+        }));
+    }
+    return this.boardedCache;
   }
 
   setVisible(v: boolean): void {
@@ -262,40 +271,83 @@ export class Fortify {
     const mesh = new THREE.Group();
     mesh.position.set(def.x, cy, def.z);
     mesh.rotation.y = def.yaw * DEG;
-    // 開口を隙間なく覆う: 枠より一回り大きい裏板 + 継ぎ目なく並べた横板（上下に少し重ねる）
+    mesh.visible = false;
+    mesh.updateMatrix();
+    mesh.matrixAutoUpdate = false;
+    this.root.add(mesh);
+    return {
+      id: `barricade_${idx}`,
+      def,
+      collider,
+      on,
+      mesh,
+      built: false,
+      boarded: false,
+      hp: 0,
+      planks: [],
+      floorY,
+      cx: def.x,
+      cy,
+      cz: def.z,
+      normal,
+      alongX,
+    };
+  }
+
+  /** 初回板張り時にのみ共有単位 BoxGeometry で板メッシュ群を生成する（未封鎖の窓はメッシュ 0）。 */
+  private buildBarricadeMeshes(b: Barricade): void {
+    b.built = true;
+    const def = b.def;
     const coverW = def.width + 0.2;
     const coverH = def.height + 0.16;
     const planks = Math.max(3, Math.ceil(coverH / 0.16));
     const pitch = coverH / planks;
-    const plankMeshes: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
-      const back = new THREE.Mesh(new THREE.BoxGeometry(coverW, coverH, 0.02), this.backMat);
-      back.position.z = side * 0.095;
-      mesh.add(back);
+      const back = new THREE.Mesh(this.unitBoxGeo, this.backMat);
+      back.position.set(0, 0, side * 0.095);
+      back.scale.set(coverW, coverH, 0.02);
+      back.userData.noShadow = true;
+      back.castShadow = false;
+      back.receiveShadow = true;
+      back.updateMatrix();
+      back.matrixAutoUpdate = false;
+      b.mesh.add(back);
       for (let i = 0; i < planks; i++) {
-        const geo = new THREE.BoxGeometry(coverW + 0.04 + Math.random() * 0.06, pitch + 0.025, 0.03);
-        const m = new THREE.Mesh(geo, this.woodMat);
+        const m = new THREE.Mesh(this.unitBoxGeo, this.woodMat);
         const y = -coverH / 2 + pitch * (i + 0.5);
         m.position.set((Math.random() - 0.5) * 0.04, y, side * 0.115);
         m.rotation.z = (Math.random() - 0.5) * 0.025;
-        mesh.add(m);
-        plankMeshes.push(m);
+        m.scale.set(coverW + 0.04 + Math.random() * 0.06, pitch + 0.025, 0.03);
+        m.userData.noShadow = true;
+        m.castShadow = false;
+        m.receiveShadow = true;
+        m.updateMatrix();
+        m.matrixAutoUpdate = false;
+        b.mesh.add(m);
+        b.planks.push(m);
       }
-      // 斜めの補強材
-      const brace = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(def.width, def.height) * 0.95, 0.12, 0.03), this.woodMat);
+      const brace = new THREE.Mesh(this.unitBoxGeo, this.woodMat);
+      brace.position.set(0, 0, side * 0.14);
       brace.rotation.z = Math.atan2(def.height, def.width) * (side > 0 ? 1 : -1);
-      brace.position.z = side * 0.14;
-      mesh.add(brace);
+      brace.scale.set(Math.hypot(def.width, def.height) * 0.95, 0.12, 0.03);
+      brace.userData.noShadow = true;
+      brace.castShadow = false;
+      brace.receiveShadow = true;
+      brace.updateMatrix();
+      brace.matrixAutoUpdate = false;
+      b.mesh.add(brace);
     }
-    mesh.visible = false;
-    this.root.add(mesh);
-    return { id: `barricade_${idx}`, def, collider, on, mesh, boarded: false, hp: 0, planks: plankMeshes, floorY, cx: def.x, cy, cz: def.z, normal, alongX };
   }
 
   private setBoarded(b: Barricade, v: boolean): void {
+    if (v && !b.built) this.buildBarricadeMeshes(b);
+    if (b.boarded !== v) {
+      this.boardedCountNum += v ? 1 : -1;
+    }
     b.boarded = v;
     b.mesh.visible = v;
     b.hp = v ? BARRICADE_HP : 0;
+    this.boardedDirty = true;
     for (const p of b.planks) p.visible = true;
     const a = b.collider.aabb;
     if (v) {
@@ -329,6 +381,7 @@ export class Fortify {
         }
         return;
       }
+      this.boardedDirty = true;
       // 残り耐久に応じて表板を剥がす（裏板は残るので視線は通らない）
       const keep = Math.ceil((b.hp / BARRICADE_HP) * b.planks.length);
       const visible = b.planks.filter((m) => m.visible);
@@ -398,12 +451,24 @@ export class Fortify {
     // プレイヤーがいる側（内側）のノブ付近に爆薬と赤 LED
     const side = (p.x - door.centerX) * door.normalX + (p.z - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
     g.position.set(door.centerX + door.normalX * side * 0.09, door.sillY + 0.95, door.centerZ + door.normalZ * side * 0.09);
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.07), this.trapMat);
+    const box = new THREE.Mesh(this.unitBoxGeo, this.trapMat);
+    box.scale.set(0.16, 0.12, 0.07);
+    box.userData.noShadow = true;
+    box.castShadow = false;
+    box.updateMatrix();
+    box.matrixAutoUpdate = false;
     g.add(box);
-    const led = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), this.ledMat);
+    const led = new THREE.Mesh(this.blastGeo, this.ledMat);
     led.position.set(0.05, 0.04, 0.04);
+    led.scale.setScalar(0.014);
+    led.userData.noShadow = true;
+    led.castShadow = false;
+    led.updateMatrix();
+    led.matrixAutoUpdate = false;
     g.add(led);
     g.rotation.y = Math.atan2(door.normalX, door.normalZ);
+    g.updateMatrix();
+    g.matrixAutoUpdate = false;
     this.root.add(g);
     this.traps.set(door.id, { doorId: door.id, mesh: g });
     this.d.subtitle.show(
@@ -421,7 +486,6 @@ export class Fortify {
     if (!t) return;
     this.traps.delete(doorId);
     this.root.remove(t.mesh);
-    disposeObject(t.mesh);
   }
 
   /** トラップを起爆（SWAT が開けた / 解除失敗） */
@@ -437,14 +501,13 @@ export class Fortify {
   private explode(pos: Vec3): void {
     const r = TRAP_BLAST_RADIUS;
     const center = { x: pos.x, y: pos.y + 1, z: pos.z };
-    // 見た目: 火球と閃光
+    // 見た目: 火球（動的ライトは使わず共有単位球＋MeshBasicMaterial のみで描画）
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 16, 12),
+      this.blastGeo,
       new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.9, depthWrite: false }),
     );
     mesh.position.set(center.x, center.y, center.z);
     mesh.scale.setScalar(0.2);
-    this.blastLight.position.copy(mesh.position);
     this.root.add(mesh);
     this.blasts.push({ mesh, t: 0 });
     this.d.bus.emit('noise', { pos, radius: 45, kind: 'breach', source: 'suspect' });
@@ -453,7 +516,7 @@ export class Fortify {
     this.receiver?.applyBlast(center, r);
     const pl = this.d.player;
     if (pl.alive) {
-      const e = pl.getEyePosition();
+      const e = pl.getEyePosition(this.eye);
       const dist = Math.hypot(e.x - center.x, e.y - center.y, e.z - center.z);
       if (dist < r * 1.8) pl.addViewKick((Math.random() * 0.06 + 0.03) * (1 - dist / (r * 1.8)), (Math.random() - 0.5) * 0.08);
       if (dist < r && hasLineOfSight(this.d.colliders, center, { x: e.x, y: e.y - 0.4, z: e.z })) {
@@ -479,24 +542,28 @@ export class Fortify {
 
   update(rawDt: number): void {
     const dt = Math.min(rawDt, 0.05);
-    let flash = 0;
     for (let i = this.blasts.length - 1; i >= 0; i--) {
       const b = this.blasts[i]!;
       b.t += dt;
       const k = b.t / 0.45;
       b.mesh.scale.setScalar(0.2 + 2.6 * Math.min(1, k));
       (b.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.9 * (1 - k));
-      flash = Math.max(flash, 60 * (1 - b.t / 0.6));
       if (b.t > 0.65) {
         this.root.remove(b.mesh);
-        b.mesh.geometry.dispose();
         (b.mesh.material as THREE.Material).dispose();
         this.blasts.splice(i, 1);
       }
     }
-    this.blastLight.intensity = flash;
     if (this.d.isPrep()) this.updatePrep(dt);
     this.renderStatus();
+  }
+
+  private countActiveAllies(): number {
+    let count = 0;
+    for (const s of this.d.allies()) {
+      if (s.alive && s.state !== SuspectState.SURRENDER && s.state !== SuspectState.ARRESTED) count++;
+    }
+    return count;
   }
 
   private activeAllies(): Suspect[] {
@@ -508,17 +575,17 @@ export class Fortify {
   }
 
   private updatePrep(dt: number): void {
-    const allies = this.activeAllies();
-    if (allies.length === 0) return;
+    const allyCount = this.countActiveAllies();
+    if (allyCount === 0) return;
     const task = this.tasks[0];
     if (!task) return;
-    this.work += allies.length * ALLY_WORK_RATE * dt;
+    this.work += allyCount * ALLY_WORK_RATE * dt;
     const cost = task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
     if (this.work < cost) return;
     this.work -= cost;
     this.tasks.shift();
     if (task.kind === 'upgrade') {
-      this.applyUpgrade(allies);
+      this.applyUpgrade(this.activeAllies());
     } else {
       this.trapKits++;
       this.d.subtitle.show(
@@ -559,28 +626,34 @@ export class Fortify {
   }
 
   private renderStatus(): void {
-    let text = t(
-      `窓の封鎖 ${this.boardedCount}/${this.barricades.length}　｜　トラップ部材 ${this.trapKits}（設置 ${this.traps.size}）　｜　武器改造 ${this.upgraded ? '済' : '未'}`,
-      `Windows Boarded: ${this.boardedCount}/${this.barricades.length}  |  Trap Kits: ${this.trapKits} (Set: ${this.traps.size})  |  Weapon Mod: ${this.upgraded ? 'Done' : 'Pending'}`,
-    );
-    if (this.d.isPrep()) {
-      const allies = this.activeAllies().length;
-      const task = this.tasks[0];
+    const prep = this.d.isPrep();
+    const allies = prep ? this.countActiveAllies() : 0;
+    const task = prep ? this.tasks[0] : undefined;
+    const pct =
+      prep && allies > 0 && task
+        ? Math.round((this.work / (task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP)) * 100)
+        : -1;
+    const sig = `${getLocale()}|${prep ? 1 : 0}|${this.boardedCountNum}|${this.trapKits}|${this.traps.size}|${this.upgraded ? 1 : 0}|${allies}|${task?.kind ?? ''}|${pct}`;
+    if (sig === this.lastStatusSig) return;
+    this.lastStatusSig = sig;
+
+    const en = isEn();
+    let text = en
+      ? `Windows Boarded: ${this.boardedCountNum}/${this.barricades.length}  |  Trap Kits: ${this.trapKits} (Set: ${this.traps.size})  |  Weapon Mod: ${this.upgraded ? 'Done' : 'Pending'}`
+      : `窓の封鎖 ${this.boardedCountNum}/${this.barricades.length}　｜　トラップ部材 ${this.trapKits}（設置 ${this.traps.size}）　｜　武器改造 ${this.upgraded ? '済' : '未'}`;
+    if (prep) {
       if (allies > 0 && task) {
-        const cost = task.kind === 'upgrade' ? COST_UPGRADE : COST_TRAP;
-        const pct = Math.round((this.work / cost) * 100);
-        const whatJa = task.kind === 'upgrade' ? '武器を改造中' : 'トラップを製作中';
-        const whatEn = task.kind === 'upgrade' ? 'modding weapons' : 'crafting trap kit';
-        text =
-          t(
-            `仲間 ${allies} 名が${whatJa} ${pct}%　｜　`,
-            `${allies} ${allies === 1 ? 'Ally' : 'Allies'} ${whatEn} (${pct}%)  |  `,
-          ) + text;
+        if (en) {
+          const whatEn = task.kind === 'upgrade' ? 'modding weapons' : 'crafting trap kit';
+          text = `${allies} ${allies === 1 ? 'Ally' : 'Allies'} ${whatEn} (${pct}%)  |  ${text}`;
+        } else {
+          const whatJa = task.kind === 'upgrade' ? '武器を改造中' : 'トラップを製作中';
+          text = `仲間 ${allies} 名が${whatJa} ${pct}%　｜　${text}`;
+        }
       }
-      text += t(
-        '　｜　窓の前で F 長押し: 板 / しゃがみ+F 長押し（ドア）: トラップ',
-        '  |  Hold F at Window: Board / Crouch+Hold F at Door: Trap',
-      );
+      text += en
+        ? '  |  Hold F at Window: Board / Crouch+Hold F at Door: Trap'
+        : '　｜　窓の前で F 長押し: 板 / しゃがみ+F 長押し（ドア）: トラップ';
     }
     if (text !== this.lastText) {
       this.lastText = text;
@@ -591,9 +664,22 @@ export class Fortify {
   dispose(): void {
     for (const u of this.unsubs) u();
     this.unsubs.length = 0;
+    let removedCollider = false;
+    for (const b of this.barricades) {
+      const idx = this.d.colliders.indexOf(b.collider);
+      if (idx >= 0) {
+        this.d.colliders.splice(idx, 1);
+        removedCollider = true;
+      }
+    }
+    if (removedCollider) invalidateColliderIndex(this.d.colliders);
+    for (const b of this.blasts) (b.mesh.material as THREE.Material).dispose();
+    this.blasts.length = 0;
+    this.traps.clear();
     this.el.remove();
     this.d.scene.remove(this.root);
-    disposeObject(this.root);
+    this.unitBoxGeo.dispose();
+    this.blastGeo.dispose();
     this.woodMat.dispose();
     this.backMat.dispose();
     this.trapMat.dispose();

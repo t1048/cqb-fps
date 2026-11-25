@@ -3,6 +3,7 @@ import type { GameEventBus } from '../core/events';
 import type { Vec3 } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { Collider } from '../world/WorldBuilder';
+import { collidersNear } from '../world/ColliderIndex';
 import { hasLineOfSight } from './Flashbang';
 
 const MAX_DT = 0.05;
@@ -23,6 +24,8 @@ export const GAS_CLOUD_DURATION = 16.0;
 const GAS_CLOUD_FADE_IN = 1.2;
 const GAS_CLOUD_FADE_OUT = 3.0;
 const GAS_VERTICAL_BAND = 2.4;
+const CENTER_BASE_OPACITY = 0.28;
+const RING_BASE_OPACITY = 0.2;
 
 export interface GasCloudInfo {
   pos: Vec3;
@@ -43,17 +46,17 @@ interface GasCanister {
 
 interface PuffSpec {
   mesh: THREE.Mesh;
-  mat: THREE.MeshBasicMaterial;
   baseOffset: THREE.Vector3;
   baseScale: number;
   phase: number;
   speed: number;
-  baseOpacity: number;
 }
 
 interface GasCloud extends GasCloudInfo {
   elapsedSec: number;
   group: THREE.Group;
+  centerMat: THREE.MeshBasicMaterial;
+  ringMat: THREE.MeshBasicMaterial;
   puffs: PuffSpec[];
 }
 
@@ -66,6 +69,7 @@ export function computeGasDensityAt(
   point: Vec3,
   colliders?: readonly Collider[],
 ): number {
+  if (clouds.length === 0) return 0;
   let peak = 0;
   for (let i = 0; i < clouds.length; i++) {
     const c = clouds[i]!;
@@ -169,6 +173,8 @@ export class TearGas {
       const fadeIn = Math.min(1, cl.elapsedSec / GAS_CLOUD_FADE_IN);
       const fadeOut = Math.min(1, cl.remainingSec / GAS_CLOUD_FADE_OUT);
       cl.intensity = Math.max(0, Math.min(1, fadeIn * fadeOut));
+      cl.centerMat.opacity = CENTER_BASE_OPACITY * cl.intensity;
+      cl.ringMat.opacity = RING_BASE_OPACITY * cl.intensity;
       const grow = 0.45 + 0.55 * fadeIn;
       for (let j = 0; j < cl.puffs.length; j++) {
         const pf = cl.puffs[j]!;
@@ -182,7 +188,6 @@ export class TearGas {
         );
         const s = pf.baseScale * grow;
         pf.mesh.scale.set(s * 1.15, s * 0.82, s * 1.15);
-        pf.mat.opacity = pf.baseOpacity * cl.intensity;
       }
     }
   }
@@ -247,7 +252,10 @@ export class TearGas {
   private lowestColliderY(): number {
     if (this.lowestY !== null) return this.lowestY;
     let min = Infinity;
-    for (const c of this.colliders) if (c.aabb.min.y < min) min = c.aabb.min.y;
+    for (const c of this.colliders) {
+      if (c.aabb.max.y <= -500) continue;
+      if (c.aabb.min.y < min) min = c.aabb.min.y;
+    }
     this.lowestY = Number.isFinite(min) ? Math.min(min, 0) : 0;
     return this.lowestY;
   }
@@ -268,8 +276,9 @@ export class TearGas {
       this.contact(c, 0, -1, 0);
     }
 
-    for (const col of this.colliders) {
-      const a = col.aabb;
+    const near = collidersNear(this.colliders, p.x - r - 0.05, p.z - r - 0.05, p.x + r + 0.05, p.z + r + 0.05);
+    for (let i = 0; i < near.length; i++) {
+      const a = near[i]!.aabb;
       if (p.x < a.min.x - r || p.x > a.max.x + r || p.y < a.min.y - r || p.y > a.max.y + r) continue;
       if (p.z < a.min.z - r || p.z > a.max.z + r) continue;
       const qx = Math.max(a.min.x, Math.min(a.max.x, p.x));
@@ -288,20 +297,42 @@ export class TearGas {
         dz /= d;
         pen = r - d;
       } else {
-        const cands: [number, number, number, number][] = [
-          [p.x - a.min.x, -1, 0, 0],
-          [a.max.x - p.x, 1, 0, 0],
-          [p.y - a.min.y, 0, -1, 0],
-          [a.max.y - p.y, 0, 1, 0],
-          [p.z - a.min.z, 0, 0, -1],
-          [a.max.z - p.z, 0, 0, 1],
-        ];
-        let best = cands[0]!;
-        for (const cd of cands) if (cd[0] < best[0]) best = cd;
-        dx = best[1];
-        dy = best[2];
-        dz = best[3];
-        pen = best[0] + r;
+        let bestDist = p.x - a.min.x;
+        dx = -1;
+        dy = 0;
+        dz = 0;
+        const dMaxX = a.max.x - p.x;
+        if (dMaxX < bestDist) {
+          bestDist = dMaxX;
+          dx = 1;
+        }
+        const dMinY = p.y - a.min.y;
+        if (dMinY < bestDist) {
+          bestDist = dMinY;
+          dx = 0;
+          dy = -1;
+        }
+        const dMaxY = a.max.y - p.y;
+        if (dMaxY < bestDist) {
+          bestDist = dMaxY;
+          dx = 0;
+          dy = 1;
+        }
+        const dMinZ = p.z - a.min.z;
+        if (dMinZ < bestDist) {
+          bestDist = dMinZ;
+          dx = 0;
+          dy = 0;
+          dz = -1;
+        }
+        const dMaxZ = a.max.z - p.z;
+        if (dMaxZ < bestDist) {
+          bestDist = dMaxZ;
+          dx = 0;
+          dy = 0;
+          dz = 1;
+        }
+        pen = bestDist + r;
       }
       p.x += dx * pen;
       p.y += dy * pen;
@@ -317,6 +348,20 @@ export class TearGas {
     const pos: Vec3 = { x: c.pos.x, y: c.pos.y, z: c.pos.z };
     const group = new THREE.Group();
     group.position.set(pos.x, pos.y, pos.z);
+    group.frustumCulled = false;
+
+    const centerMat = new THREE.MeshBasicMaterial({
+      color: 0xa8b868,
+      transparent: true,
+      opacity: CENTER_BASE_OPACITY * 0.3,
+      depthWrite: false,
+    });
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x90a656,
+      transparent: true,
+      opacity: RING_BASE_OPACITY * 0.3,
+      depthWrite: false,
+    });
 
     const puffs: PuffSpec[] = [];
     const puffCount = 8;
@@ -329,26 +374,17 @@ export class TearGas {
         Math.sin(ang) * ring,
       );
       const baseScale = i === 0 ? 1.85 : 1.35 + (i % 2) * 0.35;
-      const baseOpacity = i === 0 ? 0.28 : 0.2;
-      const mat = new THREE.MeshBasicMaterial({
-        color: i % 2 === 0 ? 0xa8b868 : 0x90a656,
-        transparent: true,
-        opacity: baseOpacity * 0.3,
-        depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(this.puffGeo, mat);
+      const mesh = new THREE.Mesh(this.puffGeo, i === 0 ? centerMat : ringMat);
       mesh.position.copy(baseOffset).multiplyScalar(0.45);
       mesh.scale.setScalar(baseScale * 0.45);
-      mesh.frustumCulled = false;
+      mesh.frustumCulled = true;
       group.add(mesh);
       puffs.push({
         mesh,
-        mat,
         baseOffset,
         baseScale,
         phase: i * 1.13,
         speed: 0.65 + (i % 3) * 0.22,
-        baseOpacity,
       });
     }
 
@@ -361,6 +397,8 @@ export class TearGas {
       elapsedSec: 0,
       intensity: 0.35,
       group,
+      centerMat,
+      ringMat,
       puffs,
     });
 
@@ -369,9 +407,8 @@ export class TearGas {
 
   private removeCloud(cl: GasCloud): void {
     this.root.remove(cl.group);
-    for (const pf of cl.puffs) {
-      pf.mat.dispose();
-    }
+    cl.centerMat.dispose();
+    cl.ringMat.dispose();
     cl.puffs.length = 0;
   }
 

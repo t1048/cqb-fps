@@ -43,6 +43,11 @@ export class Perception {
   private readonly unsubs: (() => void)[] = [];
   private readonly seen = new Map<string, number>();
   private readonly eye = new THREE.Vector3();
+  private readonly originTmp: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly playerEyePt: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly playerBodyPt: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly noiseFromTmp: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly chestTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private alliesProvider?: () => readonly AllyTarget[];
   private disposed = false;
 
@@ -76,7 +81,9 @@ export class Perception {
     const h = this.cfg.hearing;
     const kindMul = h.kinds[kind] ?? 1;
     const checkWalls = !h.unoccludedKinds.includes(kind);
-    const from = { x: pos.x, y: noiseRayOriginY(pos, kind), z: pos.z };
+    this.noiseFromTmp.x = pos.x;
+    this.noiseFromTmp.y = noiseRayOriginY(pos, kind);
+    this.noiseFromTmp.z = pos.z;
     for (const s of this.suspects()) {
       const canAlert = s.canPerceive;
       const canEngage = s.canUpdateKnownFromNoise && source !== 'suspect';
@@ -84,7 +91,11 @@ export class Perception {
       const dist = Math.hypot(s.body.px - pos.x, s.body.footY - pos.y, s.body.pz - pos.z);
       let r = radius * s.profile.hearingMultiplier * kindMul;
       if (dist > r) continue;
-      if (checkWalls && h.occludedMultiplier < 1 && !hasLineOfSight(this.colliders, from, s.body.chestPos())) {
+      if (
+        checkWalls &&
+        h.occludedMultiplier < 1 &&
+        !hasLineOfSight(this.colliders, this.noiseFromTmp, s.body.chestPos(this.chestTmp))
+      ) {
         r *= h.occludedMultiplier;
         if (dist > r) continue;
       }
@@ -96,14 +107,36 @@ export class Perception {
     }
   }
 
+  private canSeePoint(
+    sx: number,
+    sz: number,
+    fx: number,
+    fz: number,
+    cosHalf: number,
+    range: number,
+    p: Vec3,
+  ): boolean {
+    const dx = p.x - sx;
+    const dz = p.z - sz;
+    const d = Math.hypot(dx, dz);
+    if (d > range) return false;
+    if (d > 0.01 && (dx * fx + dz * fz) / d < cosHalf) return false;
+    return hasLineOfSight(this.colliders, this.originTmp, p);
+  }
+
   /** 視覚判定（毎フレーム）。プレイヤーと味方隊員の最寄り視認対象を検知。 */
   update(dt: number): void {
     const v = this.cfg.vision;
     this.player.getEyePosition(this.eye);
-    const eye = { x: this.eye.x, y: this.eye.y, z: this.eye.z };
-    const body = { x: this.player.position.x, y: eye.y - v.bodyPointDrop, z: this.player.position.z };
+    this.playerEyePt.x = this.eye.x;
+    this.playerEyePt.y = this.eye.y;
+    this.playerEyePt.z = this.eye.z;
+    this.playerBodyPt.x = this.player.position.x;
+    this.playerBodyPt.y = this.eye.y - v.bodyPointDrop;
+    this.playerBodyPt.z = this.player.position.z;
     const playerRange = v.range * (this.player.isCrouching ? v.crouchRangeMultiplier : 1);
-    const allies = this.alliesProvider?.() ?? [];
+    const allies = this.alliesProvider?.();
+    const allyLen = allies ? allies.length : 0;
 
     for (const s of this.suspects()) {
       if (!s.canPerceive) {
@@ -114,37 +147,53 @@ export class Perception {
       const cosHalf = Math.cos(((alert ? v.alertFovDeg : v.fovDeg) / 2) * DEG2RAD);
       const sx = s.body.px;
       const sz = s.body.pz;
-      const origin = { x: sx, y: s.body.footY + v.eyeHeight, z: sz };
+      this.originTmp.x = sx;
+      this.originTmp.y = s.body.footY + v.eyeHeight;
+      this.originTmp.z = sz;
       const fx = -Math.sin(s.body.yawRad);
       const fz = -Math.cos(s.body.yawRad);
 
-      const checkPts = (pts: Vec3[], range: number): boolean =>
-        pts.some((p) => {
-          const dx = p.x - sx;
-          const dz = p.z - sz;
-          const d = Math.hypot(dx, dz);
-          if (d > range) return false;
-          if (d > 0.01 && (dx * fx + dz * fz) / d < cosHalf) return false;
-          return hasLineOfSight(this.colliders, origin, p);
-        });
-
-      let spottedAt: Vec3 | null = null;
+      let hasSpotted = false;
+      let spottedX = 0;
+      let spottedY = 0;
+      let spottedZ = 0;
       let bestDist = Infinity;
 
-      if (!this.ignorePlayer && this.player.alive !== false && checkPts([eye, body], playerRange)) {
-        bestDist = Math.hypot(eye.x - sx, eye.z - sz);
-        spottedAt = { x: eye.x, y: this.player.position.y, z: eye.z };
+      if (
+        !this.ignorePlayer &&
+        this.player.alive !== false &&
+        (this.canSeePoint(sx, sz, fx, fz, cosHalf, playerRange, this.playerEyePt) ||
+          this.canSeePoint(sx, sz, fx, fz, cosHalf, playerRange, this.playerBodyPt))
+      ) {
+        bestDist = Math.hypot(this.playerEyePt.x - sx, this.playerEyePt.z - sz);
+        hasSpotted = true;
+        spottedX = this.playerEyePt.x;
+        spottedY = this.player.position.y;
+        spottedZ = this.playerEyePt.z;
       }
-      for (const a of allies) {
-        const d = Math.hypot(a.px - sx, a.pz - sz);
-        if (d < bestDist && checkPts([a.getEye(), a.getChest()], v.range)) {
-          bestDist = d;
-          spottedAt = { x: a.px, y: a.footY, z: a.pz };
+      if (allies) {
+        for (let i = 0; i < allyLen; i++) {
+          const a = allies[i]!;
+          const dx = a.px - sx;
+          const dz = a.pz - sz;
+          const d = Math.hypot(dx, dz);
+          if (d > v.range || d >= bestDist) continue;
+          if (d > 0.01 && (dx * fx + dz * fz) / d < cosHalf) continue;
+          if (
+            hasLineOfSight(this.colliders, this.originTmp, a.getEye()) ||
+            hasLineOfSight(this.colliders, this.originTmp, a.getChest())
+          ) {
+            bestDist = d;
+            hasSpotted = true;
+            spottedX = a.px;
+            spottedY = a.footY;
+            spottedZ = a.pz;
+          }
         }
       }
 
       const t = this.seen.get(s.id) ?? 0;
-      if (!spottedAt) {
+      if (!hasSpotted) {
         this.seen.set(s.id, Math.max(0, t - dt));
         continue;
       }
@@ -152,7 +201,7 @@ export class Perception {
       const nt = t + dt;
       this.seen.set(s.id, nt);
       if (nt >= need) {
-        s.onSpotted(spottedAt);
+        s.onSpotted({ x: spottedX, y: spottedY, z: spottedZ });
         this.seen.delete(s.id);
       }
     }

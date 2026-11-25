@@ -3,7 +3,6 @@ import { t } from '../core/i18n';
 import type { RoomDef, Vec3 } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { AllyTarget, CombatContext } from '../ai/EngageBehavior';
-import { shieldBlocks } from '../ai/ShieldGuard';
 import { blockedAtFiltered } from '../ai/SquadRoute';
 import type { EntryMode, FriendlyPos } from '../ai/cqbEntry';
 import {
@@ -172,6 +171,7 @@ export class SwatTeam implements SwatTeamHost {
   /** 連携無線スタガーキュー（F12） */
   private readonly radioQueue: { hunter: SwatHunter; text: string; voice: string }[] = [];
   private radioSpeakGap = 0;
+  private readonly livingTargetsBuf: AllyTarget[] = [];
   private readonly combatCtx: CombatContext;
   private readonly baseSpawns: readonly SwatSpawn[];
   private nextHunterId = 1;
@@ -289,6 +289,7 @@ export class SwatTeam implements SwatTeamHost {
       nextCellIndex: () => this.nextCellIndex++,
       assignCells: () => this.assignCells(),
       portals: () => this.entry.portals(),
+      reachablePortalLengths: (from) => this.entry.reachablePortalLengths(from),
       abortStacking: () => this.entry.abortStacking(),
       onDoorBreached: (by, doorId) => this.entry.onDoorBreached(by, doorId),
       disarmTrappedDoorOnC2: (door) => this.obstacles.disarmTrappedDoorOnC2(door),
@@ -492,23 +493,12 @@ export class SwatTeam implements SwatTeamHost {
 
   /** 生存中の隊員（味方容疑者の射撃対象） */
   livingTargets(): AllyTarget[] {
-    return this.hunters
-      .filter((h) => h.alive)
-      .map((h) => ({
-        id: h.id,
-        px: h.body.px,
-        pz: h.body.pz,
-        footY: h.body.footY,
-        height: h.body.height,
-        getEye: () => {
-          const e = new THREE.Vector3();
-          h.body.eye(e);
-          return { x: e.x, y: e.y, z: e.z };
-        },
-        getChest: () => h.body.chestPos(),
-        getAABB: () => h.body.getAABB(),
-        shieldBlocks: (from, hit) => shieldBlocks(h.body, from, hit),
-      }));
+    this.livingTargetsBuf.length = 0;
+    for (let i = 0; i < this.hunters.length; i++) {
+      const h = this.hunters[i]!;
+      if (h.alive) this.livingTargetsBuf.push(h.targetWrapper);
+    }
+    return this.livingTargetsBuf;
   }
 
   doorById(id: string): Door | null {

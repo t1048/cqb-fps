@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { AdaptiveResolution, MIN_RATIO } from './core/AdaptiveResolution';
+import { AdaptiveResolution } from './core/AdaptiveResolution';
 import { PostFX } from './core/PostFX';
 import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
@@ -42,7 +42,7 @@ import { TextureLibrary } from './world/Materials';
 import { motifById } from './world/Motif';
 import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
-import { SquadSystem } from './ai/Squad';
+import { SquadSystem, type Cell } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
 import { applyMissionRoster } from './rules/MissionRoster';
 import { PauseMenu } from './ui/PauseMenu';
@@ -62,13 +62,66 @@ import {
 
 type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'paused' | 'ended';
 
+const EMPTY_COVERAGE: readonly Cell[] = [];
+
+let sharedRenderer: THREE.WebGLRenderer | null = null;
+let sharedEnvTex: THREE.Texture | null = null;
+let sharedTextures: TextureLibrary | null = null;
+let sharedAudio: AudioEngine | null = null;
+
+function acquireSharedRenderer(container: HTMLElement): {
+  renderer: THREE.WebGLRenderer;
+  envTex: THREE.Texture;
+} {
+  if (!sharedRenderer) {
+    sharedRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // 室内の明暗差を潰さないトーンマップ + 近傍照明の柔らかい影
+    sharedRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    sharedRenderer.shadowMap.type = THREE.PCFShadowMap;
+    // GTAOPass 内の法線描画パスでシャドウマップが二重レンダリングされるのを防ぐ
+    sharedRenderer.shadowMap.autoUpdate = false;
+  }
+  if (sharedRenderer.domElement.parentElement !== container) {
+    container.appendChild(sharedRenderer.domElement);
+  }
+  if (!sharedEnvTex) {
+    // 軽量プロシージャル環境マップ（IBL）をセッション中 1 回だけ生成して PBR の金属・石材に立体感を与える
+    const pmrem = new THREE.PMREMGenerator(sharedRenderer);
+    const roomEnv = new RoomEnvironment();
+    sharedEnvTex = pmrem.fromScene(roomEnv, 0.04).texture;
+    sharedEnvTex.userData.shared = true;
+    roomEnv.dispose();
+    pmrem.dispose();
+  }
+  return { renderer: sharedRenderer, envTex: sharedEnvTex };
+}
+
+function acquireSharedTextures(): TextureLibrary {
+  if (!sharedTextures) {
+    sharedTextures = new TextureLibrary();
+  }
+  return sharedTextures;
+}
+
+function acquireSharedAudio(): AudioEngine {
+  if (!sharedAudio || sharedAudio.isDisposed) {
+    sharedAudio = new AudioEngine();
+  }
+  return sharedAudio;
+}
+
 /** 1 回の起動で生成した全リソースをまとめて破棄できるアプリ。リトライ = destroy → 再 create。 */
 class App {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly resolution: AdaptiveResolution;
   private readonly postfx: PostFX;
-  private shadowScanTimer = 0;
+  private lastDpr = window.devicePixelRatio || 1;
+  private lastSwatChildren = 0;
+  private lastFortifyChildren = 0;
+  private lastSquadChildren = 0;
   private lastReloadP = -1;
+  private readonly replyProjScratch = new THREE.Vector3();
+  private readonly replyEyeScratch = new THREE.Vector3();
   private readonly scene = new THREE.Scene();
   private readonly equipmentScene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -150,15 +203,13 @@ class App {
     }
     this.mapId = map.id;
     const initialSettings = getSettings();
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.resolution = new AdaptiveResolution(this.renderer);
+    const shared = acquireSharedRenderer(container);
+    this.renderer = shared.renderer;
+    this.envTex = shared.envTex;
+    this.resolution = new AdaptiveResolution(this.renderer, initialSettings.aoEnabled);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    // 室内の明暗差を潰さないトーンマップ + 近傍照明 1 灯だけの柔らかい影
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.autoClear = true;
     this.renderer.shadowMap.enabled = initialSettings.shadowsEnabled;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
     // モチーフがあれば空・霧・露出を施設ごとに変える。未設定は従来の夕暮れ。
@@ -167,30 +218,25 @@ class App {
     const atm = visual?.atmosphere;
     this.scene.background = new THREE.Color(atm?.background ?? 0x3a4656);
     this.scene.fog = new THREE.Fog(atm?.fog ?? 0x3a4656, atm?.fogNear ?? 30, atm?.fogFar ?? 100);
-    if (atm) this.renderer.toneMappingExposure = atm.exposure;
-    this.textures = new TextureLibrary();
-    if (visual) this.textures.bindPalette(visual.palette);
+    this.renderer.toneMappingExposure = atm?.exposure ?? 1.15;
+    this.textures = acquireSharedTextures();
+    this.textures.bindPalette(visual ? visual.palette : null);
     this.world = new WorldBuilder(map, this.textures);
     this.scene.add(this.world.root);
-    // 軽量プロシージャル環境マップ（IBL）を 1 回だけ生成して PBR の金属・石材に立体感を与える
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    const roomEnv = new RoomEnvironment();
-    this.envTex = pmrem.fromScene(roomEnv, 0.04).texture;
-    roomEnv.dispose();
-    pmrem.dispose();
     this.scene.environment = this.envTex;
     this.scene.environmentIntensity = 0.35;
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);
-    this.postfx.setAO(initialSettings.aoEnabled);
-    this.resolution.onChange = (r) => {
+    this.postfx.setAO(this.resolution.aoActive);
+    this.resolution.onChange = (r, aoAllowed) => {
       this.postfx.setPixelRatio(r);
-      this.postfx.setAO(getSettings().aoEnabled && r > MIN_RATIO + 0.01);
+      this.postfx.setAO(aoAllowed);
     };
 
     this.input = new InputManager(this.renderer.domElement);
     this.input.allowAutoPointerLock = false;
     this.player = new PlayerController(this.camera, this.input, this.world.colliders, playerCfg, this.bus, map);
-    this.audio = new AudioEngine();
+    this.audio = acquireSharedAudio();
+    this.audio.stopAll();
     this.audio.setMasterVolume(initialSettings.masterVolume);
     this.audio.setMuted(initialSettings.muted);
     this.audioBridge = new AudioBridge(this.bus, this.audio, this.player, this.world.colliders, playerCfg.arrest.radioReportChance ?? 0.38);
@@ -280,9 +326,9 @@ class App {
       const suspect = this.entities.suspects.get(id);
       if (!reply || !suspect) return;
       const chest = suspect.body.chestPos();
-      const screen = new THREE.Vector3(chest.x, chest.y, chest.z).project(this.camera);
+      const screen = this.replyProjScratch.set(chest.x, chest.y, chest.z).project(this.camera);
       if (Math.max(Math.abs(screen.x), Math.abs(screen.y), Math.abs(screen.z)) <= 1 &&
-          hasLineOfSight(this.world.colliders, this.player.getEyePosition(), chest)) {
+          hasLineOfSight(this.world.colliders, this.player.getEyePosition(this.replyEyeScratch), chest)) {
         this.pendingReply = t(`容疑者「${reply}」`, `Suspect: "${reply}"`);
       }
     });
@@ -445,9 +491,9 @@ class App {
       map,
       this.player,
       this.doors,
-      this.squad.coverage,
-      () => this.squad.getMinimapAllies(),
-      () => this.squad.getMinimapWaypoints(),
+      suspect ? EMPTY_COVERAGE : this.squad.coverage,
+      suspect ? undefined : () => this.squad.getMinimapAllies(),
+      suspect ? undefined : () => this.squad.getMinimapWaypoints(),
     );
     this.minimap.setVisible(false);
 
@@ -492,10 +538,15 @@ class App {
     this.unsubSettings = subscribeSettings((s, prev) => {
       this.audio.setMasterVolume(s.masterVolume);
       this.audio.setMuted(s.muted);
-      this.postfx.setAO(s.aoEnabled && this.resolution.pixelRatio > MIN_RATIO + 0.01);
+      if (s.aoEnabled !== prev.aoEnabled) {
+        this.resolution.reset(undefined, s.aoEnabled);
+        this.postfx.setAO(this.resolution.aoActive);
+      }
       if (s.shadowsEnabled !== prev.shadowsEnabled) {
         this.renderer.shadowMap.enabled = s.shadowsEnabled;
         this.renderer.shadowMap.needsUpdate = true;
+        this.markMaterialsShadowUpdate();
+        this.resolution.reset(undefined, s.aoEnabled);
       }
       if (s.language !== prev.language) {
         if (this.phase === 'briefing') {
@@ -529,7 +580,10 @@ class App {
       (window as unknown as { __cqbApp?: unknown }).__cqbApp = this;
     }
 
-    this.applyShadowFlags();
+    this.applyShadowFlags(this.scene);
+    this.lastSwatChildren = this.swatTeam?.root.children.length ?? 0;
+    this.lastFortifyChildren = this.fortify?.root.children.length ?? 0;
+    this.lastSquadChildren = this.squad.root.children.length;
     this.world.lights.snap(this.camera.position);
     this.loop = new GameLoop(
       (dt, raw) => {
@@ -690,11 +744,7 @@ class App {
     const reloadP = this.flashbang.equipped ? null : this.weapons.reloadProgress;
     this.viewModel.update(dt, this.player.isMoving, reloadP, this.weapons.reloadFromEmpty);
     this.playReloadCues(reloadP);
-    this.shadowScanTimer -= dt;
-    if (this.shadowScanTimer <= 0) {
-      this.shadowScanTimer = 1;
-      this.applyShadowFlags();
-    }
+    this.syncDynamicShadows();
     this.avatar.update(this.player);
     this.arrest?.update(dt);
     this.warningCall?.update(dt);
@@ -729,22 +779,68 @@ class App {
     }
   }
 
-  /** 後から生成される人物・ドア等も含め、不透明メッシュに影の投影/受けを設定する。 */
-  private applyShadowFlags(): void {
-    this.scene.traverse((o) => {
+  /** 増援・C2・バリケードなど動的に追加されたルート配下のみ、子要素数が増えたときだけ影フラグを適用する。 */
+  private syncDynamicShadows(): void {
+    if (this.swatTeam) {
+      const n = this.swatTeam.root.children.length;
+      if (n !== this.lastSwatChildren) {
+        if (n > this.lastSwatChildren) this.applyShadowFlags(this.swatTeam.root);
+        this.lastSwatChildren = n;
+      }
+    }
+    if (this.fortify) {
+      const n = this.fortify.root.children.length;
+      if (n !== this.lastFortifyChildren) {
+        if (n > this.lastFortifyChildren) this.applyShadowFlags(this.fortify.root);
+        this.lastFortifyChildren = n;
+      }
+    }
+    const squadN = this.squad.root.children.length;
+    if (squadN !== this.lastSquadChildren) {
+      if (squadN > this.lastSquadChildren) this.applyShadowFlags(this.squad.root);
+      this.lastSquadChildren = squadN;
+    }
+  }
+
+  /** 不透明メッシュに影の投影/受けを設定する（noShadow 指定メッシュは投影せず受けのみ）。 */
+  private applyShadowFlags(root: THREE.Object3D = this.scene): void {
+    root.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || m.userData.shadowSet) return;
+      if (m.userData.noShadow) {
+        m.castShadow = false;
+        m.receiveShadow = true;
+        m.userData.shadowSet = true;
+        return;
+      }
       m.userData.shadowSet = true;
       const mats = Array.isArray(m.material) ? m.material : [m.material];
       const opaque = mats.every((x) => !x.transparent && !(x instanceof THREE.MeshBasicMaterial));
       m.receiveShadow = opaque;
-      m.castShadow = opaque && !m.userData.noShadow;
+      m.castShadow = opaque;
+    });
+  }
+
+  /** 影設定の途中切替時に USE_SHADOWMAP のシェーダ再選択を強制する。 */
+  private markMaterialsShadowUpdate(): void {
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.material) return;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mat of mats) {
+        if (mat && !(mat instanceof THREE.MeshBasicMaterial)) {
+          mat.needsUpdate = true;
+        }
+      }
     });
   }
 
   private render(): void {
     const inWorld = this.phase === 'playing' || this.phase === 'paused';
     this.renderer.autoClear = true;
+    if (this.renderer.shadowMap.enabled) {
+      this.renderer.shadowMap.needsUpdate = true;
+    }
     if (inWorld) this.postfx.render();
     else this.renderer.render(this.scene, this.camera);
     if (inWorld) {
@@ -755,6 +851,11 @@ class App {
   }
 
   private onResize = (): void => {
+    const dpr = window.devicePixelRatio || 1;
+    if (Math.abs(dpr - this.lastDpr) > 0.01) {
+      this.lastDpr = dpr;
+      this.resolution.reset(undefined, getSettings().aoEnabled);
+    }
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.viewModel.resize(this.camera.aspect);
@@ -823,17 +924,16 @@ class App {
     this.player.dispose();
     this.input.dispose();
     this.audioBridge.dispose();
-    this.audio.dispose();
+    this.audio.stopAll();
     this.bus.clear();
     window.removeEventListener('resize', this.onResize);
     this.world.dispose();
-    this.textures.dispose();
     this.scene.environment = null;
-    this.envTex.dispose();
+    disposeObject(this.equipmentScene);
     disposeObject(this.scene);
     this.postfx.dispose();
-    this.renderer.dispose();
-    this.renderer.domElement.remove();
+    this.renderer.setRenderTarget(null);
+    this.renderer.autoClear = true;
   }
 }
 
@@ -961,6 +1061,15 @@ if (import.meta.hot) {
     errorEl = null;
     app?.destroy();
     app = null;
+    sharedAudio?.dispose();
+    sharedAudio = null;
+    sharedTextures?.dispose();
+    sharedTextures = null;
+    sharedEnvTex?.dispose();
+    sharedEnvTex = null;
+    sharedRenderer?.dispose();
+    sharedRenderer?.domElement.remove();
+    sharedRenderer = null;
     delete (window as unknown as { __cqbDebug?: unknown }).__cqbDebug;
   });
 }

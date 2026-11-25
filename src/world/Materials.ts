@@ -37,6 +37,34 @@ const THEMED: ReadonlySet<TextureName> = new Set([
 
 const EXTRA: ReadonlySet<TextureName> = new Set(['marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami']);
 
+const WEBP_PLAIN: ReadonlySet<TextureName> = new Set(['faceA', 'faceB', 'fabric', 'concrete', 'wood', 'plaster']);
+
+const KNOWN_MATERIALS: ReadonlySet<string> = new Set<TextureName>([
+  'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
+  'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
+]);
+
+/** デコード済み webp 画像のモジュールスコープキャッシュ。再生成・モチーフ切替時の再取得・再デコードを防ぐ。 */
+const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
+
+function loadCachedImage(url: string): Promise<HTMLImageElement | null> {
+  const hit = imageCache.get(url);
+  if (hit) return hit;
+  if (typeof Image === 'undefined') {
+    const empty = Promise.resolve(null);
+    imageCache.set(url, empty);
+    return empty;
+  }
+  const promise = new Promise<HTMLImageElement | null>((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = url;
+  });
+  imageCache.set(url, promise);
+  return promise;
+}
+
 export function hexCss(n: number): string {
   return `#${(n >>> 0).toString(16).padStart(6, '0')}`;
 }
@@ -91,9 +119,9 @@ export class TextureLibrary {
     // ロード前は手続き塗りが表示されるため破綻しない。
     const webp = themed ? themedWebpName(name, this.palette) : null;
     if (webp) {
-      const image = new Image();
-      image.onload = () => {
-        if (this.disposed) return;
+      const url = import.meta.env.BASE_URL + 'textures/' + webp + '.webp';
+      void loadCachedImage(url).then((image) => {
+        if (!image || this.disposed) return;
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';
         ctx.globalAlpha = 0.45;
@@ -101,19 +129,17 @@ export class TextureLibrary {
         ctx.restore();
         tex.needsUpdate = true;
         const d = this.derived.get(tex.uuid);
-        if (d) { d.bump.needsUpdate = true; d.rough.needsUpdate = true; }
-      };
-      image.src = import.meta.env.BASE_URL + 'textures/' + webp + '.webp';
-    } else if (!themed && (garment || ['faceA', 'faceB', 'fabric', 'concrete', 'wood', 'plaster'].includes(name))) {
-      const image = new Image();
-      image.onload = () => {
-        if (this.disposed) return;
+        if (d) d.bump.needsUpdate = true;
+      });
+    } else if (!themed && (garment || WEBP_PLAIN.has(name))) {
+      const url = import.meta.env.BASE_URL + 'textures/' + name + '.webp';
+      void loadCachedImage(url).then((image) => {
+        if (!image || this.disposed) return;
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         tex.needsUpdate = true;
         const d = this.derived.get(tex.uuid);
-        if (d) { d.bump.needsUpdate = true; d.rough.needsUpdate = true; }
-      };
-      image.src = import.meta.env.BASE_URL + 'textures/' + name + '.webp';
+        if (d) d.bump.needsUpdate = true;
+      });
     }
     this.textures.set(key, tex);
     return tex;
@@ -143,15 +169,11 @@ export class TextureLibrary {
 
   /** マップ名からテクスチャ。未知の名前は plaster。 */
   byMaterial(name: string | undefined, fallback: TextureName): THREE.CanvasTexture {
-    const known: TextureName[] = [
-      'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
-      'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
-    ];
-    const key = known.find((n) => n === name) ?? fallback;
+    const key = name !== undefined && KNOWN_MATERIALS.has(name) ? (name as TextureName) : fallback;
     return this.get(key);
   }
 
-  /** 同一 canvas から bump / roughness 用テクスチャを派生させる。キャッシュし userData.shared で共有扱いにする。 */
+  /** 同一 canvas から bump / roughness 共用の線形テクスチャを 1 枚だけ派生させる。キャッシュし userData.shared で共有扱いにする。 */
   getDerivedMaps(source: THREE.CanvasTexture): { bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture } {
     const hit = this.derived.get(source.uuid);
     if (hit) return { bumpMap: hit.bump, roughnessMap: hit.rough };
@@ -164,7 +186,8 @@ export class TextureLibrary {
       t.userData.shared = true;
       return t;
     };
-    const entry = { bump: make(), rough: make() };
+    const linear = make();
+    const entry = { bump: linear, rough: linear };
     this.derived.set(source.uuid, entry);
     return { bumpMap: entry.bump, roughnessMap: entry.rough };
   }
@@ -174,7 +197,7 @@ export class TextureLibrary {
     this.disposed = true;
     for (const tex of this.textures.values()) tex.dispose();
     this.textures.clear();
-    for (const d of this.derived.values()) { d.bump.dispose(); d.rough.dispose(); }
+    for (const d of this.derived.values()) d.bump.dispose();
     this.derived.clear();
   }
 }

@@ -55,7 +55,11 @@ export class EntityManager {
   private readonly friendlySuspects: boolean;
   private tearGas: GasField | null = null;
   private readonly gasProbe = new THREE.Vector3();
+  private readonly chestTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly recentGasClouds: { pos: Vec3; radius: number; remainingSec: number }[] = [];
+  private readonly suspectTargets = new Map<string, AllyTarget>();
+  private readonly livingSuspectsBuf: AllyTarget[] = [];
+  private readonly gasCache = new Map<string, { cd: number; origin: Vec3 | null; sample: GasSample }>();
 
   constructor(
     defs: readonly EntityDef[],
@@ -107,12 +111,30 @@ export class EntityManager {
           friendlySuspects,
         );
         this.suspects.set(s.id, s);
+        const b = s.body;
+        const eyeScratch = new THREE.Vector3();
+        const chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
+        const aabbScratch: AABB = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+        this.suspectTargets.set(s.id, {
+          id: s.id,
+          get px() {
+            return b.px;
+          },
+          get pz() {
+            return b.pz;
+          },
+          get footY() {
+            return b.footY;
+          },
+          get height() {
+            return b.height;
+          },
+          getEye: () => b.eye(eyeScratch),
+          getChest: () => b.chestPos(chestScratch),
+          getAABB: () => b.getAABB(aabbScratch),
+        });
         this.root.add(s.body.group);
         weapons.addTarget(s);
-        const label = new AIDebugLabel();
-        label.sprite.visible = this.debugVisible;
-        this.labels.set(s.id, label);
-        this.root.add(label.sprite);
       } else {
         const c = new Civilian(def, profile, bus, colliders, textures);
         this.civilians.set(c.id, c);
@@ -135,6 +157,18 @@ export class EntityManager {
       if (e.code !== 'F3') return;
       e.preventDefault();
       this.debugVisible = !this.debugVisible;
+      if (this.debugVisible) {
+        for (const s of this.suspects.values()) {
+          if (!this.labels.has(s.id)) {
+            const label = new AIDebugLabel();
+            this.labels.set(s.id, label);
+            this.root.add(label.sprite);
+          }
+        }
+      }
+      for (const label of this.labels.values()) {
+        label.sprite.visible = this.debugVisible;
+      }
     };
     window.addEventListener('keydown', onKey);
     this.unsubs.push(
@@ -249,27 +283,20 @@ export class EntityManager {
     return { damagedIds, stunnedIds, killedIds };
   }
 
+  /** 個別の容疑者 AllyTarget ラッパーを返す（キャッシュ済み） */
+  getSuspectTarget(id: string): AllyTarget | undefined {
+    return this.suspectTargets.get(id);
+  }
+
   /** 生存中の容疑者を、SWAT の射撃対象（AllyTarget）として返す */
   livingSuspectTargets(): AllyTarget[] {
-    const out: AllyTarget[] = [];
+    this.livingSuspectsBuf.length = 0;
     for (const s of this.suspects.values()) {
       if (!s.alive) continue;
-      const b = s.body;
-      out.push({
-        id: s.id,
-        px: b.px,
-        pz: b.pz,
-        footY: b.footY,
-        height: b.height,
-        getEye: () => {
-          const e = b.eye(new THREE.Vector3());
-          return { x: e.x, y: e.y, z: e.z };
-        },
-        getChest: () => b.chestPos(),
-        getAABB: () => b.getAABB(),
-      });
+      const t = this.suspectTargets.get(s.id);
+      if (t) this.livingSuspectsBuf.push(t);
     }
-    return out;
+    return this.livingSuspectsBuf;
   }
 
   private resolveShooterPos(shooter: string, fallback: Vec3): Vec3 {
@@ -284,12 +311,31 @@ export class EntityManager {
     return fallback;
   }
 
-  private sampleGasAt(pos: Vec3): GasSample | undefined {
+  private sampleGasAt(suspectId: string, pos: Vec3, dt: number): GasSample | undefined {
     const tg = this.tearGas;
     if (!tg) return undefined;
+    let entry = this.gasCache.get(suspectId);
+    if (!entry) {
+      entry = { cd: 0, origin: null, sample: { density: 0, origin: null } };
+      this.gasCache.set(suspectId, entry);
+    }
     const density = tg.exposureAt(this.gasProbe.set(pos.x, pos.y, pos.z));
-    if (density <= 0) return { density: 0, origin: null };
+    if (density <= 0) {
+      entry.cd = 0;
+      entry.origin = null;
+      entry.sample.density = 0;
+      entry.sample.origin = null;
+      return entry.sample;
+    }
 
+    if (entry.cd > 0) {
+      entry.cd -= dt;
+      entry.sample.density = density;
+      entry.sample.origin = entry.origin;
+      return entry.sample;
+    }
+
+    entry.cd = 0.25;
     // 有限差分勾配で高濃度方向（ガス雲中心側）を推定
     const h = 0.75;
     const gx =
@@ -300,10 +346,10 @@ export class EntityManager {
       tg.exposureAt(this.gasProbe.set(pos.x, pos.y, pos.z - h));
     const gLen = Math.hypot(gx, gz);
     if (gLen > 1e-4) {
-      return {
-        density,
-        origin: { x: pos.x + (gx / gLen) * 2.5, y: pos.y, z: pos.z + (gz / gLen) * 2.5 },
-      };
+      entry.origin = { x: pos.x + (gx / gLen) * 2.5, y: pos.y, z: pos.z + (gz / gLen) * 2.5 };
+      entry.sample.density = density;
+      entry.sample.origin = entry.origin;
+      return entry.sample;
     }
 
     // 雲中心付近など勾配が平坦な場合は直近の gasDetonated 座標へフォールバック
@@ -317,7 +363,10 @@ export class EntityManager {
         bestOrigin = c.pos;
       }
     }
-    return { density, origin: bestOrigin };
+    entry.origin = bestOrigin;
+    entry.sample.density = density;
+    entry.sample.origin = bestOrigin;
+    return entry.sample;
   }
 
   /** 士気回復・FSM 更新・デバッグ表示更新（F3 で表示切替）。 */
@@ -330,13 +379,16 @@ export class EntityManager {
     }
     this.perception?.update(dt);
     for (const c of this.civilians.values()) c.update(dt);
+    const hasGas = this.tearGas !== null;
     for (const s of this.suspects.values()) {
-      const gas = this.tearGas ? this.sampleGasAt(s.body.chestPos()) : undefined;
+      const gas =
+        hasGas && s.alive && s.state !== SuspectState.ARRESTED && s.state !== SuspectState.SURRENDER
+          ? this.sampleGasAt(s.id, s.body.chestPos(this.chestTmp), dt)
+          : undefined;
       s.update(dt, gas);
+      if (!this.debugVisible) continue;
       const label = this.labels.get(s.id);
       if (!label) continue;
-      label.sprite.visible = this.debugVisible;
-      if (!this.debugVisible) continue;
       label.sprite.position.set(s.body.px, s.body.footY + s.body.height + 0.35, s.body.pz);
       label.set(`${s.debugState} M:${Math.round(s.morale.value)}`, s.alive ? '#ffffff' : '#999999');
     }
@@ -346,8 +398,8 @@ export class EntityManager {
     const cfg = this.warning;
     const cosHalf = Math.cos((cfg.coneDeg / 2) * (Math.PI / 180));
     const hl = Math.hypot(dir.x, dir.z) || 1;
-    const test = (b: { chestPos(): Vec3; px: number; pz: number }): boolean => {
-      const c = b.chestPos();
+    const test = (b: { chestPos(out?: Vec3): Vec3; px: number; pz: number }): boolean => {
+      const c = b.chestPos(this.chestTmp);
       const dx = c.x - pos.x;
       const dz = c.z - pos.z;
       const dist = Math.hypot(dx, dz);
@@ -357,7 +409,7 @@ export class EntityManager {
     };
     for (const s of this.suspects.values()) {
       if (s.alive && test(s.body)) {
-        const alliesCovering = this.squad?.countAlliesCovering(s.body.chestPos(), 10) ?? 0;
+        const alliesCovering = this.squad?.countAlliesCovering(s.body.chestPos(this.chestTmp), 10) ?? 0;
         const pressure = 1 + this.presenceBonusPerAlly * alliesCovering;
         s.onWarned(pos, pressure);
       }
@@ -382,6 +434,9 @@ export class EntityManager {
       c.dispose();
     }
     this.suspects.clear();
+    this.suspectTargets.clear();
+    this.livingSuspectsBuf.length = 0;
+    this.gasCache.clear();
     this.civilians.clear();
     disposeObject(this.root);
   }

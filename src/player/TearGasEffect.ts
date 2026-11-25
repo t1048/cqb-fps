@@ -15,12 +15,13 @@ const COUGH_NOISE_RADIUS = 16;
 
 export interface GasSampler {
   exposureAt(pos: Vec3): number;
+  readonly activeCloudCount?: number;
 }
 
 /**
  * 容疑者モード: CS 催涙ガスによる行動阻害エフェクト。
- * - 独自の DOM オーバーレイ（黄緑ティント + backdrop-filter: blur）を使用し、
- *   PepperEffect が管理する canvas.style.filter を一切上書きしない。
+ * - 独自の DOM オーバーレイ（黄緑の霞ベール。backdrop-filter を使わず opacity のみで軽量合成）を使用し、
+ *   PepperEffect のオーバーレイと互いに干渉しない。
  * - WeaponSystem.update() の後に更新し、extraSpread は +=、speedMultiplier は *= で合成する。
  * - 一定濃度以上で周期的に咳き込み、playerCough + noise(kind:'voice', source:'player') を発する。
  */
@@ -29,7 +30,7 @@ export class TearGasEffect {
   private readonly el = document.createElement('div');
   private readonly eye = new THREE.Vector3();
   private coughCd = 0;
-  private shown = -1;
+  private shown = 0;
   private warned = false;
   private disposed = false;
 
@@ -41,8 +42,11 @@ export class TearGasEffect {
     private readonly bus: GameEventBus,
   ) {
     this.el.style.cssText =
-      'position:fixed;inset:0;z-index:4;pointer-events:none;opacity:0;' +
-      'background:radial-gradient(ellipse at center, rgba(175,195,70,.16) 0%, rgba(130,155,45,.45) 55%, rgba(75,95,25,.82) 100%)';
+      'position:fixed;inset:0;z-index:4;pointer-events:none;opacity:0;display:none;' +
+      'background:' +
+      'radial-gradient(ellipse at center, rgba(195,212,110,.5) 0%, rgba(152,175,62,.64) 52%, rgba(78,98,26,.88) 100%),' +
+      'radial-gradient(circle at 62% 42%, rgba(215,228,145,.26) 0%, rgba(140,165,50,0) 58%)';
+    this.el.style.backdropFilter = '';
     document.body.appendChild(this.el);
   }
 
@@ -58,15 +62,22 @@ export class TearGasEffect {
     if (this.disposed) return;
     const dt = Math.min(rawDt, 0.05);
     if (!this.player.alive) {
-      this.level = 0;
-      this.warned = false;
-      this.coughCd = 0;
-      this.syncOverlay(0);
+      if (this.level > 0 || this.shown !== 0) {
+        this.level = 0;
+        this.warned = false;
+        this.coughCd = 0;
+        this.syncOverlay(0);
+      }
+      return;
+    }
+
+    if (this.gas.activeCloudCount === 0 && this.level <= 0) {
+      if (this.shown !== 0) this.syncOverlay(0);
       return;
     }
 
     this.player.getEyePosition(this.eye);
-    const density = this.gas.exposureAt({ x: this.eye.x, y: this.eye.y, z: this.eye.z });
+    const density = this.gas.exposureAt(this.eye);
     if (density > 0) {
       if (!this.warned && this.level < 8) {
         this.warned = true;
@@ -102,13 +113,23 @@ export class TearGasEffect {
   }
 
   private syncOverlay(k: number): void {
-    const step = Math.round(k * 40);
+    const step = k > 0 ? Math.max(1, Math.round(k * 8)) : 0;
     if (step === this.shown) return;
+    const wasZero = this.shown === 0;
     this.shown = step;
-    this.el.style.opacity = String(Math.min(0.88, k * 1.05));
-    const blur = step > 0 ? `blur(${(k * 4.5).toFixed(1)}px)` : '';
-    this.el.style.backdropFilter = blur;
-    (this.el.style as CSSStyleDeclaration & { webkitBackdropFilter?: string }).webkitBackdropFilter = blur;
+    if (step > 0) {
+      if (wasZero) this.el.style.display = 'block';
+      const s = step / 8;
+      this.el.style.opacity = String(Math.min(0.88, s * 1.02));
+      const blur = `blur(${(s * 3.0).toFixed(1)}px)`;
+      this.el.style.backdropFilter = blur;
+      (this.el.style as CSSStyleDeclaration & { webkitBackdropFilter?: string }).webkitBackdropFilter = blur;
+    } else {
+      this.el.style.opacity = '0';
+      this.el.style.display = 'none';
+      this.el.style.backdropFilter = '';
+      (this.el.style as CSSStyleDeclaration & { webkitBackdropFilter?: string }).webkitBackdropFilter = '';
+    }
   }
 
   clear(): void {

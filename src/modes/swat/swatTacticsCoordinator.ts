@@ -26,12 +26,13 @@ import {
   computeBallisticVelocity,
   evaluateC2BlastCone,
   filterReachableExteriorEntries,
+  isIndoorPoint,
   planFlashThrow,
   planPincerFlankGoal,
   selectPinningCell,
   shouldUseC2Breach,
   type EntryPortal,
-  type FlankDoorSample,
+  type EntryReach,
   type PinningCellInfo,
 } from '../../ai/SwatTactics';
 import { hasLineOfSight } from '../../weapons/Flashbang';
@@ -67,6 +68,9 @@ import {
   type SwatTeamHost,
 } from './swatTypes';
 
+const C2_FIREBALL_GEO = new THREE.SphereGeometry(1, 10, 8);
+C2_FIREBALL_GEO.userData.shared = true;
+
 export interface SwatTacticsHost {
   readonly d: SwatTeamDeps;
   readonly root: THREE.Group;
@@ -84,6 +88,7 @@ export interface SwatTacticsHost {
   nextCellIndex(): number;
   assignCells(): void;
   portals(): EntryPortal[];
+  reachablePortalLengths?(from: Vec3): readonly EntryReach[];
   abortStacking(): void;
   onDoorBreached(by: SwatHunter, doorId: string): void;
   disarmTrappedDoorOnC2(door: Door): void;
@@ -120,8 +125,9 @@ export class SwatTacticsCoordinator {
   private pinningCellIndex: number | null = null;
   private pincerTargetRoomId: string | null = null;
   private pincerRefreshCd = 0;
+  private pincerPlanCd = 0;
   private pincerRadioCd = 0;
-  /** C2 爆破ブリーチ（F8）の状態・常設ライト（シェーダ再コンパイル防止のため追加/削除しない） */
+  /** C2 爆破ブリーチ（F8）の状態・常設ライト（visible=false でフラグメントシェーダへの PointLight 混入と再コンパイルを両方防止） */
   private readonly encounteredLockedDoors = new Set<string>();
   readonly c2BlastLight = new THREE.PointLight(0xffb866, 0, 14, 2);
   private readonly c2Blasts: { mesh: THREE.Mesh; t: number }[] = [];
@@ -129,6 +135,7 @@ export class SwatTacticsCoordinator {
   private playerRoomId: string | null = null;
   private playerRoomStaySec = 0;
   private gasCd = 8;
+  private gasRetryCd = 0;
   private gasLeft = SWAT_GAS_PER_TEAM;
   /** 統計 */
   pepperShots = 0;
@@ -139,9 +146,12 @@ export class SwatTacticsCoordinator {
   private waveCooldown = 0;
   private lastHoldLeft = Infinity;
   private lastReinforcementPortalId: string | null = null;
+  private readonly chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly rayOriginScratch: Vec3 = { x: 0, y: 0, z: 0 };
 
   constructor(private readonly host: SwatTacticsHost) {
     this.reinforcementsEnabled = Boolean(host.d.reinforcements);
+    this.c2BlastLight.visible = false;
     this.host.root.add(this.c2BlastLight);
   }
 
@@ -168,9 +178,11 @@ export class SwatTacticsCoordinator {
   tickTimers(dt: number): void {
     this.flashCd = Math.max(0, this.flashCd - dt);
     this.gasCd = Math.max(0, this.gasCd - dt);
+    this.gasRetryCd = Math.max(0, this.gasRetryCd - dt);
     this.contactCd = Math.max(0, this.contactCd - dt);
     this.rushCd = Math.max(0, this.rushCd - dt);
     this.pincerRefreshCd = Math.max(0, this.pincerRefreshCd - dt);
+    this.pincerPlanCd = Math.max(0, this.pincerPlanCd - dt);
     this.pincerRadioCd = Math.max(0, this.pincerRadioCd - dt);
     this.waveCooldown = Math.max(0, this.waveCooldown - dt);
     this.sightingAge += dt;
@@ -392,23 +404,42 @@ export class SwatTacticsCoordinator {
             center: { x: sx / n, y: sy / n, z: sz / n },
           });
         }
-        const preferredPin = contactBy?.cellIndex ?? this.pinningCellIndex ?? cellInfos[0]!.cellIndex;
+        const prevPin = this.pinningCellIndex;
+        const preferredPin = contactBy?.cellIndex ?? prevPin ?? cellInfos[0]!.cellIndex;
         const pinIdx = selectPinningCell(cellInfos, preferredPin, pos);
         this.pinningCellIndex = pinIdx;
         const newRoomId = this.host.roomAt(pos.x, pos.z, pos.y)?.id ?? null;
         const roomChanged = newRoomId !== this.pincerTargetRoomId;
         this.pincerTargetRoomId = newRoomId;
 
+        let activeFlanking = false;
+        if (!roomChanged && pinIdx === prevPin && this.pincerPlanCd > 0) {
+          for (const [cellIndex, members] of cellMap) {
+            if (cellIndex === pinIdx) continue;
+            if (members.some((m) => m.huntingFlank && m.huntTarget !== null)) {
+              activeFlanking = true;
+              break;
+            }
+          }
+        }
+        if (activeFlanking) {
+          const pinMembers = cellMap.get(pinIdx);
+          if (pinMembers) {
+            for (const h of pinMembers) {
+              if (h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
+              const target = { x: pos.x, y: pos.y, z: pos.z };
+              if (this.holdUnclearedRoom(h, target, false)) continue;
+              h.huntTarget = target;
+              h.huntingFlank = false;
+              h.setState('hunt');
+            }
+          }
+          return;
+        }
+
+        this.pincerPlanCd = 1.0;
         const pinInfo = cellInfos.find((c) => c.cellIndex === pinIdx)!;
-        const doorSamples: FlankDoorSample[] = this.host.d.doors.doors.map((door) => ({
-          id: door.id,
-          centerX: door.centerX,
-          centerZ: door.centerZ,
-          normalX: door.normalX,
-          normalZ: door.normalZ,
-          sillY: door.sillY,
-          locked: door.locked,
-        }));
+        const portals = this.host.portals();
         const usedFlankDoors = new Set<string>();
         let flankSpeaker: SwatHunter | undefined;
         let flankAssigned = false;
@@ -426,17 +457,20 @@ export class SwatTacticsCoordinator {
             continue;
           }
           const lead = members[0]!;
+          const flankerPos = { x: lead.body.px, y: lead.body.footY, z: lead.body.pz };
+          const flankerIndoor = isIndoorPoint(this.host.rooms, flankerPos.x, flankerPos.z, flankerPos.y);
           const flank = planPincerFlankGoal({
             playerPos: pos,
             frontalPos: pinInfo.center,
-            flankerPos: { x: lead.body.px, y: lead.body.footY, z: lead.body.pz },
+            flankerPos,
             rooms: this.host.rooms,
-            doors: doorSamples,
+            doors: this.host.d.doors.doors,
             stairs: this.host.d.stairs,
             colliders: this.host.d.colliders,
             excludeDoorIds: usedFlankDoors,
             bounds: this.host.d.bounds,
-            entries: this.host.portals(),
+            entries: portals,
+            entryLengths: !flankerIndoor ? this.host.reachablePortalLengths?.(flankerPos) : undefined,
           });
           if (flank?.doorId) usedFlankDoors.add(flank.doorId);
           for (const h of members) {
@@ -507,15 +541,18 @@ export class SwatTacticsCoordinator {
       }
     }
     const rayY = noiseRayOriginY(pos, kind);
+    this.rayOriginScratch.x = pos.x;
+    this.rayOriginScratch.y = rayY;
+    this.rayOriginScratch.z = pos.z;
     const target = { x: pos.x, y: resolveFloorY(pos, this.host.d.rooms, kind), z: pos.z };
     let heard = false;
     for (const h of this.host.hunters) {
       if (!h.alive || h.state === 'staging') continue;
-      const c = h.body.chestPos();
+      const c = h.body.chestPos(this.chestScratch);
       const dist = Math.hypot(c.x - pos.x, c.y - pos.y, c.z - pos.z);
       let r = radius * HEARING_MUL;
       if (dist > r) continue;
-      if (kind !== 'gunshot' && kind !== 'breach' && !hasLineOfSight(this.host.d.colliders, { x: pos.x, y: rayY, z: pos.z }, c)) {
+      if (kind !== 'gunshot' && kind !== 'breach' && !hasLineOfSight(this.host.d.colliders, this.rayOriginScratch, c)) {
         r *= OCCLUDED_MUL;
         if (dist > r) continue;
       }
@@ -641,14 +678,20 @@ export class SwatTacticsCoordinator {
     };
 
     const fireball = new THREE.Mesh(
-      new THREE.SphereGeometry(0.45, 10, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffb85c, transparent: true, opacity: 0.85, depthWrite: false }),
+      C2_FIREBALL_GEO,
+      new THREE.MeshBasicMaterial({
+        color: 0xffb85c,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
     );
+    fireball.scale.setScalar(0.45);
     fireball.position.set(blastOrigin.x, blastOrigin.y, blastOrigin.z);
     this.host.root.add(fireball);
     this.c2Blasts.push({ mesh: fireball, t: 0 });
     this.c2BlastLight.position.set(blastOrigin.x, blastOrigin.y, blastOrigin.z);
-    this.c2BlastLight.intensity = 65;
 
     this.host.d.bus.emit('c2Detonated', { doorId: door.id, pos: doorCenter, dir: blastDir, radius: C2_BLAST_RADIUS });
     this.host.radio(by, 'C2起爆！ 突入しろ！', 'Breach! Go, go, go!', true);
@@ -686,38 +729,34 @@ export class SwatTacticsCoordinator {
     this.host.onDoorBreached(by, door.id);
   }
 
-  /** C2 爆破の閃光と火球メッシュを減衰・破棄する（ライト自体は常設のまま intensity のみ制御） */
+  /** C2 爆破の火球メッシュを減衰・破棄する（共有ジオメトリは破棄せず、常設ライトも visible=false のまま維持） */
   updateC2Blasts(dt: number): void {
-    let flash = 0;
     for (let i = this.c2Blasts.length - 1; i >= 0; i--) {
       const b = this.c2Blasts[i]!;
       b.t += dt;
       if (b.t < 0.45) {
-        const s = 1 + b.t * 5.2;
+        const s = 0.45 * (1 + b.t * 5.2);
         b.mesh.scale.setScalar(s);
         (b.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.85 * (1 - b.t / 0.45));
       } else {
         b.mesh.visible = false;
       }
-      if (b.t < 0.5) flash = Math.max(flash, 65 * (1 - b.t / 0.5));
       if (b.t > 0.55) {
         this.host.root.remove(b.mesh);
-        b.mesh.geometry.dispose();
         (b.mesh.material as THREE.Material).dispose();
         this.c2Blasts.splice(i, 1);
       }
     }
-    this.c2BlastLight.intensity = flash;
   }
 
   // ---------- 閃光弾・催涙ガス・ペッパー ----------
 
   /** 追跡中、潜伏推定位置が近く直接視認できていなければ閃光弾を投げ込む（ドア枠・窓・壁バウンド含む）。 */
   tryFlash(by: SwatHunter, target: Vec3): void {
-    if (this.flashCd > 0 || this.flashesLeft <= 0 || this.sightingAge > 12 || this.host.hostageShieldUp()) return; // 人質が巻き込まれるので投げない
+    if (by.flashRetryCd > 0 || this.flashCd > 0 || this.flashesLeft <= 0 || this.sightingAge > 12 || this.host.hostageShieldUp()) return; // 人質が巻き込まれるので投げない
     const d = Math.hypot(target.x - by.body.px, target.z - by.body.pz);
     if (d < 2.0 || d > SWAT_FLASH_MAX_DIST + 2 || Math.abs(target.y - by.body.footY) > 0.75) return;
-    const from = by.body.chestPos();
+    const from = by.body.chestPos(this.chestScratch);
     const origin = { x: from.x, y: from.y + 0.25, z: from.z };
     const plan = planFlashThrow(
       origin,
@@ -729,12 +768,15 @@ export class SwatTacticsCoordinator {
       SWAT_FLASH_MIN_DIST,
       SWAT_FLASH_MAX_DIST,
     );
-    if (!plan) return;
+    if (!plan) {
+      by.flashRetryCd = 0.35;
+      return;
+    }
     this.launchFlash(by, origin, plan.velocity, plan.fuse);
   }
 
   throwFlash(by: SwatHunter, target: Vec3, fuse: number): void {
-    const from = by.body.chestPos();
+    const from = by.body.chestPos(this.chestScratch);
     const origin = { x: from.x, y: from.y + 0.25, z: from.z };
     const vel = computeBallisticVelocity(origin, { x: target.x, y: target.y + 0.3, z: target.z }, this.host.d.flashbang.gravity, 9, 0.35, 0.9);
     this.launchFlash(by, origin, vel, fuse);
@@ -755,13 +797,15 @@ export class SwatTacticsCoordinator {
     this.playerRoomId = next.roomId;
     this.playerRoomStaySec = next.staySec;
 
-    if (!room || !this.host.d.tearGas || this.gasLeft <= 0 || this.gasCd > 0) return;
+    if (!room || !this.host.d.tearGas || this.gasLeft <= 0 || this.gasCd > 0 || this.gasRetryCd > 0) return;
     const threshold = THREE.MathUtils.lerp(CAMP_GAS_THRESHOLD_SEC, CAMP_GAS_THRESHOLD_SEC - 4, this.pressure);
     if (this.playerRoomStaySec < threshold) return;
     if (this.host.hostageShieldUp()) return;
 
     if (this.tryThrowGas(room, { x: p.x, y: p.y, z: p.z })) {
       this.playerRoomStaySec = 0;
+    } else {
+      this.gasRetryCd = 0.5;
     }
   }
 
@@ -823,7 +867,13 @@ export class SwatTacticsCoordinator {
     }
     const hitChance = Math.max(0.2, 0.75 - dist * 0.025);
     if (Math.random() >= hitChance) return;
-    const holding = [...this.host.d.civilians()].some((c) => c.alive && c.shieldedBy === 'player');
+    let holding = false;
+    for (const c of this.host.d.civilians()) {
+      if (c.alive && c.shieldedBy === 'player') {
+        holding = true;
+        break;
+      }
+    }
     const target = holding && Math.random() < 0.22 ? 'hostage' : 'player';
     this.host.d.onPepper?.(target);
     if (target === 'player') {
@@ -942,7 +992,12 @@ export class SwatTacticsCoordinator {
   }
 
   dispose(): void {
+    for (const b of this.c2Blasts) {
+      this.host.root.remove(b.mesh);
+      (b.mesh.material as THREE.Material).dispose();
+    }
     this.c2Blasts.length = 0;
     this.c2BlastLight.intensity = 0;
+    this.c2BlastLight.visible = false;
   }
 }

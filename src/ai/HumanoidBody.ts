@@ -33,6 +33,9 @@ const LEAN_HIP_SHIFT = 0.075;
 const LEAN_DROP = 0.035;
 const MAX_LEAN_ROLL_RAD = 0.28;
 
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+UNIT_BOX.userData.shared = true;
+
 /**
  * 頭・胴・四肢・装備を組み合わせた人型。姿勢で高さ・AABB が変わる。
  * テクスチャは共有ライブラリ（shared）を参照し、ここでは破棄しない。
@@ -107,7 +110,7 @@ export class HumanoidBody {
     this.skin = this.makeMat(undefined, 'skin', 0xbd8d68, 0.86);
     const trim = this.makeMat(undefined, 'fabric', 0x333938, 0.9);
     const pants = this.makeMat(undefined, 'fabric', role === 'civilian' ? 0x4d6072 : 0x48504d, 0.94);
-    const cube = this.geo(new THREE.BoxGeometry());
+    const cube = UNIT_BOX;
     const box = (parent: THREE.Object3D, material: THREE.Material, x: number, y: number, z: number,
       width: number, height: number, depth: number) => {
       this.part(cube, material, parent, x, y, z).scale.set(width, height, depth);
@@ -134,6 +137,7 @@ export class HumanoidBody {
     for (const side of [-1, 1]) {
       box(this.headPivot, trim, side * 0.047, 0.125, -0.099, 0.022, 0.012, 0.008);
       const hip = joint(this.rig, side * 0.096, 0.82, 0);
+      hip.rotation.order = 'ZXY';
       const knee = joint(hip, 0, -0.38, 0);
       const ankle = joint(knee, 0, -0.36, 0);
       box(hip, pants, 0, -0.19, 0, 0.155, 0.38, 0.171);
@@ -154,13 +158,13 @@ export class HumanoidBody {
       const wood = this.makeMat(tex, 'wood', 0x6b4424, 0.7);
       if (this.hasShield) {
         // ハンドガン（盾の裏で構える短い銃）
-        this.part(this.geo(new THREE.BoxGeometry(0.035, 0.045, 0.2)), gunMat, this.gun, 0, 0.02, -0.06);
-        this.part(this.geo(new THREE.BoxGeometry(0.03, 0.09, 0.045)), gunMat, this.gun, 0, -0.04, 0.03);
+        box(this.gun, gunMat, 0, 0.02, -0.06, 0.035, 0.045, 0.2);
+        box(this.gun, gunMat, 0, -0.04, 0.03, 0.03, 0.09, 0.045);
       } else {
-        this.part(this.geo(new THREE.BoxGeometry(0.04, 0.05, 0.42)), gunMat, this.gun, 0, 0.02, -0.12);
-        this.part(this.geo(new THREE.BoxGeometry(0.035, 0.08, 0.14)), wood, this.gun, 0, -0.02, 0.08);
-        this.part(this.geo(new THREE.BoxGeometry(0.03, 0.1, 0.04)), gunMat, this.gun, 0, -0.06, 0.02);
-        this.part(this.geo(new THREE.BoxGeometry(0.02, 0.03, 0.08)), gunMat, this.gun, 0, 0.05, -0.22);
+        box(this.gun, gunMat, 0, 0.02, -0.12, 0.04, 0.05, 0.42);
+        box(this.gun, wood, 0, -0.02, 0.08, 0.035, 0.08, 0.14);
+        box(this.gun, gunMat, 0, -0.06, 0.02, 0.03, 0.1, 0.04);
+        box(this.gun, gunMat, 0, 0.05, -0.22, 0.02, 0.03, 0.08);
       }
       this.rig.add(this.gun);
     } else {
@@ -168,7 +172,8 @@ export class HumanoidBody {
     }
     const muzzleMat = new THREE.MeshBasicMaterial({ color: 0xffdd55 });
     this.mats.push(muzzleMat);
-    this.muzzle = new THREE.Mesh(this.geo(new THREE.BoxGeometry(0.08, 0.08, 0.08)), muzzleMat);
+    this.muzzle = new THREE.Mesh(cube, muzzleMat);
+    this.muzzle.scale.set(0.08, 0.08, 0.08);
     this.muzzle.visible = false;
     this.muzzle.position.set(0, 0.02, this.hasShield ? -0.17 : -0.36);
     this.gun?.add(this.muzzle);
@@ -182,11 +187,11 @@ export class HumanoidBody {
       // 腰〜顔の下まで（上半身を守る）。窓付きの防弾盾
       const top = 1.6;
       const bottom = 0.75;
-      this.part(this.geo(new THREE.BoxGeometry(0.5, top - bottom, 0.045)), plate, g, 0, (top + bottom) / 2, 0);
-      this.part(this.geo(new THREE.BoxGeometry(0.54, 0.04, 0.06)), edge, g, 0, top, 0);
-      this.part(this.geo(new THREE.BoxGeometry(0.54, 0.04, 0.06)), edge, g, 0, bottom, 0);
-      for (const sx of [-1, 1]) this.part(this.geo(new THREE.BoxGeometry(0.04, top - bottom, 0.06)), edge, g, sx * 0.25, (top + bottom) / 2, 0);
-      this.part(this.geo(new THREE.BoxGeometry(0.32, 0.1, 0.05)), glass, g, 0, 1.46, 0.004);
+      box(g, plate, 0, (top + bottom) / 2, 0, 0.5, top - bottom, 0.045);
+      box(g, edge, 0, top, 0, 0.54, 0.04, 0.06);
+      box(g, edge, 0, bottom, 0, 0.54, 0.04, 0.06);
+      for (const sx of [-1, 1]) box(g, edge, sx * 0.25, (top + bottom) / 2, 0, 0.04, top - bottom, 0.06);
+      box(g, glass, 0, 1.46, 0.004, 0.32, 0.1, 0.05);
       g.position.set(0, 0, -0.5);
       this.rig.add(g);
       this.shieldMesh = g;
@@ -201,9 +206,9 @@ export class HumanoidBody {
     }
     const cuffMat = this.makeMat(tex, 'metal', 0xd0d6dc, 0.3);
     for (const side of [-1, 1]) {
-      this.part(this.geo(new THREE.BoxGeometry(0.055, 0.045, 0.065)), cuffMat, this.cuffs, side * 0.055, 0, 0);
+      box(this.cuffs, cuffMat, side * 0.055, 0, 0, 0.055, 0.045, 0.065);
     }
-    this.part(this.geo(new THREE.BoxGeometry(0.06, 0.02, 0.025)), cuffMat, this.cuffs, 0, 0, 0.01);
+    box(this.cuffs, cuffMat, 0, 0, 0.01, 0.06, 0.02, 0.025);
     this.cuffs.position.set(0, 0.94 - WAIST_Y, 0.18);
     this.cuffs.visible = false;
     this.torso.add(this.cuffs);
@@ -212,19 +217,22 @@ export class HumanoidBody {
     this.group.position.set(x, this.footY, z);
     this.group.rotation.y = (yawDeg * Math.PI) / 180;
     this.setPose('stand');
-  }
-
-  private geo<T extends THREE.BufferGeometry>(g: T): T {
-    this.geos.push(g);
-    return g;
+    // 全リーフ Mesh のローカル変換は構築後に不変（関節 Group のみ回転・移動する）なので行列再計算を凍結
+    this.group.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        obj.updateMatrix();
+        obj.matrixAutoUpdate = false;
+      }
+    });
   }
 
   private makeMat(tex: TextureLibrary | undefined, name: 'camo' | 'fabric' | 'metal' | 'wood' | 'skin', color: number, roughness: number): THREE.MeshStandardMaterial {
+    const map = tex?.get(name);
     const m = new THREE.MeshStandardMaterial({
       color,
       roughness,
       metalness: name === 'metal' ? 0.45 : 0.02,
-      ...(tex ? { map: tex.get(name) } : {}),
+      ...(map ? { map } : {}),
     });
     this.mats.push(m);
     return m;
@@ -345,7 +353,8 @@ export class HumanoidBody {
       const dz = this.feetReady ? this.z - this.previous.z : 0;
       let largest = 0.035;
       let candidate = -1;
-      for (const [i, leg] of this.legs.entries()) {
+      for (let i = 0; i < this.legs.length; i++) {
+        const leg = this.legs[i]!;
         const lateral = leg.side * 0.104;
         const stagger = leg.side * 0.032 + this.kneeling * (leg.side > 0 ? 0.19 : 0.05);
         this.target.set(this.x + cos*lateral + sin*stagger, this.footY, this.z - sin*lateral + cos*stagger);
@@ -374,7 +383,8 @@ export class HumanoidBody {
         foot.y += Math.sin(Math.PI*this.stepTime) * (0.035 + 0.045*this.stride);
         if (this.stepTime >= 1) this.swing = -1;
       }
-      for (const [i,{ hip, knee, ankle, side }] of this.legs.entries()) {
+      for (let i = 0; i < this.legs.length; i++) {
+        const { hip, knee, ankle, side } = this.legs[i]!;
         const foot = this.feet[i]!;
         // 骨盤の体重移動に合わせて股関節も一緒に横移動し、脚の 2 リンク IK が地面へ自然に接続する
         hip.position.x = side * 0.096 + hipShift;
@@ -384,7 +394,6 @@ export class HumanoidBody {
         const staggerDrop = this.pose === 'kneel' ? side * 0.07 * Math.sin(Math.PI*this.kneeling) : 0;
         hip.position.y = WAIST_Y + staggerDrop;
         const y = pelvisY + staggerDrop - (foot.y-this.footY+0.061);
-        hip.rotation.order = 'ZXY';
         hip.rotation.z = Math.atan2(lateral,y);
         const vertical = Math.hypot(y,lateral);
         // Two-link IK keeps the supporting boot on the floor while the hips descend.
@@ -456,34 +465,55 @@ export class HumanoidBody {
     if (this.pose !== 'down') this.cloth.color.setHex(hex);
   }
 
+  private readonly droppedPosTmp = new THREE.Vector3();
+
   getDroppedWeaponPos(): { x: number; y: number; z: number } | null {
     if (!this.gun || !this.gun.visible || this.pose === 'stand' || this.pose === 'crouch') return null;
-    const v = new THREE.Vector3();
-    this.gun.getWorldPosition(v);
-    return { x: v.x, y: v.y, z: v.z };
+    this.gun.getWorldPosition(this.droppedPosTmp);
+    return { x: this.droppedPosTmp.x, y: this.droppedPosTmp.y, z: this.droppedPosTmp.z };
   }
 
-  getAABB(): AABB {
+  getAABB(out?: AABB): AABB {
     const hw = BODY_W / 2;
     const hd = BODY_D / 2;
     const top = this.footY + (this.pose === 'down' ? 0.45 : this.height);
+    if (out) {
+      out.min.x = this.x - hw;
+      out.min.y = this.footY;
+      out.min.z = this.z - hd;
+      out.max.x = this.x + hw;
+      out.max.y = top;
+      out.max.z = this.z + hd;
+      return out;
+    }
     return {
       min: { x: this.x - hw, y: this.footY, z: this.z - hd },
       max: { x: this.x + hw, y: top, z: this.z + hd },
     };
   }
 
-  chestPos(): { x: number; y: number; z: number } {
+  chestPos(out?: Vec3): { x: number; y: number; z: number } {
+    const cy = this.footY + Math.min(this.height * 0.72, 1.25);
     const off = this.leanCurrent * LEAN_HIP_SHIFT + 0.31 * Math.sin(this.leanCurrent * MAX_LEAN_ROLL_RAD);
     if (Math.abs(off) < 1e-4) {
-      return { x: this.x, y: this.footY + Math.min(this.height * 0.72, 1.25), z: this.z };
+      if (out) {
+        out.x = this.x;
+        out.y = cy;
+        out.z = this.z;
+        return out;
+      }
+      return { x: this.x, y: cy, z: this.z };
     }
     const yaw = this.group.rotation.y;
-    return {
-      x: this.x + Math.cos(yaw) * off,
-      y: this.footY + Math.min(this.height * 0.72, 1.25),
-      z: this.z - Math.sin(yaw) * off,
-    };
+    const cx = this.x + Math.cos(yaw) * off;
+    const cz = this.z - Math.sin(yaw) * off;
+    if (out) {
+      out.x = cx;
+      out.y = cy;
+      out.z = cz;
+      return out;
+    }
+    return { x: cx, y: cy, z: cz };
   }
 
   get yawRad(): number {
@@ -493,9 +523,6 @@ export class HumanoidBody {
   gaze(out: THREE.Vector3): THREE.Vector3 {
     return this.headPivot.getWorldDirection(out).negate();
   }
-
-  private readonly muzzleOriginTmp = new THREE.Vector3();
-  private readonly muzzleDirTmp = new THREE.Vector3();
 
   eye(out: THREE.Vector3): THREE.Vector3 {
     return this.headPivot.localToWorld(out.set(0,0.125,-0.1));
@@ -517,17 +544,18 @@ export class HumanoidBody {
       return false;
     }
     this.muzzle.updateWorldMatrix(true, false);
-    this.muzzle.getWorldPosition(this.muzzleOriginTmp);
-    this.muzzle.getWorldDirection(this.muzzleDirTmp).negate();
-    const len = this.muzzleDirTmp.length();
+    const e = this.muzzle.matrixWorld.elements;
+    const dx = -e[8]!;
+    const dy = -e[9]!;
+    const dz = -e[10]!;
+    const len = Math.hypot(dx, dy, dz);
     if (len < 1e-6) return false;
-    this.muzzleDirTmp.divideScalar(len);
-    outOrigin.x = this.muzzleOriginTmp.x;
-    outOrigin.y = this.muzzleOriginTmp.y;
-    outOrigin.z = this.muzzleOriginTmp.z;
-    outDir.x = this.muzzleDirTmp.x;
-    outDir.y = this.muzzleDirTmp.y;
-    outDir.z = this.muzzleDirTmp.z;
+    outOrigin.x = e[12]!;
+    outOrigin.y = e[13]!;
+    outOrigin.z = e[14]!;
+    outDir.x = dx / len;
+    outDir.y = dy / len;
+    outDir.z = dz / len;
     return true;
   }
 

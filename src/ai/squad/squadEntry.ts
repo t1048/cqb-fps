@@ -4,7 +4,8 @@ import { t } from '../../core/i18n';
 import type { RoomDef, SquadOrder, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
-import { pathSegmentClear, squadRoute } from '../SquadRoute';
+import type { Collider } from '../../world/WorldBuilder';
+import { pathSegmentClear } from '../SquadRoute';
 import { blockedAt, type XZ } from '../EngageBehavior';
 import { layoutStackSlots, type StackSlot } from '../stackSlots';
 import {
@@ -57,13 +58,18 @@ import {
   STACK_STALL_WAIT,
   STEALTH_ENTRY_SPEED_MUL,
   STEALTH_PEEK_HOLD_SEC,
-  flashDoorSamples,
   type AllyUnit,
   type EntryPortal,
   type SquadContext,
   type TacticalPhase,
 } from './squadTypes';
 import { holdLook, isStandable, navigateTo, passableUnlockedDoors } from './squadMovement';
+
+const C2_FIREBALL_GEO = new THREE.SphereGeometry(1, 10, 8);
+C2_FIREBALL_GEO.userData.shared = true;
+const planPassableScratch = new Set<Collider>();
+const domPassableScratch = new Set<Collider>();
+const throwEyeTmp = new THREE.Vector3();
 
 export function assignPortalGroup(
   ctx: SquadContext,
@@ -207,14 +213,12 @@ export function planPortalEntry(
   slots: readonly StackSlot[],
 ): EntryPlan[] {
   const y = portal.sillY;
-  const passable = passableUnlockedDoors(ctx);
-  const r = ctx.cfg.bodyRadius;
   const fallbackPods = computeDominationPoints(ctx, portal, room, slots.length).map((p) => ({ x: p.pos.x, y, z: p.pos.z }));
+  const passable = passableUnlockedDoors(ctx, undefined, null, planPassableScratch);
+  const r = ctx.cfg.bodyRadius;
   return planEntry(cqbPortalFromStackSlotPortal(portal, y), cqbRoomFromRoomDef(room), slots, {
     isStandable: (p) => isStandable(ctx, p.x, p.z, y),
-    reachable: (a, b) =>
-      pathSegmentClear(ctx.colliders, a, b, r, y, passable) ||
-      squadRoute(a, b, y, ctx.colliders, ctx.bounds, r, passable).length > 0,
+    reachable: (a, b) => pathSegmentClear(ctx.colliders, a, b, r, y, passable),
     fallbackPods,
   });
 }
@@ -391,7 +395,7 @@ export function computeDominationPoints(
   const latX = portal.axisX;
   const latZ = portal.axisZ;
   const thresh: XZ = { x: portal.centerX + intoX * 0.65, z: portal.centerZ + intoZ * 0.65 };
-  const passable = passableUnlockedDoors(ctx);
+  const passable = passableUnlockedDoors(ctx, undefined, null, domPassableScratch);
 
   const chosen: XZ[] = [];
   const CORNER_PAIRS: [number, number][] = [
@@ -421,10 +425,7 @@ export function computeDominationPoints(
         continue;
       }
       if (!isStandable(ctx, px, pz, portal.sillY)) continue;
-      if (
-        pathSegmentClear(ctx.colliders, thresh, { x: px, z: pz }, ctx.cfg.bodyRadius, portal.sillY, passable) ||
-        squadRoute(thresh, { x: px, z: pz }, portal.sillY, ctx.colliders, ctx.bounds, ctx.cfg.bodyRadius, passable).length > 0
-      ) {
+      if (pathSegmentClear(ctx.colliders, thresh, { x: px, z: pz }, ctx.cfg.bodyRadius, portal.sillY, passable)) {
         chosen.push({ x: px, z: pz });
         return {
           pos: { x: px, z: pz },
@@ -520,7 +521,7 @@ export function throwFlashbangIntoRoom(ctx: SquadContext, thrower: AllyUnit, por
     const plan = planFlashThrow(
       origin,
       target,
-      flashDoorSamples(ctx),
+      ctx.doors.doors,
       ctx.windows,
       ctx.colliders,
       ctx.flashbang.gravity,
@@ -556,9 +557,9 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
   if (!ctx.tearGas) return;
   const intoX = portal.intoX;
   const intoZ = portal.intoZ;
-  const start = thrower.body.eye(new THREE.Vector3());
-  start.x += intoX * 0.25;
-  start.z += intoZ * 0.25;
+  const start = thrower.body.eye(throwEyeTmp);
+  const sx = start.x + intoX * 0.25;
+  const sz = start.z + intoZ * 0.25;
 
   let landX = portal.centerX + intoX * 1.8;
   let landZ = portal.centerZ + intoZ * 1.8;
@@ -575,12 +576,12 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
       break;
     }
   }
-  const origin: Vec3 = { x: start.x, y: start.y, z: start.z };
+  const origin: Vec3 = { x: sx, y: start.y, z: sz };
   const target: Vec3 = { x: landX, y: portal.sillY + 0.08, z: landZ };
   const plan = planFlashThrow(
     origin,
     target,
-    flashDoorSamples(ctx),
+    ctx.doors.doors,
     ctx.windows,
     ctx.colliders,
     ctx.tearGas.gravity,
@@ -595,7 +596,7 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
 }
 
 export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos: Vec3): boolean {
-  if (!ctx.flashbang || ctx.flashesLeft <= 0 || ctx.flashCd > 0) return false;
+  if (!ctx.flashbang || ctx.flashesLeft <= 0 || ctx.flashCd > 0 || ally.flashRetryCd > 0) return false;
   for (const s of ctx.entities.suspects.values()) {
     if (
       s.alive &&
@@ -605,19 +606,22 @@ export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos:
       return false;
     }
   }
-  const eye = ally.body.eye(new THREE.Vector3());
+  const eye = ally.body.eye(throwEyeTmp);
   const origin: Vec3 = { x: eye.x, y: eye.y, z: eye.z };
   const plan = planFlashThrow(
     origin,
     targetPos,
-    flashDoorSamples(ctx),
+    ctx.doors.doors,
     ctx.windows,
     ctx.colliders,
     ctx.flashbang.gravity,
     SWAT_FLASH_MIN_DIST,
     SWAT_FLASH_MAX_DIST,
   );
-  if (!plan) return false;
+  if (!plan) {
+    ally.flashRetryCd = 0.35;
+    return false;
+  }
   ctx.flashbang.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
   ctx.flashesLeft--;
   ctx.flashCd = FLASH_TEAM_COOLDOWN;
@@ -626,16 +630,18 @@ export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos:
 }
 
 export function tryAutonomousGas(ctx: SquadContext): void {
-  if (!ctx.tearGas || ctx.gasLeft <= 0 || ctx.gasCd > 0) return;
+  if (!ctx.tearGas || ctx.gasLeft <= 0 || ctx.gasCd > 0 || ctx.gasRetryCd > 0) return;
+  let attempted = false;
   for (const ally of ctx.allies) {
     if (ally.down || ally.blindLeft > 0 || ally.sees) continue;
     if (!ally.known || ally.lostSec < 2.2) continue;
-    const eye = ally.body.eye(new THREE.Vector3());
+    attempted = true;
+    const eye = ally.body.eye(throwEyeTmp);
     const origin: Vec3 = { x: eye.x, y: eye.y, z: eye.z };
     const plan = planFlashThrow(
       origin,
       ally.known,
-      flashDoorSamples(ctx),
+      ctx.doors.doors,
       ctx.windows,
       ctx.colliders,
       ctx.tearGas.gravity,
@@ -648,6 +654,9 @@ export function tryAutonomousGas(ctx: SquadContext): void {
     ctx.gasCd = GAS_TEAM_COOLDOWN;
     ctx.emitRadio(ally, '催涙ガスで炙り出す！', 'Deploying tear gas to flush them out!');
     return;
+  }
+  if (attempted) {
+    ctx.gasRetryCd = 0.5;
   }
 }
 
@@ -700,15 +709,15 @@ export function detonateC2(ctx: SquadContext, lead: AllyUnit, portal: EntryPorta
     source: 'ally',
   });
 
-  // 動的ライトは一切使わず、MeshBasicMaterial の火球メッシュのみで爆破 VFX を描画
-  const fireGeo = new THREE.SphereGeometry(0.45, 10, 8);
+  // 動的ライトは一切使わず、共有単位球ジオメトリ＋MeshBasicMaterial の火球メッシュのみで爆破 VFX を描画
   const fireMat = new THREE.MeshBasicMaterial({
     color: 0xffaa44,
     transparent: true,
     opacity: 0.85,
     depthWrite: false,
   });
-  const fireMesh = new THREE.Mesh(fireGeo, fireMat);
+  const fireMesh = new THREE.Mesh(C2_FIREBALL_GEO, fireMat);
+  fireMesh.scale.setScalar(0.45);
   fireMesh.position.set(
     doorCenter.x + blastDir.x * 0.45,
     doorCenter.y,
@@ -744,7 +753,7 @@ export function updateC2Blasts(ctx: SquadContext, dt: number): void {
     const b = ctx.c2Blasts[i]!;
     b.t += dt;
     if (b.t < 0.45) {
-      const s = 1 + b.t * 5.2;
+      const s = 0.45 * (1 + b.t * 5.2);
       b.mesh.scale.setScalar(s);
       (b.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.85 * (1 - b.t / 0.45));
     } else {
@@ -752,7 +761,6 @@ export function updateC2Blasts(ctx: SquadContext, dt: number): void {
     }
     if (b.t > 0.55) {
       ctx.root.remove(b.mesh);
-      b.mesh.geometry.dispose();
       (b.mesh.material as THREE.Material).dispose();
       ctx.c2Blasts.splice(i, 1);
     }

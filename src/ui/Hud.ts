@@ -78,6 +78,117 @@ interface RadioEntry {
   ttl: number;
 }
 
+interface RosterRowRefs {
+  row: HTMLDivElement;
+  name: HTMLSpanElement;
+  fill: HTMLDivElement;
+  stat: HTMLSpanElement;
+  lastCls: string;
+  lastName: string;
+  lastPct: number;
+  lastColor: string;
+  lastStat: string;
+}
+
+interface ObjectiveRowRefs {
+  row: HTMLDivElement;
+  mark: HTMLSpanElement;
+  name: HTMLSpanElement;
+  val: HTMLSpanElement;
+  tag: HTMLSpanElement;
+  visible: boolean;
+  lastCls: string;
+  lastMark: string;
+  lastName: string;
+  lastVal: string;
+  lastTag: string;
+  lastTagCls: string;
+}
+
+function createObjectiveRow(parent: HTMLElement): ObjectiveRowRefs {
+  const row = document.createElement('div');
+  row.className = 'obj-row';
+  const left = document.createElement('span');
+  left.className = 'obj-lbl';
+  const mark = document.createElement('span');
+  mark.className = 'obj-mark';
+  const name = document.createElement('span');
+  left.append(mark, name);
+
+  const right = document.createElement('span');
+  right.className = 'obj-val';
+  const val = document.createElement('span');
+  const tag = document.createElement('span');
+  tag.className = 'obj-tag';
+  tag.style.display = 'none';
+  right.append(val, tag);
+
+  row.append(left, right);
+  parent.appendChild(row);
+  return {
+    row,
+    mark,
+    name,
+    val,
+    tag,
+    visible: true,
+    lastCls: 'obj-row',
+    lastMark: '',
+    lastName: '',
+    lastVal: '',
+    lastTag: '',
+    lastTagCls: 'obj-tag',
+  };
+}
+
+function syncObjectiveRow(
+  ref: ObjectiveRowRefs,
+  visible: boolean,
+  label: string,
+  valText: string,
+  done: boolean,
+  tagText = '',
+  tagRed = false,
+): void {
+  if (visible !== ref.visible) {
+    ref.visible = visible;
+    ref.row.style.display = visible ? '' : 'none';
+  }
+  if (!visible) return;
+  const cls = done ? 'obj-row done' : 'obj-row';
+  if (cls !== ref.lastCls) {
+    ref.lastCls = cls;
+    ref.row.className = cls;
+  }
+  const mark = done ? '✓' : '□';
+  if (mark !== ref.lastMark) {
+    ref.lastMark = mark;
+    ref.mark.textContent = mark;
+  }
+  if (label !== ref.lastName) {
+    ref.lastName = label;
+    ref.name.textContent = label;
+  }
+  if (valText !== ref.lastVal) {
+    ref.lastVal = valText;
+    ref.val.textContent = valText;
+  }
+  if (tagText !== ref.lastTag) {
+    if ((tagText.length > 0) !== (ref.lastTag.length > 0)) {
+      ref.tag.style.display = tagText ? '' : 'none';
+    }
+    ref.lastTag = tagText;
+    if (tagText) ref.tag.textContent = tagText;
+  }
+  if (tagText) {
+    const tagCls = tagRed ? 'obj-tag red' : 'obj-tag';
+    if (tagCls !== ref.lastTagCls) {
+      ref.lastTagCls = tagCls;
+      ref.tag.className = tagCls;
+    }
+  }
+}
+
 /**
  * 戦術HUD: 動的照準（移動・射撃時拡散表現付）、右上任務タスク＋スコア、プレイヤーHP・姿勢、
  * 隊員ロスター＆HP・指示状況、被弾方向インジケーター＆ビネット、隊員無線ログ、統一ミッション進行バナー。
@@ -91,12 +202,17 @@ export class Hud {
   private readonly dmgVigEl = document.createElement('div');
   private readonly dmgDirEl = document.createElement('div');
   private readonly ammoEl = document.createElement('div');
+  private readonly ammoValEl = document.createElement('span');
+  private readonly ammoNameEl = document.createElement('small');
   private readonly objPanelEl = document.createElement('div');
   private readonly objTitleEl = document.createElement('span');
   private readonly objBadgeEl = document.createElement('span');
   private readonly objNowEl = document.createElement('div');
   private readonly objListEl = document.createElement('div');
   private readonly objSubHintEl = document.createElement('div');
+  private readonly objSuspectRow: ObjectiveRowRefs;
+  private readonly objCivilianRow: ObjectiveRowRefs;
+  private readonly objEvidenceRow: ObjectiveRowRefs;
   private readonly hpTextEl = document.createElement('span');
   private readonly hpFillEl = document.createElement('div');
   private readonly stanceEl = document.createElement('span');
@@ -106,6 +222,7 @@ export class Hud {
   private readonly rosterElLabel = document.createElement('span');
   private readonly rosterListEl = document.createElement('div');
   private readonly rosterLookEl = document.createElement('div');
+  private readonly rosterRows: RosterRowRefs[] = [];
   private readonly motifChipEl: HTMLDivElement | null = null;
   private readonly motifInfo?: { id?: string; label: string; color: string };
   private readonly radioEl = document.createElement('div');
@@ -129,7 +246,22 @@ export class Hud {
   private lastInteractKey = '';
   private lastMissionKey = '';
   private lastObjectivesKey = '';
-  private lastRosterKey = '';
+  private lastObjVisible = false;
+  private lastObjBadge = '';
+  private lastObjBadgeBg = '';
+  private lastObjBadgeFg = '';
+  private lastObjNow = '';
+  private lastObjNowColor = '';
+  private lastObjSubHint = '';
+  private lastRosterVisible: boolean | null = null;
+  private lastEntryMode = '';
+  private lastElementLabel = '';
+  private lastLookText = '';
+  private lastLeanL = false;
+  private lastLeanR = false;
+  private lastHitOpacity = 0;
+  private dmgActive = false;
+  private lastPromptVisible: boolean | null = null;
   private lastGap = -1;
   private paused = false;
   private disposed = false;
@@ -163,6 +295,7 @@ export class Hud {
     this.dmgVigEl.className = 'dmg-vig';
     this.dmgDirEl.className = 'dmg-dir';
     this.ammoEl.className = 'panel ammo';
+    this.ammoEl.append(this.ammoValEl, this.ammoNameEl);
 
     const bottomLeft = document.createElement('div');
     bottomLeft.className = 'bottom-left';
@@ -174,6 +307,7 @@ export class Hud {
     rBadges.className = 'roster-badges';
     this.rosterModeEl.className = 'roster-mode dynamic';
     this.rosterModeEl.textContent = '[Tab] DYNAMIC';
+    this.lastEntryMode = 'dynamic';
     this.rosterElLabel.className = 'roster-el';
     rBadges.append(this.rosterModeEl, this.rosterElLabel);
     rHead.append(this.rosterTitleEl, rBadges);
@@ -210,6 +344,9 @@ export class Hud {
     oHead.append(this.objTitleEl, this.objBadgeEl);
     this.objNowEl.className = 'obj-now';
     this.objListEl.className = 'obj-list';
+    this.objSuspectRow = createObjectiveRow(this.objListEl);
+    this.objCivilianRow = createObjectiveRow(this.objListEl);
+    this.objEvidenceRow = createObjectiveRow(this.objListEl);
     this.objSubHintEl.className = 'obj-subhint';
     this.objSubHintEl.style.display = 'none';
     this.objPanelEl.append(oHead, this.objNowEl, this.objListEl, this.objSubHintEl);
@@ -295,7 +432,10 @@ export class Hud {
 
   setPaused(paused: boolean): void {
     this.paused = paused;
-    if (paused) this.promptEl.style.display = 'none';
+    if (paused && this.lastPromptVisible !== false) {
+      this.lastPromptVisible = false;
+      this.promptEl.style.display = 'none';
+    }
   }
 
   refreshLocale(): void {
@@ -305,8 +445,40 @@ export class Hud {
     this.lastHp = -1;
     this.lastMissionKey = '';
     this.lastObjectivesKey = '';
-    this.lastRosterKey = '';
+    this.lastElementLabel = '';
+    this.lastLookText = '';
     this.update(0);
+  }
+
+  private ensureRosterRow(idx: number): RosterRowRefs {
+    let ref = this.rosterRows[idx];
+    if (ref) return ref;
+    const row = document.createElement('div');
+    row.className = 'ally-row';
+    const name = document.createElement('span');
+    name.className = 'ally-name';
+    const bar = document.createElement('div');
+    bar.className = 'ally-hp';
+    const fill = document.createElement('div');
+    fill.className = 'ally-hp-fill';
+    bar.appendChild(fill);
+    const stat = document.createElement('span');
+    stat.className = 'ally-stat';
+    row.append(name, bar, stat);
+    this.rosterListEl.appendChild(row);
+    ref = {
+      row,
+      name,
+      fill,
+      stat,
+      lastCls: 'ally-row',
+      lastName: '',
+      lastPct: -1,
+      lastColor: '',
+      lastStat: '',
+    };
+    this.rosterRows.push(ref);
+    return ref;
   }
 
   update(rawDt: number): void {
@@ -352,11 +524,8 @@ export class Hud {
     if (ammoText !== this.lastAmmoText) {
       this.lastAmmoText = ammoText;
       const [name, val] = ammoText.split('|');
-      this.ammoEl.textContent = '';
-      this.ammoEl.append(val ?? '');
-      const small = document.createElement('small');
-      small.textContent = name ?? '';
-      this.ammoEl.appendChild(small);
+      this.ammoValEl.textContent = val ?? '';
+      this.ammoNameEl.textContent = name ?? '';
     }
 
     // プレイヤーHP & 姿勢
@@ -377,56 +546,69 @@ export class Hud {
       this.stanceEl.textContent = statusText;
     }
 
-    // 分隊ロスター
+    // 分隊ロスター（永続 DOM 行をインプレース更新）
     if (this.squad) {
       const roster = this.squad.getRoster();
-      const lookText = this.squad.hudText();
-      const entryMode = this.squad.getEntryMode();
-      const key =
-        getLocale() +
-        '|' +
-        this.squad.elementLabel +
-        '|' +
-        entryMode +
-        '|' +
-        lookText +
-        '|' +
-        roster.map((r) => `${r.id}:${r.hp}:${r.down}:${r.selected}:${r.orderLabel}:${r.statusText}`).join(';');
-      if (key !== this.lastRosterKey) {
-        this.lastRosterKey = key;
-        this.rosterModeEl.textContent = entryMode === 'stealth' ? '[Tab] STEALTH' : '[Tab] DYNAMIC';
-        this.rosterModeEl.className = `roster-mode ${entryMode}`;
-        this.rosterElLabel.textContent = `[T] ${this.squad.elementLabel}`;
-        this.rosterListEl.textContent = '';
-        for (const r of roster) {
-          const row = document.createElement('div');
-          row.className = 'ally-row' + (r.selected ? ' selected' : '') + (r.down ? ' down' : '');
-          const name = document.createElement('span');
-          name.className = 'ally-name';
-          name.textContent = `${r.callsign} ${r.name}`;
-          const bar = document.createElement('div');
-          bar.className = 'ally-hp';
-          const fill = document.createElement('div');
-          fill.className = 'ally-hp-fill';
-          const pct = Math.max(0, Math.min(100, (r.hp / Math.max(1, r.maxHp)) * 100));
-          fill.style.width = `${pct}%`;
-          fill.style.background = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
-          bar.appendChild(fill);
-          const stat = document.createElement('span');
-          stat.className = 'ally-stat';
-          stat.textContent = `${r.orderLabel} · ${r.statusText}`;
-          row.append(name, bar, stat);
-          this.rosterListEl.appendChild(row);
+      const showRoster = roster.length > 0;
+      if (showRoster !== this.lastRosterVisible) {
+        this.lastRosterVisible = showRoster;
+        this.rosterEl.style.display = showRoster ? 'block' : 'none';
+      }
+      if (showRoster) {
+        const entryMode = this.squad.getEntryMode();
+        if (entryMode !== this.lastEntryMode) {
+          this.lastEntryMode = entryMode;
+          this.rosterModeEl.textContent = entryMode === 'stealth' ? '[Tab] STEALTH' : '[Tab] DYNAMIC';
+          this.rosterModeEl.className = `roster-mode ${entryMode}`;
         }
-        if (lookText) {
-          this.rosterLookEl.textContent = lookText;
-          this.rosterLookEl.style.display = 'block';
-        } else {
-          this.rosterLookEl.style.display = 'none';
+        const elLbl = `[T] ${this.squad.elementLabel}`;
+        if (elLbl !== this.lastElementLabel) {
+          this.lastElementLabel = elLbl;
+          this.rosterElLabel.textContent = elLbl;
+        }
+        while (this.rosterRows.length > roster.length) {
+          this.rosterRows.pop()?.row.remove();
+        }
+        for (let i = 0; i < roster.length; i++) {
+          const r = roster[i]!;
+          const ref = this.ensureRosterRow(i);
+          const cls = 'ally-row' + (r.selected ? ' selected' : '') + (r.down ? ' down' : '');
+          if (cls !== ref.lastCls) {
+            ref.lastCls = cls;
+            ref.row.className = cls;
+          }
+          const nameText = `${r.callsign} ${r.name}`;
+          if (nameText !== ref.lastName) {
+            ref.lastName = nameText;
+            ref.name.textContent = nameText;
+          }
+          const pct = Math.round(Math.max(0, Math.min(100, (r.hp / Math.max(1, r.maxHp)) * 100)));
+          if (pct !== ref.lastPct) {
+            ref.lastPct = pct;
+            ref.fill.style.width = `${pct}%`;
+            const color = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
+            if (color !== ref.lastColor) {
+              ref.lastColor = color;
+              ref.fill.style.background = color;
+            }
+          }
+          const statText = `${r.orderLabel} · ${r.statusText}`;
+          if (statText !== ref.lastStat) {
+            ref.lastStat = statText;
+            ref.stat.textContent = statText;
+          }
+        }
+        const lookText = this.squad.hudText();
+        if (lookText !== this.lastLookText) {
+          if ((lookText.length > 0) !== (this.lastLookText.length > 0)) {
+            this.rosterLookEl.style.display = lookText ? 'block' : 'none';
+          }
+          this.lastLookText = lookText;
+          if (lookText) this.rosterLookEl.textContent = lookText;
         }
       }
-      this.rosterEl.style.display = roster.length > 0 ? 'block' : 'none';
-    } else {
+    } else if (this.lastRosterVisible !== false) {
+      this.lastRosterVisible = false;
       this.rosterEl.style.display = 'none';
     }
 
@@ -443,32 +625,57 @@ export class Hud {
 
     // リーン
     const lean = this.player.leanAmount;
-    this.leanL.style.visibility = lean < -LEAN_DISPLAY_THRESHOLD ? 'visible' : 'hidden';
-    this.leanR.style.visibility = lean > LEAN_DISPLAY_THRESHOLD ? 'visible' : 'hidden';
+    const showLeanL = lean < -LEAN_DISPLAY_THRESHOLD;
+    if (showLeanL !== this.lastLeanL) {
+      this.lastLeanL = showLeanL;
+      this.leanL.style.visibility = showLeanL ? 'visible' : 'hidden';
+    }
+    const showLeanR = lean > LEAN_DISPLAY_THRESHOLD;
+    if (showLeanR !== this.lastLeanR) {
+      this.lastLeanR = showLeanR;
+      this.leanR.style.visibility = showLeanR ? 'visible' : 'hidden';
+    }
 
     // ヒットマーカー
-    this.hitTimer = Math.max(0, this.hitTimer - dt);
-    this.hitEl.style.opacity = String(this.hitTimer / HIT_MARKER_SEC);
+    if (this.hitTimer > 0 || this.lastHitOpacity !== 0) {
+      this.hitTimer = Math.max(0, this.hitTimer - dt);
+      const hitOp = this.hitTimer / HIT_MARKER_SEC;
+      if (hitOp !== this.lastHitOpacity) {
+        this.lastHitOpacity = hitOp;
+        this.hitEl.style.opacity = String(hitOp);
+      }
+    }
 
     // 被弾ビネット＆方向インジケーター
     if (this.dmgTimer > 0) {
+      this.dmgActive = true;
       this.dmgTimer = Math.max(0, this.dmgTimer - dt);
-      const a = this.dmgTimer / DAMAGE_FLASH_SEC;
-      this.dmgVigEl.style.opacity = String(a);
+      const a = String(this.dmgTimer / DAMAGE_FLASH_SEC);
+      this.dmgVigEl.style.opacity = a;
       if (this.dmgFrom) {
         const dx = this.dmgFrom.x - this.player.position.x;
         const dz = this.dmgFrom.z - this.player.position.z;
         const worldAngle = Math.atan2(dx, dz);
         const rel = -(worldAngle + this.player.yawRad) + Math.PI;
-        this.dmgDirEl.style.opacity = String(a);
+        this.dmgDirEl.style.opacity = a;
         this.dmgDirEl.style.transform = `rotate(${rel}rad)`;
       }
-    } else {
+      if (this.dmgTimer <= 0) {
+        this.dmgActive = false;
+        this.dmgVigEl.style.opacity = '0';
+        this.dmgDirEl.style.opacity = '0';
+      }
+    } else if (this.dmgActive) {
+      this.dmgActive = false;
       this.dmgVigEl.style.opacity = '0';
       this.dmgDirEl.style.opacity = '0';
     }
 
-    this.promptEl.style.display = this.paused || this.input.isPointerLocked || !this.player.alive ? 'none' : 'block';
+    const showPrompt = !(this.paused || this.input.isPointerLocked || !this.player.alive);
+    if (showPrompt !== this.lastPromptVisible) {
+      this.lastPromptVisible = showPrompt;
+      this.promptEl.style.display = showPrompt ? 'block' : 'none';
+    }
 
     // インタラクト対象プロンプト
     const target =
@@ -551,11 +758,22 @@ export class Hud {
   private updateObjectives(): void {
     const st = this.mission?.status;
     if (!st || st.totalSuspects === 0 || st.phase === 'ended') {
-      if (this.lastObjectivesKey !== 'hidden') {
+      if (this.lastObjVisible) {
+        this.lastObjVisible = false;
         this.lastObjectivesKey = 'hidden';
         this.objPanelEl.style.display = 'none';
       }
       return;
+    }
+
+    const countdownStr = st.phase === 'completing' ? st.countdownSec.toFixed(1) : '';
+    const key = `${getLocale()}|${st.phase}|${st.neutralizedSuspects}|${st.totalSuspects}|${st.surrenderedSuspects}|${st.activeSuspects}|${st.securedCivilians}|${st.totalCivilians}|${st.deadCivilians}|${st.collectedEvidence}|${st.totalEvidence}|${st.droppedEvidence}|${countdownStr}`;
+    if (key === this.lastObjectivesKey) return;
+    this.lastObjectivesKey = key;
+
+    if (!this.lastObjVisible) {
+      this.lastObjVisible = true;
+      this.objPanelEl.style.display = 'block';
     }
 
     let badge = t('交戦・制圧中', 'IN PROGRESS');
@@ -575,8 +793,8 @@ export class Hud {
       badgeBg = 'rgba(92,214,125,.2)';
       badgeFg = '#b9ffd0';
       nowText = t(
-        `✓ 全目標完了 — 本部へ報告中 (${st.countdownSec.toFixed(1)}s)`,
-        `✓ All Objectives Complete — Reporting (${st.countdownSec.toFixed(1)}s)`,
+        `✓ 全目標完了 — 本部へ報告中 (${countdownStr}s)`,
+        `✓ All Objectives Complete — Reporting (${countdownStr}s)`,
       );
       nowColor = '#5cd67d';
     } else if (st.activeSuspects > 0) {
@@ -615,94 +833,67 @@ export class Hud {
       nowColor = '#56c8d8';
     }
 
+    if (badge !== this.lastObjBadge) {
+      this.lastObjBadge = badge;
+      this.objBadgeEl.textContent = badge;
+    }
+    if (badgeBg !== this.lastObjBadgeBg) {
+      this.lastObjBadgeBg = badgeBg;
+      this.objBadgeEl.style.background = badgeBg;
+    }
+    if (badgeFg !== this.lastObjBadgeFg) {
+      this.lastObjBadgeFg = badgeFg;
+      this.objBadgeEl.style.color = badgeFg;
+    }
+    if (nowText !== this.lastObjNow) {
+      this.lastObjNow = nowText;
+      this.objNowEl.textContent = nowText;
+    }
+    if (nowColor !== this.lastObjNowColor) {
+      this.lastObjNowColor = nowColor;
+      this.objNowEl.style.borderLeftColor = nowColor;
+    }
+
+    syncObjectiveRow(
+      this.objSuspectRow,
+      true,
+      t('容疑者制圧', 'Neutralize Suspects'),
+      `${st.neutralizedSuspects} / ${st.totalSuspects}`,
+      st.allSuspectsNeutralized,
+      st.surrenderedSuspects > 0 ? t(`要拘束 ${st.surrenderedSuspects}`, `Cuff ${st.surrenderedSuspects}`) : '',
+    );
+
+    const showCiv = st.totalCivilians > 0 || st.deadCivilians > 0;
+    syncObjectiveRow(
+      this.objCivilianRow,
+      showCiv,
+      t('人質確保', 'Secure Civilians'),
+      `${st.securedCivilians} / ${st.totalCivilians}`,
+      st.remainingCivilians === 0,
+      st.deadCivilians > 0 ? t(`犠牲 ${st.deadCivilians}`, `KIA ${st.deadCivilians}`) : '',
+      true,
+    );
+
+    const evDone = st.activeSuspects === 0 && st.droppedEvidence === 0 && st.totalEvidence > 0;
+    syncObjectiveRow(
+      this.objEvidenceRow,
+      true,
+      t('証拠品押収', 'Collect Evidence'),
+      `${st.collectedEvidence} / ${st.totalEvidence}`,
+      evDone,
+      st.droppedEvidence > 0 ? t(`未回収 ${st.droppedEvidence}`, `Left ${st.droppedEvidence}`) : '',
+    );
+
     const subHint =
       st.phase === 'post_clear'
         ? t('[Enter / Backspace] 現時点で完了報告して終了', '[Enter / Backspace] Report & Finish Now')
         : '';
-    const key = [
-      getLocale(),
-      st.phase,
-      st.neutralizedSuspects,
-      st.totalSuspects,
-      st.surrenderedSuspects,
-      st.activeSuspects,
-      st.securedCivilians,
-      st.totalCivilians,
-      st.deadCivilians,
-      st.collectedEvidence,
-      st.totalEvidence,
-      st.droppedEvidence,
-      st.phase === 'completing' ? st.countdownSec.toFixed(1) : '',
-      subHint,
-    ].join('|');
-
-    if (key === this.lastObjectivesKey) return;
-    this.lastObjectivesKey = key;
-
-    this.objPanelEl.style.display = 'block';
-    this.objBadgeEl.textContent = badge;
-    this.objBadgeEl.style.background = badgeBg;
-    this.objBadgeEl.style.color = badgeFg;
-    this.objNowEl.textContent = nowText;
-    this.objNowEl.style.borderLeftColor = nowColor;
-
-    this.objListEl.textContent = '';
-    const addRow = (label: string, valText: string, done: boolean, tagText?: string, tagRed = false) => {
-      const row = document.createElement('div');
-      row.className = 'obj-row' + (done ? ' done' : '');
-      const left = document.createElement('span');
-      left.className = 'obj-lbl';
-      const mark = document.createElement('span');
-      mark.className = 'obj-mark';
-      mark.textContent = done ? '✓' : '□';
-      const name = document.createElement('span');
-      name.textContent = label;
-      left.append(mark, name);
-
-      const right = document.createElement('span');
-      right.className = 'obj-val';
-      right.textContent = valText;
-      if (tagText) {
-        const tag = document.createElement('span');
-        tag.className = 'obj-tag' + (tagRed ? ' red' : '');
-        tag.textContent = tagText;
-        right.appendChild(tag);
+    if (subHint !== this.lastObjSubHint) {
+      if ((subHint.length > 0) !== (this.lastObjSubHint.length > 0)) {
+        this.objSubHintEl.style.display = subHint ? 'block' : 'none';
       }
-      row.append(left, right);
-      this.objListEl.appendChild(row);
-    };
-
-    const suspectsDone = st.allSuspectsNeutralized;
-    addRow(
-      t('容疑者制圧', 'Neutralize Suspects'),
-      `${st.neutralizedSuspects} / ${st.totalSuspects}`,
-      suspectsDone,
-      st.surrenderedSuspects > 0 ? t(`要拘束 ${st.surrenderedSuspects}`, `Cuff ${st.surrenderedSuspects}`) : undefined,
-    );
-
-    if (st.totalCivilians > 0 || st.deadCivilians > 0) {
-      addRow(
-        t('人質確保', 'Secure Civilians'),
-        `${st.securedCivilians} / ${st.totalCivilians}`,
-        st.remainingCivilians === 0,
-        st.deadCivilians > 0 ? t(`犠牲 ${st.deadCivilians}`, `KIA ${st.deadCivilians}`) : undefined,
-        true,
-      );
-    }
-
-    const evDone = st.activeSuspects === 0 && st.droppedEvidence === 0 && st.totalEvidence > 0;
-    addRow(
-      t('証拠品押収', 'Collect Evidence'),
-      `${st.collectedEvidence} / ${st.totalEvidence}`,
-      evDone,
-      st.droppedEvidence > 0 ? t(`未回収 ${st.droppedEvidence}`, `Left ${st.droppedEvidence}`) : undefined,
-    );
-
-    if (subHint) {
-      this.objSubHintEl.textContent = subHint;
-      this.objSubHintEl.style.display = 'block';
-    } else {
-      this.objSubHintEl.style.display = 'none';
+      this.lastObjSubHint = subHint;
+      if (subHint) this.objSubHintEl.textContent = subHint;
     }
   }
 
@@ -713,6 +904,7 @@ export class Hud {
     this.unsubs.length = 0;
     for (const r of this.radioEntries) r.el.remove();
     this.radioEntries.length = 0;
+    this.rosterRows.length = 0;
     this.root.remove();
     this.styleEl.remove();
   }

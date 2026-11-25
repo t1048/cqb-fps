@@ -4,6 +4,8 @@ import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
+import { collidersNear } from '../../world/ColliderIndex';
+import type { AABB, Collider } from '../../world/WorldBuilder';
 import { pathSegmentClear, squadRoute } from '../SquadRoute';
 import { blockedAt, type AllyTarget, type XZ } from '../EngageBehavior';
 import {
@@ -12,6 +14,7 @@ import {
   cqbPortalFromStackSlotPortal,
   portalLeanToBodyLean,
   shouldUseLowReady,
+  type FriendlyPos,
 } from '../cqbEntry';
 import { segmentHitsAABB } from '../HostageShield';
 import {
@@ -43,7 +46,6 @@ import {
   ENGAGE_LOST_SEC,
   PINCER_TEAM_COOLDOWN,
   STEP_OUT_TRIGGER_SEC,
-  flankDoorSamples,
   isOrderLockedForAutonomousMove,
   isPointInRoom,
   isRoomConfined,
@@ -53,15 +55,25 @@ import {
 import { isStandable, navigateTo } from './squadMovement';
 import { tryAutonomousFlash } from './squadEntry';
 
+const hostileTargetsBuf: AllyTarget[] = [];
+const combatFromTmp: Vec3 = { x: 0, y: 0, z: 0 };
+const combatTargetChestTmp: Vec3 = { x: 0, y: 0, z: 0 };
+const combatAabbTmp: AABB = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+const combatPlayerEyeTmp = new THREE.Vector3();
+const roomCoverScratch: Collider[] = [];
+const friendliesPool: FriendlyPos[] = [];
+const friendliesScratch: FriendlyPos[] = [];
+const muzzleSelfPosTmp: Vec3 = { x: 0, y: 0, z: 0 };
+
 export function tryWarn(ctx: SquadContext, ally: AllyUnit): void {
   if (ally.warnCd > 0) return;
-  const from = ally.body.chestPos();
+  const from = ally.body.chestPos(combatFromTmp);
   for (const s of ctx.entities.suspects.values()) {
     if (!s.alive || !ctx.cfg.warnStates.includes(s.state) || ctx.provoked.has(s.id)) continue;
-    const c = s.body.chestPos();
+    const c = s.body.chestPos(combatTargetChestTmp);
     if (Math.hypot(c.x - from.x, c.z - from.z) > ctx.cfg.engageRange) continue;
     if (!hasLineOfSight(ctx.colliders, from, c)) continue;
-    const pEye = ctx.player.getEyePosition();
+    const pEye = ctx.player.getEyePosition(combatPlayerEyeTmp);
     const playerCovering =
       ctx.player.alive &&
       Math.hypot(c.x - pEye.x, c.z - pEye.z) <= 10 &&
@@ -100,8 +112,8 @@ export function createAllyEngageBus(ctx: SquadContext, shielded: boolean): GameE
 }
 
 export function hostileSuspectTargetsFor(ctx: SquadContext, ally: AllyUnit): readonly AllyTarget[] {
-  const from = ally.body.chestPos();
-  const out: AllyTarget[] = [];
+  const from = ally.body.chestPos(combatFromTmp);
+  hostileTargetsBuf.length = 0;
   for (const s of ctx.entities.suspects.values()) {
     if (!s.alive) continue;
     if (
@@ -115,20 +127,14 @@ export function hostileSuspectTargetsFor(ctx: SquadContext, ally: AllyUnit): rea
     }
     const hostile = ctx.cfg.hostileStates.includes(s.state) || ctx.provoked.has(s.id);
     if (!hostile) continue;
-    const chest = s.body.chestPos();
+    const chest = s.body.chestPos(combatTargetChestTmp);
     if (checkLineBlock(ctx, ally, from, chest, s.id) !== 'none') continue;
-    out.push({
-      id: s.id,
-      px: s.body.px,
-      pz: s.body.pz,
-      footY: s.body.footY,
-      height: s.body.height,
-      getEye: () => s.body.eye(new THREE.Vector3()),
-      getChest: () => s.body.chestPos(),
-      getAABB: () => s.body.getAABB(),
-    });
+    const cached = ctx.entities.getSuspectTarget(s.id);
+    if (cached) {
+      hostileTargetsBuf.push(cached);
+    }
   }
-  return out;
+  return hostileTargetsBuf;
 }
 
 export function checkLineBlock(
@@ -140,13 +146,13 @@ export function checkLineBlock(
 ): 'none' | 'civilian' | 'friendly' | 'otherSuspect' {
   if (segmentHitsAABB(ctx.player.getBodyBounds(), from, to)) return 'friendly';
   for (const other of ctx.allies) {
-    if (other !== ally && !other.down && segmentHitsAABB(other.body.getAABB(), from, to)) return 'friendly';
+    if (other !== ally && !other.down && segmentHitsAABB(other.body.getAABB(combatAabbTmp), from, to)) return 'friendly';
   }
   for (const c of ctx.entities.civilians.values()) {
-    if (c.alive && segmentHitsAABB(c.body.getAABB(), from, to)) return 'civilian';
+    if (c.alive && segmentHitsAABB(c.body.getAABB(combatAabbTmp), from, to)) return 'civilian';
   }
   for (const s of ctx.entities.suspects.values()) {
-    if (s.id !== targetId && s.alive && segmentHitsAABB(s.body.getAABB(), from, to)) return 'otherSuspect';
+    if (s.id !== targetId && s.alive && segmentHitsAABB(s.body.getAABB(combatAabbTmp), from, to)) return 'otherSuspect';
   }
   return 'none';
 }
@@ -179,43 +185,60 @@ export function findWallCoverInRoom(
 
   const m = Math.max(0.45, ctx.cfg.bodyRadius + 0.12);
   const threatChest: Vec3 = { x: threatPos.x, y: threatPos.y + 1.35, z: threatPos.z };
-  const raw: XZ[] = [];
-
-  for (const c of ctx.colliders) {
+  const near = collidersNear(ctx.colliders, rxMin - 0.6, rzMin - 0.6, rxMax + 0.6, rzMax + 0.6);
+  roomCoverScratch.length = 0;
+  for (let i = 0; i < near.length; i++) {
+    const c = near[i]!;
     if (c.kind !== 'wall' && c.kind !== 'cover') continue;
     const a = c.aabb;
     if (a.min.y > floorY + 1.2 || a.max.y < floorY + 0.25) continue;
     if (a.max.x < rxMin - 0.6 || a.min.x > rxMax + 0.6 || a.max.z < rzMin - 0.6 || a.min.z > rzMax + 0.6) {
       continue;
     }
+    roomCoverScratch.push(c);
+  }
+
+  const raw: XZ[] = [];
+  const apx = ally.body.px;
+  const apz = ally.body.pz;
+  const pushRaw = (x: number, z: number): void => {
+    if (!inRoomStrict(x, z)) return;
+    if ((x - apx) * (x - apx) + (z - apz) * (z - apz) > 5.5 * 5.5) return;
+    for (let i = 0; i < raw.length; i++) {
+      const ex = raw[i]!;
+      const dx = ex.x - x;
+      const dz = ex.z - z;
+      if (dx * dx + dz * dz < 0.12 * 0.12) return;
+    }
+    raw.push({ x, z });
+  };
+
+  for (let i = 0; i < roomCoverScratch.length; i++) {
+    const a = roomCoverScratch[i]!.aabb;
     const cx = (a.min.x + a.max.x) / 2;
     const cz = (a.min.z + a.max.z) / 2;
-    const xs = [
-      cx,
-      Math.min(a.max.x, a.min.x + 0.25),
-      Math.min(a.max.x, a.min.x + m),
-      Math.max(a.min.x, a.max.x - 0.25),
-      Math.max(a.min.x, a.max.x - m),
-    ];
-    const zs = [
-      cz,
-      Math.min(a.max.z, a.min.z + 0.25),
-      Math.min(a.max.z, a.min.z + m),
-      Math.max(a.min.z, a.max.z - 0.25),
-      Math.max(a.min.z, a.max.z - m),
-    ];
-    for (const x of xs) {
-      raw.push({ x, z: a.min.z - m }, { x, z: a.max.z + m });
+    const x0 = cx;
+    const x1 = Math.min(a.max.x, a.min.x + 0.25);
+    const x2 = Math.min(a.max.x, a.min.x + m);
+    const x3 = Math.max(a.min.x, a.max.x - 0.25);
+    const x4 = Math.max(a.min.x, a.max.x - m);
+    for (const x of [x0, x1, x2, x3, x4]) {
+      pushRaw(x, a.min.z - m);
+      pushRaw(x, a.max.z + m);
     }
-    for (const z of zs) {
-      raw.push({ x: a.min.x - m, z }, { x: a.max.x + m, z });
+    const z0 = cz;
+    const z1 = Math.min(a.max.z, a.min.z + 0.25);
+    const z2 = Math.min(a.max.z, a.min.z + m);
+    const z3 = Math.max(a.min.z, a.max.z - 0.25);
+    const z4 = Math.max(a.min.z, a.max.z - m);
+    for (const z of [z0, z1, z2, z3, z4]) {
+      pushRaw(a.min.x - m, z);
+      pushRaw(a.max.x + m, z);
     }
-    raw.push(
-      { x: a.min.x - m, z: a.min.z - m },
-      { x: a.min.x - m, z: a.max.z + m },
-      { x: a.max.x + m, z: a.min.z - m },
-      { x: a.max.x + m, z: a.max.z + m },
-    );
+    pushRaw(a.min.x - m, a.min.z - m);
+    pushRaw(a.min.x - m, a.max.z + m);
+    pushRaw(a.max.x + m, a.min.z - m);
+    pushRaw(a.max.x + m, a.max.z + m);
   }
 
   const peekOffsets: readonly XZ[] = [
@@ -229,20 +252,24 @@ export function findWallCoverInRoom(
     { x: 0, z: -0.85 },
   ];
 
+  const probePt: Vec3 = { x: 0, y: floorY + 1.35, z: 0 };
   const candidates: { hide: XZ; peek: XZ | null; score: number }[] = [];
-  for (const p of raw) {
-    if (!inRoomStrict(p.x, p.z)) continue;
-    const dist = Math.hypot(p.x - ally.body.px, p.z - ally.body.pz);
-    if (dist > 5.5) continue;
+  for (let i = 0; i < raw.length; i++) {
+    const p = raw[i]!;
+    const dist = Math.hypot(p.x - apx, p.z - apz);
     if (!isStandable(ctx, p.x, p.z, floorY)) continue;
-    if (hasLineOfSight(ctx.colliders, threatChest, { x: p.x, y: floorY + 1.35, z: p.z })) continue;
+    probePt.x = p.x;
+    probePt.z = p.z;
+    if (hasLineOfSight(ctx.colliders, threatChest, probePt)) continue;
 
     let peek: XZ | null = null;
     for (const off of peekOffsets) {
       const px = p.x + off.x;
       const pz = p.z + off.z;
       if (!inRoomStrict(px, pz) || !isStandable(ctx, px, pz, floorY)) continue;
-      if (hasLineOfSight(ctx.colliders, threatChest, { x: px, y: floorY + 1.35, z: pz })) {
+      probePt.x = px;
+      probePt.z = pz;
+      if (hasLineOfSight(ctx.colliders, threatChest, probePt)) {
         peek = { x: px, z: pz };
         break;
       }
@@ -259,18 +286,22 @@ export function findWallCoverInRoom(
   }
 
   candidates.sort((a, b) => a.score - b.score);
-  const origin: XZ = { x: ally.body.px, z: ally.body.pz };
+  const origin: XZ = { x: apx, z: apz };
+  let routeChecks = 0;
   for (const cand of candidates) {
     if (pathSegmentClear(ctx.colliders, origin, cand.hide, ctx.cfg.bodyRadius, floorY)) {
       return { hide: cand.hide, peek: cand.peek ?? cand.hide };
     }
-    const route = squadRoute(origin, cand.hide, floorY, ctx.colliders, ctx.bounds, ctx.cfg.bodyRadius);
-    if (route.length > 0 && route.every((pt) => isPointInRoom(pt.x, pt.z, floorY, room, 0.25))) {
-      return { hide: cand.hide, peek: cand.peek ?? cand.hide };
+    if (routeChecks < 6) {
+      routeChecks++;
+      const route = squadRoute(origin, cand.hide, floorY, ctx.colliders, ctx.bounds, ctx.cfg.bodyRadius);
+      if (route.length > 0 && route.every((pt) => isPointInRoom(pt.x, pt.z, floorY, room, 0.25))) {
+        return { hide: cand.hide, peek: cand.peek ?? cand.hide };
+      }
     }
   }
 
-  const fb = ally.podPos ?? { x: ally.body.px, z: ally.body.pz };
+  const fb = ally.podPos ?? { x: apx, z: apz };
   return isPointInRoom(fb.x, fb.z, floorY, room, 0) ? { hide: fb, peek: fb } : null;
 }
 
@@ -759,7 +790,7 @@ export function tryTriggerPincer(ctx: SquadContext, contactBy: AllyUnit, targetP
     frontalPos: avgPos(pinGroup),
     flankerPos: avgPos(eligibleFlankers),
     rooms: ctx.rooms,
-    doors: flankDoorSamples(ctx),
+    doors: ctx.doors.doors,
     stairs: ctx.stairs,
     colliders: ctx.colliders,
   });
@@ -822,28 +853,36 @@ export function updateMuzzleDiscipline(ctx: SquadContext, ally: AllyUnit): void 
     ally.body.setReadyPose('high');
     return;
   }
-  const friendlies: { x: number; y: number; z: number }[] = [];
+  let count = 0;
+  const pushFriendly = (x: number, y: number, z: number): void => {
+    let slot = friendliesPool[count];
+    if (!slot) {
+      slot = { x: 0, y: 0, z: 0 };
+      friendliesPool.push(slot);
+    }
+    slot.x = x;
+    slot.y = y;
+    slot.z = z;
+    friendliesScratch[count++] = slot;
+  };
   if (ctx.player.alive) {
-    friendlies.push({
-      x: ctx.player.position.x,
-      y: ctx.player.position.y,
-      z: ctx.player.position.z,
-    });
+    pushFriendly(ctx.player.position.x, ctx.player.position.y, ctx.player.position.z);
   }
-  for (const other of ctx.allies) {
+  for (let i = 0; i < ctx.allies.length; i++) {
+    const other = ctx.allies[i]!;
     if (other === ally || other.down) continue;
-    friendlies.push({ x: other.body.px, y: other.body.footY, z: other.body.pz });
+    pushFriendly(other.body.px, other.body.footY, other.body.pz);
   }
+  friendliesScratch.length = count;
+
   const yaw = ally.body.yawRad;
   const wx = ally.body.px - Math.sin(yaw) * 0.55;
   const wz = ally.body.pz - Math.cos(yaw) * 0.55;
   const wallClose = blockedAt(ctx.colliders, wx, wz, 0.12, ally.body.footY);
-  const low = shouldUseLowReady(
-    { x: ally.body.px, y: ally.body.footY, z: ally.body.pz },
-    yaw,
-    friendlies,
-    wallClose,
-  );
+  muzzleSelfPosTmp.x = ally.body.px;
+  muzzleSelfPosTmp.y = ally.body.footY;
+  muzzleSelfPosTmp.z = ally.body.pz;
+  const low = shouldUseLowReady(muzzleSelfPosTmp, yaw, friendliesScratch, wallClose);
   ally.body.setReadyPose(low ? 'low' : 'high');
 }
 

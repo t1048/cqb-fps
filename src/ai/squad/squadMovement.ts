@@ -77,12 +77,23 @@ export function isStandable(ctx: SquadContext, x: number, z: number, y: number):
   return legacy || probeGround(ctx.colliders, x, z, y, ctx.cfg.bodyRadius, false) !== null;
 }
 
+const navPassableScratch = new Set<Collider>();
+const stairPassableScratch = new Set<Collider>();
+const doorPathPtsScratch: XZ[] = [
+  { x: 0, z: 0 },
+  { x: 0, z: 0 },
+  { x: 0, z: 0 },
+  { x: 0, z: 0 },
+];
+
 export function passableUnlockedDoors(
   ctx: SquadContext,
   ally?: AllyUnit,
   excludeDoorId: string | null = null,
+  out?: Set<Collider>,
 ): Set<Collider> {
-  const set = new Set<Collider>();
+  const set = out ?? new Set<Collider>();
+  set.clear();
   for (const d of ctx.doors.doors) {
     if (d.id === excludeDoorId) continue;
     if (ally?.skippedDoors.has(d.id)) continue;
@@ -101,12 +112,21 @@ export function pickDoorOnPath(
   excludeDoorId: string | null,
 ): Door | null {
   const body = ally.body;
-  const pts: XZ[] = [{ x: body.px, z: body.pz }];
+  const pts = doorPathPtsScratch;
+  pts[0]!.x = body.px;
+  pts[0]!.z = body.pz;
+  let ptCount = 1;
   if (ally.path.length > 0) {
     const limit = Math.min(ally.path.length, 3);
-    for (let i = 0; i < limit; i++) pts.push(ally.path[i]!);
+    for (let i = 0; i < limit; i++) {
+      pts[ptCount]!.x = ally.path[i]!.x;
+      pts[ptCount]!.z = ally.path[i]!.z;
+      ptCount++;
+    }
   } else {
-    pts.push(routeDest);
+    pts[1]!.x = routeDest.x;
+    pts[1]!.z = routeDest.z;
+    ptCount = 2;
   }
 
   let best: Door | null = null;
@@ -121,7 +141,7 @@ export function pickDoorOnPath(
     if (allyDist >= 1.35) continue;
 
     let segDist = Infinity;
-    for (let i = 0; i < pts.length - 1; i++) {
+    for (let i = 0; i < ptCount - 1; i++) {
       const d = distToSegment(door.centerX, door.centerZ, pts[i]!, pts[i + 1]!);
       if (d < segDist) segDist = d;
     }
@@ -198,7 +218,16 @@ export function navigateTo(
   let routeDest: XZ = { x: goalX, z: goalZ };
   let onStairRun = false;
   const sameFloor = Math.abs(destY - body.footY) <= 0.75;
-  const passable = allowOpenUnlockedDoors ? passableUnlockedDoors(ctx, ally, excludeDoorId) : undefined;
+  let passableReady = false;
+  let passable: ReadonlySet<Collider> | undefined;
+  const getPassable = (): ReadonlySet<Collider> | undefined => {
+    if (!allowOpenUnlockedDoors) return undefined;
+    if (!passableReady) {
+      passableReady = true;
+      passable = passableUnlockedDoors(ctx, ally, excludeDoorId, navPassableScratch);
+    }
+    return passable;
+  };
 
   const arriveTol = Math.max(ctx.cfg.arriveDistance, 0.25);
   const atGoal = !ally.activeStair && sameFloor && Math.hypot(routeDest.x - body.px, routeDest.z - body.pz) <= arriveTol;
@@ -220,7 +249,7 @@ export function navigateTo(
       ally.stairPick = null;
       ally.pathGoal = null;
       ally.path.length = 0;
-      recoverStuckAlly(ctx, ally, { x: goalX, z: goalZ }, passable);
+      recoverStuckAlly(ctx, ally, { x: goalX, z: goalZ }, getPassable());
     }
   }
 
@@ -251,7 +280,7 @@ export function navigateTo(
       distToSegment(body.px, body.pz, stair.approachLow, stair.approachHigh) <= 1.0;
     const entryClear =
       Math.hypot(body.px - entry.x, body.pz - entry.z) <= ctx.cfg.stairArrive &&
-      pathSegmentClear(ctx.colliders, { x: body.px, z: body.pz }, entry, ctx.cfg.bodyRadius, body.footY, passable);
+      pathSegmentClear(ctx.colliders, { x: body.px, z: body.pz }, entry, ctx.cfg.bodyRadius, body.footY, getPassable());
     if (entryClear || onFlight) {
       ally.activeStair = { id: stair.id, up };
       ally.stairPick = null;
@@ -282,7 +311,7 @@ export function navigateTo(
       ctx.colliders,
       ctx.bounds,
       ctx.cfg.bodyRadius,
-      passable,
+      getPassable(),
     );
     ally.pathGoal = routeDest;
     ally.retry = 0.7;
@@ -595,7 +624,9 @@ export function chooseStair(
     const hit = ctx.stairs.find((m) => m.id === cache.id);
     if (hit) return hit;
   }
-  const passable = allowOpenUnlockedDoors ? passableUnlockedDoors(ctx, ally, excludeDoorId) : undefined;
+  const passable = allowOpenUnlockedDoors
+    ? passableUnlockedDoors(ctx, ally, excludeDoorId, stairPassableScratch)
+    : undefined;
   const choice = pickBestStair(
     ctx.stairs,
     { x: body.px, z: body.pz, footY: body.footY },

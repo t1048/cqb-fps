@@ -4,11 +4,12 @@ import type { RoomDef, SquadConfig, SquadElement, SquadOrder, Vec3 } from '../co
 import type { PlayerController } from '../player/PlayerController';
 import type { Door, DoorSystem } from '../world/Door';
 import type { Collider } from '../world/WorldBuilder';
+import { raycastColliders, someColliderAlongSegment } from '../world/ColliderIndex';
 import { hasLineOfSight } from '../weapons/Flashbang';
 import { blockedAt } from '../ai/EngageBehavior';
 import type { EntityManager } from '../ai/EntityManager';
 import { SuspectState } from '../core/events';
-import { t, tElementLabel, tRoomName } from '../core/i18n';
+import { getLocale, t, tElementLabel, tRoomName } from '../core/i18n';
 
 export interface GroundTarget {
   x: number;
@@ -77,6 +78,11 @@ const ELEMENT_CSS: Record<SquadElement, string> = {
   bravo: '#6be08b',
 };
 
+const NON_GROUND_COLLIDER = (c: Collider): boolean =>
+  c.kind !== 'floor' && c.kind !== 'stair' && c.kind !== 'ceiling';
+
+const CONTEXT_CACHE_MS = 50;
+
 const STYLE = `
 .cqb-cmd{position:fixed;left:calc(50% + 26px);top:50%;transform:translateY(-50%);min-width:270px;max-width:340px;
   background:rgba(10,16,24,.92);border:1px solid #486b8a;border-radius:6px;padding:10px 12px;
@@ -100,6 +106,8 @@ function rayBoxDist(ray: THREE.Ray, minX: number, minY: number, minZ: number, ma
   return hit ? hit.distanceTo(ray.origin) : null;
 }
 
+const groundRayDir: Vec3 = { x: 0, y: -1, z: 0 };
+
 /**
  * 視線レイが最初に当たる歩行面（floor / stair コライダの上面）を返す。壁・遮蔽物・ドア板より奥は除外。
  * 無限 y=0 平面は使わないため、階段穴越しに下階・地下の床面を指せる。上面は見下ろすときだけ当たる。
@@ -109,36 +117,37 @@ export function raycastGround(
   eye: Vec3,
   dir: Vec3,
   maxDist: number,
-  ray: THREE.Ray = new THREE.Ray(),
-  tmpBox: THREE.Box3 = new THREE.Box3(),
-  tmpHit: THREE.Vector3 = new THREE.Vector3(),
+  _ray?: THREE.Ray,
+  _tmpBox?: THREE.Box3,
+  _tmpHit?: THREE.Vector3,
 ): { t: number; y: number } | null {
-  ray.origin.set(eye.x, eye.y, eye.z);
-  ray.direction.set(dir.x, dir.y, dir.z);
-  let wallT = maxDist;
-  for (const c of colliders) {
-    if (c.kind === 'floor' || c.kind === 'stair' || c.kind === 'ceiling') continue;
-    const a = c.aabb;
-    const d = rayBoxDist(ray, a.min.x, a.min.y, a.min.z, a.max.x, a.max.y, a.max.z, tmpBox, tmpHit);
-    if (d !== null && d < wallT) wallT = d;
-  }
+  const len = Math.hypot(dir.x, dir.y, dir.z);
+  if (len < 1e-9) return null;
+  const dx = dir.x / len;
+  const dy = dir.y / len;
+  const dz = dir.z / len;
+  if (dy >= -1e-4) return null;
+  groundRayDir.x = dx;
+  groundRayDir.y = dy;
+  groundRayDir.z = dz;
+  const wallT = raycastColliders(colliders, eye, groundRayDir, maxDist, NON_GROUND_COLLIDER);
   let bestT = Infinity;
   let bestY = 0;
-  if (dir.y >= -1e-4) return null;
-  for (const c of colliders) {
-    if (c.kind !== 'floor' && c.kind !== 'stair') continue;
+  someColliderAlongSegment(colliders, eye.x, eye.z, eye.x + dx * wallT, eye.z + dz * wallT, (c) => {
+    if (c.kind !== 'floor' && c.kind !== 'stair') return false;
     const a = c.aabb;
-    if (eye.y <= a.max.y) continue;
-    const tPlane = (a.max.y - eye.y) / dir.y;
+    if (eye.y <= a.max.y) return false;
+    const tPlane = (a.max.y - eye.y) / dy;
     if (tPlane > 0.6 && tPlane <= wallT && tPlane < bestT) {
-      const hx = eye.x + dir.x * tPlane;
-      const hz = eye.z + dir.z * tPlane;
+      const hx = eye.x + dx * tPlane;
+      const hz = eye.z + dz * tPlane;
       if (hx >= a.min.x && hx <= a.max.x && hz >= a.min.z && hz <= a.max.z) {
         bestT = tPlane;
         bestY = a.max.y;
       }
     }
-  }
+    return false;
+  });
   return Number.isFinite(bestT) ? { t: bestT, y: bestY } : null;
 }
 
@@ -167,6 +176,16 @@ export class CommandMenu {
   private open = false;
   private openContext: OrderContext | null = null;
   private disposed = false;
+
+  private ctxCache: OrderContext | null = null;
+  private ctxCacheAt = -Infinity;
+  private ctxEyeX = NaN;
+  private ctxEyeY = NaN;
+  private ctxEyeZ = NaN;
+  private ctxYaw = NaN;
+  private ctxPitch = NaN;
+  private ctxLocale = '';
+  private ctxWorldStamp = NaN;
 
   private readonly eye = new THREE.Vector3();
   private readonly dir = new THREE.Vector3();
@@ -240,13 +259,53 @@ export class CommandMenu {
     return g;
   }
 
+  /** ドア角度・施錠および拘束対象数の軽量スタンプ（50ms キャッシュ中に状態変化があれば即失効させる） */
+  private computeWorldStamp(): number {
+    let stamp = 0;
+    const doors = this.doors.doors;
+    for (let i = 0; i < doors.length; i++) {
+      const d = doors[i]!;
+      stamp += Math.round(d.angle) * 13 + (d.locked ? 7 : 0);
+    }
+    for (const s of this.entities.suspects.values()) {
+      if (s.state === SuspectState.SURRENDER) stamp += 101;
+      if (s.hasUncollectedEvidence) stamp += 307;
+    }
+    for (const c of this.entities.civilians.values()) {
+      if (c.canSecure) stamp += 613;
+    }
+    return stamp;
+  }
+
   resolveContext(element: SquadElement): OrderContext {
     this.player.getEyePosition(this.eye);
-    const cp = Math.cos(this.player.pitchRad);
+    const yaw = this.player.yawRad;
+    const pitch = this.player.pitchRad;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const locale = getLocale();
+    const stamp = this.computeWorldStamp();
+
+    if (
+      !this.open &&
+      this.ctxCache !== null &&
+      now - this.ctxCacheAt < CONTEXT_CACHE_MS &&
+      this.ctxCache.element === element &&
+      this.ctxLocale === locale &&
+      this.ctxWorldStamp === stamp &&
+      Math.abs(this.eye.x - this.ctxEyeX) < 1e-3 &&
+      Math.abs(this.eye.y - this.ctxEyeY) < 1e-3 &&
+      Math.abs(this.eye.z - this.ctxEyeZ) < 1e-3 &&
+      Math.abs(yaw - this.ctxYaw) < 1e-4 &&
+      Math.abs(pitch - this.ctxPitch) < 1e-4
+    ) {
+      return this.ctxCache;
+    }
+
+    const cp = Math.cos(pitch);
     this.dir.set(
-      -Math.sin(this.player.yawRad) * cp,
-      Math.sin(this.player.pitchRad),
-      -Math.cos(this.player.yawRad) * cp,
+      -Math.sin(yaw) * cp,
+      Math.sin(pitch),
+      -Math.cos(yaw) * cp,
     ).normalize();
 
     const playerRoom = this.findRoomAt(this.player.position.x, this.player.position.z, this.player.position.y);
@@ -264,14 +323,24 @@ export class CommandMenu {
     const restrainTarget = this.findRestrainTarget();
     const groundPoint = this.findGroundPoint();
 
-    return {
+    const ctx: OrderContext = {
       element,
       door,
       areaTarget,
       groundPoint,
       restrainTarget,
-      aimDir: { x: -Math.sin(this.player.yawRad), z: -Math.cos(this.player.yawRad) },
+      aimDir: { x: -Math.sin(yaw), z: -Math.cos(yaw) },
     };
+    this.ctxCache = ctx;
+    this.ctxCacheAt = now;
+    this.ctxEyeX = this.eye.x;
+    this.ctxEyeY = this.eye.y;
+    this.ctxEyeZ = this.eye.z;
+    this.ctxYaw = yaw;
+    this.ctxPitch = pitch;
+    this.ctxLocale = locale;
+    this.ctxWorldStamp = stamp;
+    return ctx;
   }
 
   private findRoomAt(x: number, z: number, y: number): RoomDef | null {
@@ -286,16 +355,7 @@ export class CommandMenu {
   }
 
   private computeWallDistance(maxDist: number): number {
-    this.ray.origin.copy(this.eye);
-    this.ray.direction.copy(this.dir);
-    let wallT = maxDist;
-    for (const c of this.colliders) {
-      if (c.kind === 'floor' || c.kind === 'stair' || c.kind === 'ceiling') continue;
-      const a = c.aabb;
-      const d = rayBoxDist(this.ray, a.min.x, a.min.y, a.min.z, a.max.x, a.max.y, a.max.z, this.tmpBox, this.tmpHit);
-      if (d !== null && d < wallT) wallT = d;
-    }
-    return wallT;
+    return raycastColliders(this.colliders, this.eye, this.dir, maxDist, NON_GROUND_COLLIDER);
   }
 
   private buildDoorAreaTarget(door: Door, playerRoom: RoomDef | null): AreaClearTarget | null {
@@ -667,6 +727,7 @@ export class CommandMenu {
     if (this.disposed) return;
 
     if (event === 'open') {
+      this.ctxCache = null;
       const ctx = this.resolveContext(element);
       this.openContext = ctx;
       this.items = this.buildMenuItems(ctx);

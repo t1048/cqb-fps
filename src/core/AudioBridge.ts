@@ -32,6 +32,8 @@ const FLASH_TARGET_Y_OFFSET = 0.1;
 const MIN_EAR_RINGING_SEC = 0.5;
 const EAR_RINGING_FALLOFF = 0.75;
 const RADIO_REPORT_COOLDOWN_SEC = 3.0;
+const MAX_AMBIENT_DIST = 42;
+const MAX_LOUD_DIST = 85;
 
 function isFiniteVec3(v: Vec3): boolean {
   return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
@@ -53,6 +55,16 @@ export class AudioBridge {
   private lastRadioReportSec = -Infinity;
   private disposed = false;
 
+  private isAudible(pos: Vec3, maxDist: number): boolean {
+    if (!isFiniteVec3(pos)) return false;
+    this.player.getEyePosition(this.eye);
+    if (!isFiniteVec3(this.eye)) return true;
+    const dx = pos.x - this.eye.x;
+    const dy = pos.y - this.eye.y;
+    const dz = pos.z - this.eye.z;
+    return dx * dx + dy * dy + dz * dz <= maxDist * maxDist;
+  }
+
   constructor(
     bus: GameEventBus,
     private readonly audio: AudioBridgeSink,
@@ -62,22 +74,24 @@ export class AudioBridge {
   ) {
     this.unsubs.push(
       bus.on('noise', ({ pos, radius, kind }) => {
-        if (this.disposed) return;
+        if (this.disposed || !Number.isFinite(radius)) return;
         switch (kind) {
           case 'footstep':
-            this.audio.playFootstep(pos, radius);
+            if (this.isAudible(pos, MAX_AMBIENT_DIST)) this.audio.playFootstep(pos, radius);
             break;
           case 'door':
-            this.audio.playDoorCreak(pos, radius);
+            if (this.isAudible(pos, MAX_AMBIENT_DIST)) this.audio.playDoorCreak(pos, radius);
             break;
           case 'breach':
-            this.audio.playBreach(pos, radius);
+            if (this.isAudible(pos, MAX_LOUD_DIST)) this.audio.playBreach(pos, radius);
             break;
           case 'gunshot':
-            this.audio.playGunshot(pos, radius);
+            if (this.isAudible(pos, radius >= 25 ? MAX_LOUD_DIST : MAX_AMBIENT_DIST)) {
+              this.audio.playGunshot(pos, radius);
+            }
             break;
           case 'flash':
-            this.audio.playFlashbang(pos, radius);
+            if (this.isAudible(pos, MAX_LOUD_DIST)) this.audio.playFlashbang(pos, radius);
             break;
           case 'voice':
             // Handled via `warningCall` subscription to avoid double-triggering.
@@ -88,7 +102,7 @@ export class AudioBridge {
 
     this.unsubs.push(
       bus.on('warningCall', ({ pos }) => {
-        if (this.disposed) return;
+        if (this.disposed || !this.isAudible(pos, MAX_AMBIENT_DIST)) return;
         this.audio.playWarningCall(pos);
       }),
     );
@@ -125,13 +139,16 @@ export class AudioBridge {
 
     this.unsubs.push(
       bus.on('c2Beep', ({ pos, urgent }) => {
-        if (this.disposed || !isFiniteVec3(pos)) return;
+        if (this.disposed || !this.isAudible(pos, MAX_AMBIENT_DIST)) return;
         this.audio.playC2Beep(pos, urgent);
       }),
       bus.on('c2Detonated', ({ pos, dir, radius }) => {
         if (this.disposed) return;
         if (!isFiniteVec3(pos) || !Number.isFinite(radius) || radius <= 0) return;
-        this.audio.playC2Blast(pos, Math.max(radius * 6, 35));
+        const blastRadius = Math.max(radius * 6, 35);
+        if (this.isAudible(pos, Math.max(MAX_LOUD_DIST, blastRadius * 1.5))) {
+          this.audio.playC2Blast(pos, blastRadius);
+        }
 
         this.player.getEyePosition(this.eye);
         if (!isFiniteVec3(this.eye)) return;
@@ -157,15 +174,16 @@ export class AudioBridge {
         this.audio.triggerEarRinging(intensity, durationSec);
       }),
       bus.on('swatFootstep', ({ pos, heavy }) => {
-        if (this.disposed || !isFiniteVec3(pos)) return;
+        if (this.disposed || !this.isAudible(pos, MAX_AMBIENT_DIST)) return;
         this.audio.playSwatFootstep(pos, Boolean(heavy));
       }),
       bus.on('gasDetonated', ({ pos, radius }) => {
         if (this.disposed || !isFiniteVec3(pos) || !Number.isFinite(radius) || radius <= 0) return;
+        if (!this.isAudible(pos, Math.max(MAX_AMBIENT_DIST, radius * 3.5))) return;
         this.audio.playGasHiss(pos, radius);
       }),
       bus.on('playerCough', ({ pos }) => {
-        if (this.disposed || !isFiniteVec3(pos)) return;
+        if (this.disposed || !this.isAudible(pos, MAX_AMBIENT_DIST)) return;
         this.audio.playCough(pos);
       }),
     );

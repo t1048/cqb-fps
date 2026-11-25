@@ -16,6 +16,8 @@ export interface BatchOptions {
   skip?: (obj: THREE.Object3D) => boolean;
   /** 空間セルの一辺（m）。0 以下でセル分割しない。 */
   cellSize?: number;
+  /** 呼び出し側で共有する頂点カラー統合マテリアルプール。 */
+  materialPool?: Map<string, THREE.Material>;
 }
 
 type Std = THREE.MeshStandardMaterial;
@@ -90,45 +92,60 @@ function bake(mesh: THREE.Mesh, toRoot: THREE.Matrix4, color: THREE.Color): THRE
   return g;
 }
 
+interface BatchGroup {
+  material: THREE.Material;
+  matSig: string;
+  noShadow: boolean;
+  meshes: THREE.Mesh[];
+}
+
 /**
  * root 配下の静的メッシュを統合する。元メッシュは取り除き、ジオメトリを破棄する
  * （元マテリアルは統合済みメッシュの所有にはならないので、呼び出し側の管理のまま残る）。
  * 戻り値は追加した統合メッシュ数と、取り除いた元メッシュ数。
  */
-export function batchStaticMeshes(root: THREE.Object3D, opts: BatchOptions = {}): { batches: number; removed: number } {
-  const cell = opts.cellSize ?? 0;
+export function batchStaticMeshes(
+  root: THREE.Object3D,
+  opts: BatchOptions | number = {},
+  materialPool?: Map<string, THREE.Material>,
+): { batches: number; removed: number } {
+  const options: BatchOptions = typeof opts === 'number' ? { cellSize: opts } : opts;
+  const cell = options.cellSize ?? 0;
+  const skip = options.skip;
   root.updateWorldMatrix(true, true);
   const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
-  const groups = new Map<string, { material: THREE.Material; meshes: THREE.Mesh[] }>();
+  const groups = new Map<string, BatchGroup>();
   const center = new THREE.Vector3();
 
-  const visit = (obj: THREE.Object3D): void => {
-    if (obj !== root && opts.skip?.(obj)) return;
+  const visit = (obj: THREE.Object3D, parentNoShadow: boolean): void => {
+    if (obj !== root && skip?.(obj)) return;
     if (!obj.visible) return;
+    const noShadow = parentNoShadow || Boolean(obj.userData.noShadow);
     const mesh = obj as THREE.Mesh;
     if (mesh.isMesh && batchable(mesh)) {
       const material = mesh.material as THREE.Material;
-      let key = signatureOf(material);
+      const matSig = signatureOf(material);
+      let key = `${matSig}|ns:${noShadow ? 1 : 0}`;
       if (cell > 0) {
         if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
         center.copy(mesh.geometry.boundingSphere!.center).applyMatrix4(mesh.matrixWorld).applyMatrix4(rootInv);
         key += `@${Math.floor(center.x / cell)},${Math.floor(center.y / cell)},${Math.floor(center.z / cell)}`;
       }
       let gr = groups.get(key);
-      if (!gr) groups.set(key, (gr = { material, meshes: [] }));
+      if (!gr) groups.set(key, (gr = { material, matSig, noShadow, meshes: [] }));
       gr.meshes.push(mesh);
     }
-    for (const c of obj.children) visit(c);
+    for (const c of obj.children) visit(c, noShadow);
   };
-  visit(root);
+  visit(root, Boolean(root.userData.noShadow));
 
   let batches = 0;
   let removed = 0;
   const removedGeos = new Set<THREE.BufferGeometry>();
   const removedMats = new Set<THREE.Material>();
-  const mats = new Map<string, THREE.Material>();
+  const mats = materialPool ?? options.materialPool ?? new Map<string, THREE.Material>();
   const toRoot = new THREE.Matrix4();
-  for (const [key, gr] of groups) {
+  for (const [, gr] of groups) {
     if (gr.meshes.length < 2) continue;
     const geos: THREE.BufferGeometry[] = [];
     for (const mesh of gr.meshes) {
@@ -139,16 +156,23 @@ export function batchStaticMeshes(root: THREE.Object3D, opts: BatchOptions = {})
     const merged = mergeGeometries(geos, false);
     for (const g of geos) g.dispose();
     if (!merged) continue;
-    const sig = key.split('@')[0]!;
-    let mat = mats.get(sig);
+    let mat = mats.get(gr.matSig);
     if (!mat) {
+      const srcMat = gr.material as Std;
+      if (srcMat.map === undefined) srcMat.map = null;
       mat = gr.material.clone();
       (mat as THREE.MeshStandardMaterial).color.set(0xffffff);
       mat.vertexColors = true;
-      mats.set(sig, mat);
+      mats.set(gr.matSig, mat);
     }
     const out = new THREE.Mesh(merged, mat);
     out.name = 'static-batch';
+    if (gr.noShadow) {
+      out.castShadow = false;
+      out.receiveShadow = true;
+      out.userData.noShadow = true;
+    }
+    out.updateMatrix();
     out.matrixAutoUpdate = false;
     root.add(out);
     batches++;
@@ -159,6 +183,8 @@ export function batchStaticMeshes(root: THREE.Object3D, opts: BatchOptions = {})
         holder.position.copy(mesh.position);
         holder.quaternion.copy(mesh.quaternion);
         holder.scale.copy(mesh.scale);
+        holder.updateMatrix();
+        holder.matrixAutoUpdate = false;
         mesh.parent?.add(holder);
         for (const ch of [...mesh.children]) holder.add(ch);
       }
@@ -168,7 +194,26 @@ export function batchStaticMeshes(root: THREE.Object3D, opts: BatchOptions = {})
       removed++;
     }
   }
-  // 残ったメッシュが共有していないものだけ解放する（テクスチャは統合マテリアルが引き続き使うので触らない）
+
+  // バッチ化後に空になった Group 殻（ライト・door-pivot*・skip 対象以外）を除去する
+  const pruneEmptyGroups = (obj: THREE.Object3D): void => {
+    for (let i = obj.children.length - 1; i >= 0; i--) {
+      pruneEmptyGroups(obj.children[i]!);
+    }
+    if (
+      obj !== root &&
+      (obj as THREE.Group).isGroup &&
+      !(obj as THREE.Light).isLight &&
+      obj.children.length === 0 &&
+      !obj.name.startsWith('door-pivot') &&
+      !skip?.(obj)
+    ) {
+      obj.removeFromParent();
+    }
+  };
+  pruneEmptyGroups(root);
+
+  // 残ったメッシュが共有していないものだけ解放する（テクスチャや userData.shared マテリアルは触らない）
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
@@ -178,6 +223,8 @@ export function batchStaticMeshes(root: THREE.Object3D, opts: BatchOptions = {})
     else removedMats.delete(mat);
   });
   for (const g of removedGeos) g.dispose();
-  for (const m of removedMats) m.dispose();
+  for (const m of removedMats) {
+    if (!m.userData.shared) m.dispose();
+  }
   return { batches, removed };
 }

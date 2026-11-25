@@ -4,6 +4,7 @@ import type { InputManager } from '../core/InputManager';
 import type { GameEventBus } from '../core/events';
 import type { MapData, MoveMode, PlayerConfig } from '../core/types';
 import type { AABB, Collider } from '../world/WorldBuilder';
+import { collidersNear } from '../world/ColliderIndex';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT } from '../world/Walk';
 
 const DEG2RAD = Math.PI / 180;
@@ -25,6 +26,7 @@ export class PlayerController {
   private moving = false;
   private leanOffset = 0; // 現在の横オフセット（右が正, m）
   private readonly eyeWorld = new THREE.Vector3();
+  private readonly projScratch = new THREE.Vector3();
   private verticalVelocity = 0;
   /** 直前に有効な支持面の上にいた足元位置（無支持時の安全側復帰先） */
   private readonly lastValidPos = new THREE.Vector3();
@@ -91,9 +93,9 @@ export class PlayerController {
     }
   }
 
-  inCameraView(point: {x:number;y:number;z:number}): boolean {
-    const p = new THREE.Vector3(point.x,point.y,point.z).project(this.camera);
-    return Math.max(Math.abs(p.x),Math.abs(p.y),Math.abs(p.z)) <= 1;
+  inCameraView(point: { x: number; y: number; z: number }): boolean {
+    const p = this.projScratch.set(point.x, point.y, point.z).project(this.camera);
+    return Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z)) <= 1;
   }
 
   get isCrouching(): boolean {
@@ -231,27 +233,47 @@ export class PlayerController {
     const dz = -Math.sin(this.yaw) * dir;
     const margin = this.config.lean.headRadius;
     let maxT = want + margin;
-    for (const c of this.colliders) {
-      const a = c.aabb;
+    const near = collidersNear(
+      this.colliders,
+      ox - maxT - 0.1,
+      oz - maxT - 0.1,
+      ox + maxT + 0.1,
+      oz + maxT + 0.1,
+    );
+    for (let i = 0; i < near.length; i++) {
+      const a = near[i]!.aabb;
       if (eyeY < a.min.y || eyeY > a.max.y) continue;
       let t0 = 0;
       let t1 = maxT;
-      let hit = true;
-      for (const [o, d, mn, mx] of [
-        [ox, dx, a.min.x, a.max.x],
-        [oz, dz, a.min.z, a.max.z],
-      ] as const) {
-        if (Math.abs(d) < 1e-9) {
-          if (o < mn || o > mx) hit = false;
-        } else {
-          let ta = (mn - o) / d;
-          let tb = (mx - o) / d;
-          if (ta > tb) [ta, tb] = [tb, ta];
-          t0 = Math.max(t0, ta);
-          t1 = Math.min(t1, tb);
+      if (Math.abs(dx) < 1e-9) {
+        if (ox < a.min.x || ox > a.max.x) continue;
+      } else {
+        let ta = (a.min.x - ox) / dx;
+        let tb = (a.max.x - ox) / dx;
+        if (ta > tb) {
+          const tmp = ta;
+          ta = tb;
+          tb = tmp;
         }
+        if (ta > t0) t0 = ta;
+        if (tb < t1) t1 = tb;
+        if (t0 > t1) continue;
       }
-      if (hit && t0 <= t1) maxT = Math.min(maxT, t0);
+      if (Math.abs(dz) < 1e-9) {
+        if (oz < a.min.z || oz > a.max.z) continue;
+      } else {
+        let ta = (a.min.z - oz) / dz;
+        let tb = (a.max.z - oz) / dz;
+        if (ta > tb) {
+          const tmp = ta;
+          ta = tb;
+          tb = tmp;
+        }
+        if (ta > t0) t0 = ta;
+        if (tb < t1) t1 = tb;
+        if (t0 > t1) continue;
+      }
+      if (t0 < maxT) maxT = t0;
     }
     return Math.max(0, Math.min(want, maxT - margin));
   }
@@ -316,8 +338,9 @@ export class PlayerController {
     const p = this.position;
     for (let pass = 0; pass < 3; pass++) {
       let pushed = false;
-      for (const c of this.colliders) {
-        const a = c.aabb;
+      const near = collidersNear(this.colliders, p.x - r - 0.4, p.z - r - 0.4, p.x + r + 0.4, p.z + r + 0.4);
+      for (let i = 0; i < near.length; i++) {
+        const a = near[i]!.aabb;
         // 高さが重ならないコライダは無視（足元〜頭頂）
         if (a.max.y <= p.y + STEP_HEIGHT || a.min.y >= p.y + this.config.standEyeHeight) continue;
         const cx = Math.max(a.min.x, Math.min(p.x, a.max.x));

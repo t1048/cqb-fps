@@ -153,7 +153,7 @@ export class HostageGrab {
 
   private findTarget(): Civilian | null {
     if (!this.player.alive) return null;
-    const eye = this.player.getEyePosition();
+    const eye = this.player.getEyePosition(this.eye);
     const yaw = this.player.yawRad;
     const fx = -Math.sin(yaw);
     const fz = -Math.cos(yaw);

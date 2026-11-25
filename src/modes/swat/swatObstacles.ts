@@ -35,6 +35,8 @@ export class SwatObstacles {
   private traps: TrapHooks | null = null;
   /** 解除のために一時施錠したドア → 元の施錠状態 */
   private readonly heldDoors = new Map<string, { wasLocked: boolean; by: SwatHunter | null }>();
+  private readonly detonateScratch: string[] = [];
+  private readonly chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
   private trapsSeen = 0;
   trapsDisarmed = 0;
   trapKills = 0;
@@ -68,11 +70,15 @@ export class SwatObstacles {
       (h.goalCell ? { x: h.goalCell.x, y: h.goalCell.y, z: h.goalCell.z } : null);
     if (!refTarget) return false;
     const boarded = this.barricades.listBoarded();
-    if (boarded.length === 0) return false;
+    if (boarded.length === 0) {
+      h.barricadeCd = 0.25;
+      return false;
+    }
     const eye: Vec3 = { x: h.body.px, y: h.body.footY + 1.55, z: h.body.pz };
     const hit = findObstructingBarricade(eye, h.body.footY, refTarget, boarded, this.host.d.colliders);
     if (!hit) {
       h.barricadeBurst = 0;
+      h.barricadeCd = 0.25;
       return false;
     }
     if (this.host.civilianInLine(eye, hit.nearFace) || this.host.coveredByHostage(h.body.px, h.body.pz)) return false;
@@ -175,13 +181,26 @@ export class SwatObstacles {
   watchTraps(): void {
     const traps = this.traps;
     if (!traps || !this.host.started) return;
-    for (const id of [...traps.trappedDoorIds()]) {
+    this.detonateScratch.length = 0;
+    for (const id of traps.trappedDoorIds()) {
       const door = this.host.doorById(id);
       if (!door || door.angle <= 2 || this.heldDoors.has(id)) continue;
-      const near = this.host.hunters.some(
-        (h) => h.alive && Math.abs(h.body.footY - door.sillY) < 0.9 && Math.hypot(h.body.px - door.centerX, h.body.pz - door.centerZ) < TRAP_TRIGGER_DIST,
-      );
-      if (near) traps.detonate(id);
+      let near = false;
+      for (let i = 0; i < this.host.hunters.length; i++) {
+        const h = this.host.hunters[i]!;
+        if (
+          h.alive &&
+          Math.abs(h.body.footY - door.sillY) < 0.9 &&
+          Math.hypot(h.body.px - door.centerX, h.body.pz - door.centerZ) < TRAP_TRIGGER_DIST
+        ) {
+          near = true;
+          break;
+        }
+      }
+      if (near) this.detonateScratch.push(id);
+    }
+    for (let i = 0; i < this.detonateScratch.length; i++) {
+      traps.detonate(this.detonateScratch[i]!);
     }
   }
 
@@ -190,7 +209,7 @@ export class SwatObstacles {
     let downed = 0;
     for (const h of this.host.hunters) {
       if (!h.alive) continue;
-      const c = h.body.chestPos();
+      const c = h.body.chestPos(this.chestScratch);
       const dist = Math.hypot(c.x - pos.x, c.y - pos.y, c.z - pos.z);
       if (dist < radius && hasLineOfSight(this.host.d.colliders, pos, c)) {
         const dmg = Math.round(95 * (1 - 0.6 * (dist / radius)));

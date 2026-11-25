@@ -24,6 +24,8 @@ const MIN_INDEXED = 48;
 
 interface Index {
   length: number;
+  first: Collider | undefined;
+  last: Collider | undefined;
   minX: number;
   minZ: number;
   cols: number;
@@ -38,6 +40,11 @@ interface Index {
 
 const indices = new WeakMap<readonly Collider[], Index>();
 const EMPTY = new Uint32Array(0);
+
+/** コライダ配列をインプレース変更した際に明示的に空間索引キャッシュを破棄する。 */
+export function invalidateColliderIndex(colliders: readonly Collider[]): void {
+  indices.delete(colliders);
+}
 
 /** 索引に登録する XZ 範囲。動的で可動範囲が不明なものは null（常に候補）。 */
 function rectOf(c: Collider): { minX: number; minZ: number; maxX: number; maxZ: number } | null {
@@ -92,6 +99,8 @@ function build(colliders: readonly Collider[]): Index {
   }
   return {
     length: colliders.length,
+    first: colliders[0],
+    last: colliders[colliders.length - 1],
     minX,
     minZ,
     cols,
@@ -106,7 +115,12 @@ function build(colliders: readonly Collider[]): Index {
 
 function indexOf(colliders: readonly Collider[]): Index {
   let idx = indices.get(colliders);
-  if (!idx || idx.length !== colliders.length) {
+  if (
+    !idx ||
+    idx.length !== colliders.length ||
+    idx.first !== colliders[0] ||
+    idx.last !== colliders[colliders.length - 1]
+  ) {
     idx = build(colliders);
     indices.set(colliders, idx);
   }
@@ -235,7 +249,7 @@ export function someColliderAlongSegment(
  * 3D レイ（origin + t * dir, 0 <= t <= maxT）と AABB の最近交点距離 t を返す。
  * 交差しない場合は Infinity。始点が箱内部にある場合は 0 を返す。
  */
-function rayHitAABB(
+export function rayHitAABB(
   ox: number,
   oy: number,
   oz: number,
@@ -309,6 +323,7 @@ export function raycastColliders(
   origin: Vec3,
   dir: Vec3,
   maxDist: number,
+  accept?: (c: Collider) => boolean,
 ): number {
   if (!Number.isFinite(maxDist) || maxDist <= 0) return 0;
   const ox = origin.x;
@@ -333,7 +348,9 @@ export function raycastColliders(
   if (colliders.length < MIN_INDEXED) {
     let best = maxDist;
     for (let i = 0; i < colliders.length; i++) {
-      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, colliders[i]!.aabb);
+      const c = colliders[i]!;
+      if (accept && !accept(c)) continue;
+      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, c.aabb);
       if (t < best) best = t;
     }
     return best;
@@ -342,7 +359,9 @@ export function raycastColliders(
   const idx = indexOf(colliders);
   let best = maxDist;
   for (let i = 0; i < idx.dynamic.length; i++) {
-    const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, idx.dynamic[i]!.aabb);
+    const c = idx.dynamic[i]!;
+    if (accept && !accept(c)) continue;
+    const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, c.aabb);
     if (t < best) best = t;
   }
   if (best <= 0) return 0;
@@ -356,7 +375,9 @@ export function raycastColliders(
       const i = cell[k]!;
       if (stamp[i] === epoch) continue;
       stamp[i] = epoch;
-      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, colliders[i]!.aabb);
+      const c = colliders[i]!;
+      if (accept && !accept(c)) continue;
+      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best, c.aabb);
       if (t < best) best = t;
     }
   };
@@ -390,4 +411,127 @@ export function raycastColliders(
     visit(ex, ez);
   }
   return best;
+}
+
+/**
+ * 水平方向の壁（kind==='wall'）に対する空間索引付き最寄りレイキャスト。
+ * 外向き単位法線 (nx, nz) と交点を返す（総当たり版 raycastWallXZ と完全一致）。
+ */
+export function raycastWallCollidersXZ(
+  colliders: readonly Collider[],
+  origin: Vec3,
+  dirX: number,
+  dirZ: number,
+  maxDist: number,
+): { dist: number; point: Vec3; nx: number; nz: number } | null {
+  const len = Math.hypot(dirX, dirZ);
+  if (len < 1e-6 || maxDist <= 1e-4) return null;
+  const dx = dirX / len;
+  const dz = dirZ / len;
+  const ox = origin.x;
+  const oy = origin.y;
+  const oz = origin.z;
+
+  let bestDist = maxDist;
+  let bestNx = 0;
+  let bestNz = 0;
+  let hit = false;
+
+  const testWall = (c: Collider): void => {
+    if (c.kind !== 'wall') return;
+    const a = c.aabb;
+    if (oy < a.min.y || oy > a.max.y) return;
+    let txMin: number;
+    let txMax: number;
+    if (Math.abs(dx) < 1e-8) {
+      if (ox < a.min.x || ox > a.max.x) return;
+      txMin = -Infinity;
+      txMax = Infinity;
+    } else {
+      const t1 = (a.min.x - ox) / dx;
+      const t2 = (a.max.x - ox) / dx;
+      txMin = t1 < t2 ? t1 : t2;
+      txMax = t1 > t2 ? t1 : t2;
+    }
+    let tzMin: number;
+    let tzMax: number;
+    if (Math.abs(dz) < 1e-8) {
+      if (oz < a.min.z || oz > a.max.z) return;
+      tzMin = -Infinity;
+      tzMax = Infinity;
+    } else {
+      const t1 = (a.min.z - oz) / dz;
+      const t2 = (a.max.z - oz) / dz;
+      tzMin = t1 < t2 ? t1 : t2;
+      tzMax = t1 > t2 ? t1 : t2;
+    }
+    const tMin = txMin > tzMin ? txMin : tzMin;
+    const tMax = txMax < tzMax ? txMax : tzMax;
+    if (tMax < (tMin > 0 ? tMin : 0) || tMin <= 1e-4 || tMin >= bestDist) return;
+    bestDist = tMin;
+    if (txMin > tzMin) {
+      bestNx = dx > 0 ? -1 : 1;
+      bestNz = 0;
+    } else {
+      bestNx = 0;
+      bestNz = dz > 0 ? -1 : 1;
+    }
+    hit = true;
+  };
+
+  if (colliders.length < MIN_INDEXED) {
+    for (let i = 0; i < colliders.length; i++) testWall(colliders[i]!);
+  } else {
+    const idx = indexOf(colliders);
+    for (let i = 0; i < idx.dynamic.length; i++) testWall(idx.dynamic[i]!);
+    const epoch = nextEpoch(idx);
+    const { stamp, cells, cols, rows } = idx;
+    const visit = (cx: number, cz: number): void => {
+      if (cx < 0 || cx >= cols || cz < 0 || cz >= rows) return;
+      const cell: Uint32Array = cells[cz * cols + cx]!;
+      for (let k = 0; k < cell.length; k++) {
+        const i = cell[k]!;
+        if (stamp[i] === epoch) continue;
+        stamp[i] = epoch;
+        testWall(colliders[i]!);
+      }
+    };
+
+    let gx = Math.floor((ox - idx.minX) / CELL);
+    let gz = Math.floor((oz - idx.minZ) / CELL);
+    const ex = Math.floor((ox + dx * bestDist - idx.minX) / CELL);
+    const ez = Math.floor((oz + dz * bestDist - idx.minZ) / CELL);
+    const sx = Math.abs(dx) >= 1e-8 ? (dx > 0 ? 1 : -1) : 0;
+    const sz = Math.abs(dz) >= 1e-8 ? (dz > 0 ? 1 : -1) : 0;
+    const tDeltaX = sx !== 0 ? CELL / Math.abs(dx) : Infinity;
+    const tDeltaZ = sz !== 0 ? CELL / Math.abs(dz) : Infinity;
+    let tMaxX = sx !== 0 ? (idx.minX + (sx > 0 ? gx + 1 : gx) * CELL - ox) / dx : Infinity;
+    let tMaxZ = sz !== 0 ? (idx.minZ + (sz > 0 ? gz + 1 : gz) * CELL - oz) / dz : Infinity;
+
+    visit(gx, gz);
+    let steps = Math.abs(ex - gx) + Math.abs(ez - gz);
+    while (steps-- > 0) {
+      const tNext = Math.min(tMaxX, tMaxZ);
+      if (tNext > bestDist + REG_EPS) break;
+      if (tMaxX < tMaxZ) {
+        gx += sx;
+        tMaxX += tDeltaX;
+      } else {
+        gz += sz;
+        tMaxZ += tDeltaZ;
+      }
+      visit(gx, gz);
+    }
+    if (Math.min(tMaxX, tMaxZ) <= bestDist + REG_EPS) {
+      visit(ex, ez);
+    }
+  }
+
+  if (!hit) return null;
+  return {
+    dist: bestDist,
+    point: { x: ox + dx * bestDist, y: oy, z: oz + dz * bestDist },
+    nx: bestNx,
+    nz: bestNz,
+  };
 }

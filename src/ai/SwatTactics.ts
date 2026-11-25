@@ -1,5 +1,6 @@
 import type { RoomDef, Vec3, WindowDef } from '../core/types';
 import { hasLineOfSight } from '../weapons/Flashbang';
+import { raycastWallCollidersXZ } from '../world/ColliderIndex';
 import type { StairMark } from '../world/Walk';
 import type { Collider } from '../world/WorldBuilder';
 import { blockedAtFiltered, reachableRouteLength } from './SquadRoute';
@@ -338,62 +339,7 @@ export function raycastWallXZ(
   dirZ: number,
   maxDist: number,
 ): { dist: number; point: Vec3; nx: number; nz: number } | null {
-  const len = Math.hypot(dirX, dirZ);
-  if (len < 1e-6) return null;
-  const dx = dirX / len;
-  const dz = dirZ / len;
-  let bestDist = maxDist;
-  let bestNx = 0;
-  let bestNz = 0;
-  let hit = false;
-  for (const c of colliders) {
-    if (c.kind !== 'wall') continue;
-    const a = c.aabb;
-    if (origin.y < a.min.y || origin.y > a.max.y) continue;
-    let txMin: number;
-    let txMax: number;
-    if (Math.abs(dx) < 1e-8) {
-      if (origin.x < a.min.x || origin.x > a.max.x) continue;
-      txMin = -Infinity;
-      txMax = Infinity;
-    } else {
-      const t1 = (a.min.x - origin.x) / dx;
-      const t2 = (a.max.x - origin.x) / dx;
-      txMin = Math.min(t1, t2);
-      txMax = Math.max(t1, t2);
-    }
-    let tzMin: number;
-    let tzMax: number;
-    if (Math.abs(dz) < 1e-8) {
-      if (origin.z < a.min.z || origin.z > a.max.z) continue;
-      tzMin = -Infinity;
-      tzMax = Infinity;
-    } else {
-      const t1 = (a.min.z - origin.z) / dz;
-      const t2 = (a.max.z - origin.z) / dz;
-      tzMin = Math.min(t1, t2);
-      tzMax = Math.max(t1, t2);
-    }
-    const tMin = Math.max(txMin, tzMin);
-    const tMax = Math.min(txMax, tzMax);
-    if (tMax < Math.max(0, tMin) || tMin <= 1e-4 || tMin >= bestDist) continue;
-    bestDist = tMin;
-    if (txMin > tzMin) {
-      bestNx = dx > 0 ? -1 : 1;
-      bestNz = 0;
-    } else {
-      bestNx = 0;
-      bestNz = dz > 0 ? -1 : 1;
-    }
-    hit = true;
-  }
-  if (!hit) return null;
-  return {
-    dist: bestDist,
-    point: { x: origin.x + dx * bestDist, y: origin.y, z: origin.z + dz * bestDist },
-    nx: bestNx,
-    nz: bestNz,
-  };
+  return raycastWallCollidersXZ(colliders, origin, dirX, dirZ, maxDist);
 }
 
 /** 1 バウンド壁反射で曲がり角・隣接室の目標へフラッシュバンを送り込む軌道を計画する。 */
@@ -600,6 +546,8 @@ export interface PincerFlankParams {
   bounds?: { width: number; depth: number };
   /** 屋外隊員が屋内目標へ入るときの外壁入口。届く入口が無い屋内迂回は捨てる */
   entries?: readonly EntryPortal[];
+  /** 事前計算・キャッシュ済みの外壁入口到達距離（指定時は入口ごとの A* 再計算を省略） */
+  entryLengths?: readonly EntryReach[];
 }
 
 export interface PincerFlankGoal {
@@ -657,10 +605,11 @@ export function findRoomDoors(room: RoomDef, doors: readonly FlankDoorSample[]):
   return out;
 }
 
-function flankEntryLengths(params: PincerFlankParams): { id: string; length: number }[] | null {
+function flankEntryLengths(params: PincerFlankParams): readonly EntryReach[] | null {
+  if (params.entryLengths) return params.entryLengths;
   if (!params.bounds || !params.entries) return null;
   const from = params.flankerPos;
-  const out: { id: string; length: number }[] = [];
+  const out: EntryReach[] = [];
   for (const e of params.entries) {
     if (Math.abs(e.sillY - from.y) >= 1.1) continue;
     const length = reachableRouteLength(
@@ -685,7 +634,7 @@ function flankTargetUsable(
   params: PincerFlankParams,
   target: Vec3,
   indoorRooms: readonly RoomDef[],
-  entryLengths: { id: string; length: number }[] | null,
+  entryLengths: readonly EntryReach[] | null,
 ): boolean {
   if (!params.bounds) return true;
   const from = params.flankerPos;
@@ -756,7 +705,7 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
   const fDirX = fdx / fLen;
   const fDirZ = fdz / fLen;
   const flankerIndoor = isIndoorPoint(indoorRooms, flankerPos.x, flankerPos.z, flankerPos.y);
-  const entryLengths = flankEntryLengths(params);
+  const entryLengths = flankerIndoor ? null : flankEntryLengths(params);
   const usable = (target: Vec3): boolean => flankTargetUsable(params, target, indoorRooms, entryLengths);
 
   // Priority 1: Alternate door into playerRoom（スコア順。届かない中庭側は次のドアへ）
@@ -793,7 +742,9 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
         ranked.push({ door: d, score });
       }
       ranked.sort((a, b) => b.score - a.score || a.door.id.localeCompare(b.door.id));
-      for (const { door } of ranked) {
+      const maxDoorChecks = Math.min(ranked.length, 4);
+      for (let i = 0; i < maxDoorChecks; i++) {
+        const { door } = ranked[i]!;
         const target = altDoorTarget(door, playerRoom, colliders);
         if (!usable(target)) continue;
         return { target, kind: 'altDoor', doorId: door.id };
@@ -817,7 +768,9 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
     rankedRooms.push({ room: r, score });
   }
   rankedRooms.sort((a, b) => b.score - a.score || a.room.id.localeCompare(b.room.id));
-  for (const { room } of rankedRooms) {
+  const maxRoomChecks = Math.min(rankedRooms.length, 4);
+  for (let i = 0; i < maxRoomChecks; i++) {
+    const { room } = rankedRooms[i]!;
     const target = { x: room.x, y: room.floorY ?? 0, z: room.z };
     if (!usable(target)) continue;
     return { target, kind: 'oppositeRoom', roomId: room.id };
@@ -837,7 +790,9 @@ export function planPincerFlankGoal(params: PincerFlankParams): PincerFlankGoal 
     });
   }
   rankedStairs.sort((a, b) => b.dist - a.dist);
-  for (const stair of rankedStairs) {
+  const maxStairChecks = Math.min(rankedStairs.length, 4);
+  for (let i = 0; i < maxStairChecks; i++) {
+    const stair = rankedStairs[i]!;
     if (!usable(stair.target)) continue;
     return { target: stair.target, kind: 'altFloorStair' };
   }

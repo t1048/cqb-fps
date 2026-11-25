@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
 import { disposeObject } from '../core/dispose';
 import { t as tr } from '../core/i18n';
+import { invalidateColliderIndex, rayHitAABB, raycastColliders } from './ColliderIndex';
 import { batchStaticMeshes } from './StaticBatcher';
 import type { DoorConfig, DoorDef, MapData } from '../core/types';
 import type { InputManager } from '../core/InputManager';
@@ -17,6 +18,7 @@ const EPS = 0.01; // 度
 const SWAT_KICK_GAP_SEC = 0.48;
 /** 失敗した蹴りで扉が跳ねる角度（度）。その後、元の角度へ戻る。 */
 const SWAT_KICK_BUMP_DEG = 14;
+const NON_DOOR_COLLIDER = (c: Collider): boolean => c.kind !== 'door';
 
 /**
  * SWAT の蹴破りに必要な回数。ドア id の FNV-1a で 2 か 3 に固定する（再読込でも変わらない）。
@@ -66,6 +68,71 @@ interface DoorMaterials {
   hardware: THREE.MeshStandardMaterial;
   kickPlate: THREE.MeshStandardMaterial;
   hinge: THREE.MeshStandardMaterial;
+  transomGlass: THREE.MeshStandardMaterial;
+}
+
+interface SharedDoorResources {
+  materials: DoorMaterials;
+  leafMaterialPool: Map<string, THREE.Material>;
+}
+
+function createDoorMaterials(textures?: TextureLibrary, markShared = false): DoorMaterials {
+  const woodTex = textures?.get('doorWood') as THREE.CanvasTexture | undefined;
+  const derived = woodTex && textures?.getDerivedMaps ? textures.getDerivedMaps(woodTex) : null;
+  const glassTex = textures?.get('frostedGlass') as THREE.CanvasTexture | undefined;
+  const woodMaps = {
+    ...(woodTex ? { map: woodTex } : {}),
+    ...(derived ? { bumpMap: derived.bumpMap, bumpScale: 0.015, roughnessMap: derived.roughnessMap } : {}),
+  };
+  const mats: DoorMaterials = {
+    stile: new THREE.MeshStandardMaterial({
+      color: textures?.doorTint?.stile ?? (woodTex ? COLORS.leafStile : 0x765032),
+      roughness: 0.7,
+      metalness: 0.04,
+      ...woodMaps,
+    }),
+    recess: new THREE.MeshStandardMaterial({
+      color: textures?.doorTint?.panel ?? (woodTex ? COLORS.leafPanel : 0x5f3e25),
+      roughness: 0.7,
+      metalness: 0.04,
+      ...woodMaps,
+    }),
+    frame: new THREE.MeshStandardMaterial({
+      color: textures?.doorTint?.frame ?? (woodTex ? COLORS.frame : 0x3d2a1c),
+      roughness: 0.7,
+      metalness: 0.04,
+      ...woodMaps,
+    }),
+    hardware: new THREE.MeshStandardMaterial({
+      color: COLORS.hardware,
+      roughness: 0.32,
+      metalness: 0.78,
+    }),
+    kickPlate: new THREE.MeshStandardMaterial({
+      color: COLORS.kickPlate,
+      roughness: 0.32,
+      metalness: 0.78,
+    }),
+    hinge: new THREE.MeshStandardMaterial({
+      color: COLORS.hinge,
+      roughness: 0.32,
+      metalness: 0.78,
+    }),
+    transomGlass: new THREE.MeshStandardMaterial({
+      color: COLORS.transomGlass,
+      roughness: 0.32,
+      metalness: 0.08,
+      transparent: true,
+      opacity: 0.62,
+      ...(glassTex ? { map: glassTex } : {}),
+    }),
+  };
+  if (markShared) {
+    for (const m of Object.values(mats) as THREE.Material[]) {
+      m.userData.shared = true;
+    }
+  }
+  return mats;
 }
 
 /**
@@ -122,6 +189,7 @@ export class Door {
     storyClearance: number,
     private readonly bus: GameEventBus,
     private readonly textures?: TextureLibrary,
+    shared?: SharedDoorResources,
   ) {
     this.id = def.id;
     this.locked = def.locked;
@@ -164,10 +232,11 @@ export class Door {
       });
       this.tmp.push({ min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } });
     }
-    this.buildMesh();
-    // 扉板の部材（框・モール・金物）はピボットごとに 1〜数ドローへ統合する
-    batchStaticMeshes(this.pivot);
-    if (this.rightPivot) batchStaticMeshes(this.rightPivot);
+    const mats = shared?.materials ?? createDoorMaterials(this.textures, false);
+    this.buildMesh(mats);
+    // 扉板の部材（木部・金物）はピボットごとに高々 2 ドロー（木 1 + 金属 1）へ統合し、全ドアでマテリアルを共有する
+    batchStaticMeshes(this.pivot, 0, shared?.leafMaterialPool);
+    if (this.rightPivot) batchStaticMeshes(this.rightPivot, 0, shared?.leafMaterialPool);
     this.computeBoxes(0, this.colliders.map((c) => c.aabb));
     this.applyMesh();
   }
@@ -181,48 +250,7 @@ export class Door {
     return Math.abs(this.targetAngle - this.angle) > EPS;
   }
 
-  private createMaterials(): DoorMaterials {
-    const woodTex = this.textures?.get('doorWood');
-    const frameTex = this.textures?.get('doorFrame');
-    return {
-      stile: new THREE.MeshStandardMaterial({
-        color: this.textures?.doorTint?.stile ?? (woodTex ? COLORS.leafStile : 0x765032),
-        roughness: 0.68,
-        metalness: 0.04,
-        ...(woodTex ? { map: woodTex } : {}),
-      }),
-      recess: new THREE.MeshStandardMaterial({
-        color: this.textures?.doorTint?.panel ?? (woodTex ? COLORS.leafPanel : 0x5f3e25),
-        roughness: 0.74,
-        metalness: 0.03,
-        ...(woodTex ? { map: woodTex } : {}),
-      }),
-      frame: new THREE.MeshStandardMaterial({
-        color: this.textures?.doorTint?.frame ?? (frameTex ? COLORS.frame : 0x3d2a1c),
-        roughness: 0.72,
-        metalness: 0.05,
-        ...(frameTex ? { map: frameTex } : {}),
-      }),
-      hardware: new THREE.MeshStandardMaterial({
-        color: COLORS.hardware,
-        roughness: 0.26,
-        metalness: 0.82,
-      }),
-      kickPlate: new THREE.MeshStandardMaterial({
-        color: COLORS.kickPlate,
-        roughness: 0.34,
-        metalness: 0.74,
-      }),
-      hinge: new THREE.MeshStandardMaterial({
-        color: COLORS.hinge,
-        roughness: 0.38,
-        metalness: 0.78,
-      }),
-    };
-  }
-
-  private buildMesh(): void {
-    const mats = this.createMaterials();
+  private buildMesh(mats: DoorMaterials): void {
     this.root.name = `door:${this.id}`;
 
     // 1. 静的ドア枠・ケーシング・自動欄間（コライダなし）
@@ -230,6 +258,8 @@ export class Door {
     this.frameGroup.position.set(this.cx, this.sillY, this.cz);
     this.frameGroup.rotation.y = this.yawRad;
     this.frameGroup.name = 'door-frame';
+    this.frameGroup.updateMatrix();
+    this.frameGroup.matrixAutoUpdate = false;
     this.root.add(this.frameGroup);
 
     // 2. 左（または単開き）リーフ
@@ -245,6 +275,9 @@ export class Door {
       this.rightPivot.name = 'door-pivot-right';
       this.root.add(this.rightPivot);
     }
+
+    this.root.updateMatrix();
+    this.root.matrixAutoUpdate = false;
   }
 
   /** 静的ドア枠（縦枠ジャム・上枠ヘッダー・戸当たり・表裏ケーシング・自動欄間）を構築する。 */
@@ -262,6 +295,8 @@ export class Door {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       m.position.set(x, y, z);
       m.name = name;
+      m.updateMatrix();
+      m.matrixAutoUpdate = false;
       this.frameGroup.add(m);
     };
 
@@ -302,17 +337,8 @@ export class Door {
 
       if (glassH > 0.02) {
         const glassY = (glassBottom + glassTop) / 2;
-        const glassTex = this.textures?.get('frostedGlass');
-        const glassMat = new THREE.MeshStandardMaterial({
-          color: COLORS.transomGlass,
-          roughness: 0.32,
-          metalness: 0.08,
-          transparent: true,
-          opacity: 0.62,
-          ...(glassTex ? { map: glassTex } : {}),
-        });
-        // すりガラス調パネル
-        addBox(innerW, glassH, 0.018, 0, glassY, 0, glassMat, 'door-transom-glass');
+        // すりガラス調パネル（全ドアでマテリアル共有）
+        addBox(innerW, glassH, 0.018, 0, glassY, 0, mats.transomGlass, 'door-transom-glass');
         // 上下の細い押縁（グレージングビード）
         const beadH = Math.min(0.018, glassH * 0.2);
         addBox(innerW, beadH, 0.042, 0, glassBottom + beadH / 2, 0, mats.frame, 'door-transom-bead');
@@ -694,38 +720,18 @@ export class Door {
 
   /** レイと扉板（現在角度）の最近交点。maxDist 超過/ミスは null。 */
   raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): DoorRayHit | null {
+    const ox = origin.x;
+    const oy = origin.y;
+    const oz = origin.z;
+    const dx = dir.x;
+    const dy = dir.y;
+    const dz = dir.z;
     let best = Infinity;
     let bestIdx = -1;
     for (let i = 0; i < this.totalSegCount; i++) {
-      const a = this.colliders[i].aabb;
-      let t0 = 0;
-      let t1 = maxDist;
-      const axes: [number, number, number, number][] = [
-        [origin.x, dir.x, a.min.x, a.max.x],
-        [origin.y, dir.y, a.min.y, a.max.y],
-        [origin.z, dir.z, a.min.z, a.max.z],
-      ];
-      let hit = true;
-      for (const [o, d, mn, mx] of axes) {
-        if (Math.abs(d) < 1e-9) {
-          if (o < mn || o > mx) {
-            hit = false;
-            break;
-          }
-        } else {
-          let ta = (mn - o) / d;
-          let tb = (mx - o) / d;
-          if (ta > tb) [ta, tb] = [tb, ta];
-          t0 = Math.max(t0, ta);
-          t1 = Math.min(t1, tb);
-          if (t0 > t1) {
-            hit = false;
-            break;
-          }
-        }
-      }
-      if (hit && t0 < best) {
-        best = t0;
+      const t = rayHitAABB(ox, oy, oz, dx, dy, dz, best < maxDist ? best : maxDist, this.colliders[i]!.aabb);
+      if (t < best) {
+        best = t;
         bestIdx = i;
       }
     }
@@ -766,6 +772,7 @@ export class Door {
 interface DoorTarget {
   door: Door;
   fast: boolean;
+  distance: number;
 }
 
 /**
@@ -778,6 +785,8 @@ export class DoorSystem {
   private readonly unregister: () => void;
   private readonly eye = new THREE.Vector3();
   private readonly dir = new THREE.Vector3();
+  private readonly sharedMaterials: DoorMaterials;
+  private readonly leafMaterialPool = new Map<string, THREE.Material>();
   private disposed = false;
 
   constructor(
@@ -794,16 +803,23 @@ export class DoorSystem {
     private readonly playerFaction: 'swat' | 'suspect' = 'swat',
   ) {
     this.root.name = 'doors';
+    this.sharedMaterials = createDoorMaterials(this.textures, true);
+    const shared: SharedDoorResources = {
+      materials: this.sharedMaterials,
+      leafMaterialPool: this.leafMaterialPool,
+    };
     const clearance = map.storyHeight ?? map.ceilingHeight;
     for (const def of map.doors) {
       const openingHeight = resolveDoorOpeningHeight(def, map, clearance);
-      const door = new Door(def, cfg, openingHeight, bus, this.textures);
+      const door = new Door(def, cfg, openingHeight, bus, this.textures, shared);
       this.doors.push(door);
       this.root.add(door.root);
       for (const c of door.colliders) colliders.push(c);
     }
     // 動かないドア枠は全ドア分をまとめて統合（扉板のピボット配下は除外）
     batchStaticMeshes(this.root, { skip: (o) => o.name.startsWith('door-pivot'), cellSize: 16 });
+    this.root.updateMatrix();
+    this.root.matrixAutoUpdate = false;
     this.unregister = interaction.register<DoorTarget>({
       id: 'door',
       priority: 200,
@@ -836,14 +852,24 @@ export class DoorSystem {
     const cp = Math.cos(p.pitchRad);
     this.dir.set(-Math.sin(p.yawRad) * cp, Math.sin(p.pitchRad), -Math.cos(p.yawRad) * cp);
 
+    const ex = this.eye.x;
+    const ey = this.eye.y;
+    const ez = this.eye.z;
+
     // 視線が現在の扉板に当たる最近の扉だけ。自由端（両開きは中央合わせ目）付近ならノブ操作。開口の空きは対象にしない。
     let best: DoorTarget | null = null;
     let bestDist = Infinity;
     for (const door of this.doors) {
-      const hit = door.raycast(this.eye, this.dir, range);
+      const maxR = range + door.width * 1.5 + 0.5;
+      const dx = ex - door.centerX;
+      const dz = ez - door.centerZ;
+      if (dx * dx + dz * dz > maxR * maxR) continue;
+      if (ey + range < door.sillY || ey - range > door.sillY + door.height) continue;
+
+      const hit = door.raycast(this.eye, this.dir, bestDist < range ? bestDist : range);
       if (hit && hit.distance < bestDist) {
         bestDist = hit.distance;
-        best = { door, fast: hit.inKnobZone };
+        best = { door, fast: hit.inKnobZone, distance: hit.distance };
       }
     }
     return best;
@@ -853,16 +879,9 @@ export class DoorSystem {
   aimed(orderRange = 6): Door | null {
     const target = this.resolveTarget(orderRange);
     if (!target) return null;
-    const ray = new THREE.Ray(this.eye, this.dir);
-    const hit = new THREE.Vector3();
-    const box = new THREE.Box3();
-    const distance = target.door.raycast(this.eye, this.dir, orderRange)!.distance;
-    for (const collider of this.colliders) {
-      if (collider.kind === 'door') continue;
-      const { min, max } = collider.aabb;
-      box.min.set(min.x, min.y, min.z);
-      box.max.set(max.x, max.y, max.z);
-      if (ray.intersectBox(box, hit) && hit.distanceTo(this.eye) < distance - 0.01) return null;
+    const maxCheck = target.distance - 0.01;
+    if (maxCheck > 0 && raycastColliders(this.colliders, this.eye, this.dir, maxCheck, NON_DOOR_COLLIDER) < maxCheck) {
+      return null;
     }
     return target.door;
   }
@@ -890,8 +909,12 @@ export class DoorSystem {
       }
       d.dispose();
     }
+    invalidateColliderIndex(this.colliders);
     this.doors.length = 0;
     disposeObject(this.root);
+    for (const m of Object.values(this.sharedMaterials) as THREE.Material[]) m.dispose();
+    for (const m of this.leafMaterialPool.values()) m.dispose();
+    this.leafMaterialPool.clear();
   }
 }
 

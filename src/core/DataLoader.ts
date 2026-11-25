@@ -649,13 +649,23 @@ export function modularDoorLeafHeight(doorConfig: DoorConfig | undefined): numbe
   return doorConfig.height;
 }
 
+const verifiedModularTemplates = new WeakMap<ModularGeneratorTemplate, Set<number>>();
+
 /**
  * モジュラーテンプレートの最小構成（フォールバック）成立検証（設計書 §3.2-5 / BC-11）。
  * 重み > 0 の全階層プロファイルで最小構成器を実行し、不成立なら DataError。
+ * 同一テンプレート・扉高の組み合わせはセッション内で 1 回だけ検証する。
  */
 export function verifyModularFallback(tpl: ModularGeneratorTemplate, doorLeafHeight: number): void {
+  let heights = verifiedModularTemplates.get(tpl);
+  if (heights?.has(doorLeafHeight)) return;
   // 不成立時は生成器側が DataError（FallbackInfeasibleError は DataError の派生）を直接送出する
   verifyFallbackFeasibility(tpl, doorLeafHeight);
+  if (!heights) {
+    heights = new Set<number>();
+    verifiedModularTemplates.set(tpl, heights);
+  }
+  heights.add(doorLeafHeight);
 }
 
 function int(r: Reader, o: Record<string, unknown>, key: string, path: string, min: number, max: number): number {
@@ -1534,20 +1544,47 @@ export function validateSquad(raw: unknown, source = 'squad'): SquadConfig {
   };
 }
 
-async function fetchJson(url: string): Promise<unknown> {
-  let res: Response;
-  try {
-    // data/*.json はファイル名にハッシュが付かないため、デプロイ後に古いキャッシュを掴まないよう毎回再検証する
-    res = await fetch(url, { cache: 'no-cache' });
-  } catch (err) {
-    throw new DataError(url, '', `取得に失敗しました: ${String(err)}`);
-  }
-  if (!res.ok) throw new DataError(url, '', `HTTP ${res.status} ${res.statusText}`);
-  try {
-    return await res.json();
-  } catch (err) {
-    throw new DataError(url, '', `JSON として解析できません: ${String(err)}`);
-  }
+const jsonCache = new Map<string, Promise<unknown>>();
+const staticConfigCache = new Map<string, Promise<unknown>>();
+const templateCache = new Map<string, Promise<AnyGeneratorTemplate>>();
+
+function fetchJson(url: string): Promise<unknown> {
+  const cached = jsonCache.get(url);
+  if (cached) return cached;
+  const promise = (async (): Promise<unknown> => {
+    let res: Response;
+    try {
+      // セッション初回は no-cache で再検証し、同一セッション内のリトライ・リロールではキャッシュを共有する
+      res = await fetch(url, { cache: 'no-cache' });
+    } catch (err) {
+      throw new DataError(url, '', `取得に失敗しました: ${String(err)}`);
+    }
+    if (!res.ok) throw new DataError(url, '', `HTTP ${res.status} ${res.statusText}`);
+    try {
+      return await res.json();
+    } catch (err) {
+      throw new DataError(url, '', `JSON として解析できません: ${String(err)}`);
+    }
+  })().catch((err: unknown) => {
+    jsonCache.delete(url);
+    throw err;
+  });
+  jsonCache.set(url, promise);
+  return promise;
+}
+
+function loadCachedStatic<T>(path: string, validate: (raw: unknown, source: string) => T): Promise<T> {
+  const url = dataUrl(path);
+  const hit = staticConfigCache.get(url) as Promise<T> | undefined;
+  if (hit) return hit;
+  const promise = fetchJson(url)
+    .then((raw) => validate(raw, url))
+    .catch((err: unknown) => {
+      staticConfigCache.delete(url);
+      throw err;
+    });
+  staticConfigCache.set(url, promise);
+  return promise;
 }
 
 function dataUrl(path: string): string {
@@ -1555,44 +1592,45 @@ function dataUrl(path: string): string {
 }
 
 export const DataLoader = {
-  async loadStages(): Promise<StageEntry[]> {
-    const url = dataUrl('stages.json');
-    return validateStages(await fetchJson(url), url);
+  loadStages(): Promise<StageEntry[]> {
+    return loadCachedStatic('stages.json', validateStages);
   },
-  async loadWeapons(): Promise<WeaponDef[]> {
-    const url = dataUrl('weapons.json');
-    return validateWeapons(await fetchJson(url), url);
+  loadWeapons(): Promise<WeaponDef[]> {
+    return loadCachedStatic('weapons.json', validateWeapons);
   },
-  async loadAIProfiles(): Promise<AIProfile[]> {
-    const url = dataUrl('ai_profiles.json');
-    return validateAIProfiles(await fetchJson(url), url);
+  loadAIProfiles(): Promise<AIProfile[]> {
+    return loadCachedStatic('ai_profiles.json', validateAIProfiles);
   },
-  async loadPlayerConfig(): Promise<PlayerConfig> {
-    const url = dataUrl('player.json');
-    return validatePlayerConfig(await fetchJson(url), url);
+  loadPlayerConfig(): Promise<PlayerConfig> {
+    return loadCachedStatic('player.json', validatePlayerConfig);
   },
-  async loadDoorConfig(): Promise<DoorConfig> {
-    const url = dataUrl('doors.json');
-    return validateDoorConfig(await fetchJson(url), url);
+  loadDoorConfig(): Promise<DoorConfig> {
+    return loadCachedStatic('doors.json', validateDoorConfig);
   },
-  async loadPerception(): Promise<PerceptionConfig> {
-    const url = dataUrl('perception.json');
-    return validatePerception(await fetchJson(url), url);
+  loadPerception(): Promise<PerceptionConfig> {
+    return loadCachedStatic('perception.json', validatePerception);
   },
-  async loadRoe(): Promise<RoeConfig> {
-    const url = dataUrl('roe.json');
-    return validateRoe(await fetchJson(url), url);
+  loadRoe(): Promise<RoeConfig> {
+    return loadCachedStatic('roe.json', validateRoe);
   },
-  async loadSquad(): Promise<SquadConfig> {
-    const url = dataUrl('squad.json');
-    return validateSquad(await fetchJson(url), url);
+  loadSquad(): Promise<SquadConfig> {
+    return loadCachedStatic('squad.json', validateSquad);
   },
-  async loadGeneratorTemplate(generatorId: string): Promise<AnyGeneratorTemplate> {
+  loadGeneratorTemplate(generatorId: string): Promise<AnyGeneratorTemplate> {
     if (!STAGE_ID_RE.test(generatorId)) {
-      throw new DataError('generator', 'generatorId', `不正な生成器ID "${generatorId}" です`);
+      return Promise.reject(new DataError('generator', 'generatorId', `不正な生成器ID "${generatorId}" です`));
     }
+    const cached = templateCache.get(generatorId);
+    if (cached) return cached;
     const url = dataUrl(`generators/${generatorId}.json`);
-    return validateGeneratorTemplate(await fetchJson(url), url);
+    const promise = fetchJson(url)
+      .then((raw) => validateGeneratorTemplate(raw, url))
+      .catch((err: unknown) => {
+        templateCache.delete(generatorId);
+        throw err;
+      });
+    templateCache.set(generatorId, promise);
+    return promise;
   },
   /**
    * ステージのマップを取得。generator テンプレートと seed から間取りを生成し、validateMap を通す。

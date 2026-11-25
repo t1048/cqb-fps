@@ -2,7 +2,7 @@ import type { Cell } from '../ai/Squad';
 import type { BoxDef, MapData } from '../core/types';
 import type { PlayerController } from '../player/PlayerController';
 import type { DoorStage, DoorSystem } from '../world/Door';
-import { t, tRoomName } from '../core/i18n';
+import { getLocale, t, tRoomName } from '../core/i18n';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
@@ -143,6 +143,16 @@ interface Bounds2D {
   maxZ: number;
 }
 
+interface PlanTransform {
+  cw: number;
+  ch: number;
+  scale: number;
+  toX: (wx: number) => number;
+  toY: (wz: number) => number;
+}
+
+const mapBoundsCache = new WeakMap<MapData, Bounds2D>();
+
 function boxNearFloor(box: BoxDef, floorY: number | undefined): boolean {
   if (floorY === undefined) return true;
   const base = box.y ?? 0;
@@ -163,6 +173,8 @@ function expandBoxBounds(bounds: Bounds2D, box: BoxDef): void {
 }
 
 function computeMapBounds(map: MapData): Bounds2D {
+  const cached = mapBoundsCache.get(map);
+  if (cached) return cached;
   const bounds: Bounds2D = {
     minX: -map.floor.width / 2,
     maxX: map.floor.width / 2,
@@ -177,7 +189,26 @@ function computeMapBounds(map: MapData): Bounds2D {
     if (r.z - r.depth / 2 < bounds.minZ) bounds.minZ = r.z - r.depth / 2;
     if (r.z + r.depth / 2 > bounds.maxZ) bounds.maxZ = r.z + r.depth / 2;
   }
+  mapBoundsCache.set(map, bounds);
   return bounds;
+}
+
+function computePlanTransform(map: MapData, cw: number, ch: number, pad: number): PlanTransform {
+  const bounds = computeMapBounds(map);
+  const worldW = Math.max(0.1, bounds.maxX - bounds.minX);
+  const worldD = Math.max(0.1, bounds.maxZ - bounds.minZ);
+  const availW = Math.max(1, cw - pad * 2);
+  const availH = Math.max(1, ch - pad * 2);
+  const scale = Math.min(availW / worldW, availH / worldD);
+  const offsetX = (cw - worldW * scale) / 2;
+  const offsetY = (ch - worldD * scale) / 2;
+  return {
+    cw,
+    ch,
+    scale,
+    toX: (wx: number): number => offsetX + (wx - bounds.minX) * scale,
+    toY: (wz: number): number => offsetY + (wz - bounds.minZ) * scale,
+  };
 }
 
 function drawRotatedBox(
@@ -206,22 +237,16 @@ function drawRotatedBox(
   ctx.restore();
 }
 
-/**
- * 2D 間取り図レンダラー（ブリーフィング画面・ゲーム内ミニマップで共有）。
- * 座標規約: +X が右、-Z が上（北上固定）、アスペクト比維持で中央配置。
- * 戦術的制約: 未発見の容疑者・民間人は描画しない。
- */
-export function drawFloorPlan(
+/** 静的な間取りレイヤ（背景・2m グリッド・部屋・遮蔽物・階段・壁・静的部屋名ラベル）を描画する。 */
+function drawStaticFloorPlan(
   ctx: CanvasRenderingContext2D,
   map: MapData,
-  options: DrawFloorPlanOptions = {},
+  xf: PlanTransform,
+  options: DrawFloorPlanOptions,
 ): void {
-  const cw = options.width ?? ctx.canvas.width;
-  const ch = options.height ?? ctx.canvas.height;
+  const { cw, ch, scale, toX, toY } = xf;
   const compact = options.compact ?? false;
-  const pad = options.padding ?? (compact ? 12 : 24);
   const showRoomLabels = options.showRoomLabels ?? true;
-  const showMarkerLabels = options.showMarkerLabels ?? true;
 
   if (options.background) {
     ctx.fillStyle = options.background;
@@ -229,18 +254,6 @@ export function drawFloorPlan(
   } else {
     ctx.clearRect(0, 0, cw, ch);
   }
-
-  const bounds = computeMapBounds(map);
-  const worldW = Math.max(0.1, bounds.maxX - bounds.minX);
-  const worldD = Math.max(0.1, bounds.maxZ - bounds.minZ);
-  const availW = Math.max(1, cw - pad * 2);
-  const availH = Math.max(1, ch - pad * 2);
-  const scale = Math.min(availW / worldW, availH / worldD);
-  const offsetX = (cw - worldW * scale) / 2;
-  const offsetY = (ch - worldD * scale) / 2;
-
-  const toX = (wx: number): number => offsetX + (wx - bounds.minX) * scale;
-  const toY = (wz: number): number => offsetY + (wz - bounds.minZ) * scale;
 
   // 床ベース
   const fx = toX(-map.floor.width / 2);
@@ -292,11 +305,6 @@ export function drawFloorPlan(
   });
 
   // 遮蔽物
-  for (const cell of options.coverage ?? []) {
-    if (!cell.seen || Math.abs(cell.y-(options.floorY ?? 0))>0.6) continue;
-    ctx.fillStyle = cell.visible ? 'rgba(89,215,163,0.55)' : 'rgba(89,215,163,0.22)';
-    ctx.fillRect(toX(cell.x)-scale*0.25,toY(cell.z)-scale*0.25,scale*0.5,scale*0.5);
-  }
   for (const cover of map.covers) {
     if (!boxNearFloor(cover, options.floorY)) continue;
     drawRotatedBox(ctx, cover, toX, toY, scale, 'rgba(150, 118, 86, 0.72)', 'rgba(205, 174, 138, 0.55)');
@@ -340,6 +348,86 @@ export function drawFloorPlan(
   for (const wall of map.walls) {
     if (!boxNearFloor(wall, options.floorY)) continue;
     drawRotatedBox(ctx, wall, toX, toY, scale, '#9db2c8');
+  }
+
+  // 部屋名ラベル（壁や遮蔽の上から読みやすく描画。階層一致のみ）
+  if (showRoomLabels) {
+    ctx.save();
+    ctx.font = compact ? '600 9px sans-serif' : '600 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const room of map.rooms) {
+      if (options.floorY !== undefined && Math.abs((room.floorY ?? 0) - options.floorY) > 1.3) continue;
+      const cx = toX(room.x);
+      const cy = toY(room.z);
+      const label = tRoomName(room.name);
+      ctx.fillStyle = 'rgba(8, 12, 18, 0.65)';
+      ctx.fillText(label, cx + 1, cy + 1);
+      ctx.fillStyle = compact ? 'rgba(210, 228, 245, 0.78)' : 'rgba(224, 238, 252, 0.92)';
+      ctx.fillText(label, cx, cy);
+    }
+    ctx.restore();
+  }
+
+  // 侵入地点マーカー（ブリーフィング用）
+  if (options.showSpawn) {
+    const sx = toX(map.playerSpawn.x);
+    const sy = toY(map.playerSpawn.z);
+    const yawRad = -map.playerSpawn.yaw * DEG2RAD;
+    const fxDir = -Math.sin(yawRad);
+    const fzDir = -Math.cos(yawRad);
+    const heading = Math.atan2(fzDir, fxDir);
+
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(heading);
+    ctx.fillStyle = '#56c8d8';
+    ctx.strokeStyle = '#0c1520';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-6, -5.5);
+    ctx.lineTo(-3.5, 0);
+    ctx.lineTo(-6, 5.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    if (!compact) {
+      ctx.save();
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#7ce2f0';
+      ctx.fillText(t('突入地点', 'Entry Point'), sx, sy + 9);
+      ctx.restore();
+    }
+  }
+}
+
+/** 動的な間取りレイヤ（制圧セル・ドア・ウェイポイント・隊員・プレイヤー視界コーン＆矢印・方位）を描画する。 */
+function drawDynamicFloorPlan(
+  ctx: CanvasRenderingContext2D,
+  map: MapData,
+  xf: PlanTransform,
+  options: DrawFloorPlanOptions,
+): void {
+  const { cw, scale, toX, toY } = xf;
+  const compact = options.compact ?? false;
+  const showMarkerLabels = options.showMarkerLabels ?? true;
+
+  // 視認済み制圧セル
+  if (options.coverage && options.coverage.length > 0) {
+    const fy = options.floorY ?? 0;
+    const halfCell = scale * 0.25;
+    const fullCell = scale * 0.5;
+    for (let i = 0; i < options.coverage.length; i++) {
+      const cell = options.coverage[i]!;
+      if (!cell.seen || Math.abs(cell.y - fy) > 0.6) continue;
+      ctx.fillStyle = cell.visible ? 'rgba(89,215,163,0.48)' : 'rgba(89,215,163,0.20)';
+      ctx.fillRect(toX(cell.x) - halfCell, toY(cell.z) - halfCell, fullCell, fullCell);
+    }
   }
 
   // ドア（開閉段階・施錠状態を色と角度で表現）
@@ -475,25 +563,6 @@ export function drawFloorPlan(
     ctx.restore();
   }
 
-  // 部屋名ラベル（壁や遮蔽の上から読みやすく描画。階層一致のみ）
-  if (showRoomLabels) {
-    ctx.save();
-    ctx.font = compact ? '600 9px sans-serif' : '600 12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (const room of map.rooms) {
-      if (options.floorY !== undefined && Math.abs((room.floorY ?? 0) - options.floorY) > 1.3) continue;
-      const cx = toX(room.x);
-      const cy = toY(room.z);
-      const label = tRoomName(room.name);
-      ctx.fillStyle = 'rgba(8, 12, 18, 0.65)';
-      ctx.fillText(label, cx + 1, cy + 1);
-      ctx.fillStyle = compact ? 'rgba(210, 228, 245, 0.78)' : 'rgba(224, 238, 252, 0.92)';
-      ctx.fillText(label, cx, cy);
-    }
-    ctx.restore();
-  }
-
   // 指定位置・警戒ウェイポイント
   if (options.waypoints) {
     for (const wp of options.waypoints) {
@@ -555,42 +624,6 @@ export function drawFloorPlan(
     }
   }
 
-  // 侵入地点マーカー（ブリーフィング用）
-  if (options.showSpawn) {
-    const sx = toX(map.playerSpawn.x);
-    const sy = toY(map.playerSpawn.z);
-    const yawRad = -map.playerSpawn.yaw * DEG2RAD;
-    const fxDir = -Math.sin(yawRad);
-    const fzDir = -Math.cos(yawRad);
-    const heading = Math.atan2(fzDir, fxDir);
-
-    ctx.save();
-    ctx.translate(sx, sy);
-    ctx.rotate(heading);
-    ctx.fillStyle = '#56c8d8';
-    ctx.strokeStyle = '#0c1520';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(9, 0);
-    ctx.lineTo(-6, -5.5);
-    ctx.lineTo(-3.5, 0);
-    ctx.lineTo(-6, 5.5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-
-    if (!compact) {
-      ctx.save();
-      ctx.font = 'bold 10px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillStyle = '#7ce2f0';
-      ctx.fillText(t('突入地点', 'Entry Point'), sx, sy + 9);
-      ctx.restore();
-    }
-  }
-
   // プレイヤー位置＋視界コーン（ミニマップ用）
   if (options.player) {
     const px = toX(options.player.x);
@@ -641,6 +674,25 @@ export function drawFloorPlan(
 }
 
 /**
+ * 2D 間取り図レンダラー（ブリーフィング画面・ゲーム内ミニマップで共有）。
+ * 座標規約: +X が右、-Z が上（北上固定）、アスペクト比維持で中央配置。
+ * 戦術的制約: 未発見の容疑者・民間人は描画しない。
+ */
+export function drawFloorPlan(
+  ctx: CanvasRenderingContext2D,
+  map: MapData,
+  options: DrawFloorPlanOptions = {},
+): void {
+  const cw = options.width ?? ctx.canvas.width;
+  const ch = options.height ?? ctx.canvas.height;
+  const compact = options.compact ?? false;
+  const pad = options.padding ?? (compact ? 12 : 24);
+  const xf = computePlanTransform(map, cw, ch, pad);
+  drawStaticFloorPlan(ctx, map, xf, options);
+  drawDynamicFloorPlan(ctx, map, xf, options);
+}
+
+/**
  * 画面左上のリアルタイム戦術ミニマップ。
  * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
  * プレイ中は M キーで「左上ミニマップ（名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
@@ -652,8 +704,13 @@ export class Minimap {
   private readonly root = document.createElement('div');
   private readonly canvas = document.createElement('canvas');
   private readonly ctx: CanvasRenderingContext2D | null;
+  private staticCanvas: HTMLCanvasElement | null = null;
+  private staticCtx: CanvasRenderingContext2D | null = null;
+  private staticKey = '';
+  private staticXf: PlanTransform | null = null;
   private readonly doorStates = new Map<string, FloorPlanDoorState>();
-  private readonly dpr = Math.min(window.devicePixelRatio || 1, 2);
+  private readonly playerState: FloorPlanPlayerState = { x: 0, z: 0, yawRad: 0 };
+  private currentDpr = 1;
   private active = false;
   private expanded = false;
   private viewW = MINIMAP_SIZE;
@@ -661,6 +718,8 @@ export class Minimap {
   private readonly keyHint: HTMLElement;
   private disposed = false;
   private floorTitle: HTMLElement | null = null;
+  private lastFloorTitle = '';
+  private lastHintText = '';
   private readonly floorLevels: number[];
   private activeFloorY: number | undefined;
   private redrawIn = 0;
@@ -680,7 +739,9 @@ export class Minimap {
     header.style.cssText =
       'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font:600 10px monospace;letter-spacing:0.06em;color:rgba(188,214,240,0.85)';
     const title = document.createElement('span');
-    title.textContent = t('間取り', 'FLOOR PLAN');
+    const initTitle = t('間取り', 'FLOOR PLAN');
+    title.textContent = initTitle;
+    this.lastFloorTitle = initTitle;
     this.floorTitle = title;
     const key = document.createElement('span');
     key.textContent = '[M]';
@@ -701,6 +762,10 @@ export class Minimap {
   /** ミニマップ / 全画面の見た目とキャンバス解像度を現在のモードに合わせる */
   private applyLayout(): void {
     const display = this.active ? 'block' : 'none';
+    const dpr = this.expanded
+      ? Math.min(window.devicePixelRatio || 1, 1.25)
+      : Math.min(window.devicePixelRatio || 1, 2);
+    this.currentDpr = dpr;
     if (this.expanded) {
       const header = 22;
       const margin = 24;
@@ -709,21 +774,26 @@ export class Minimap {
       this.root.style.cssText =
         `position:fixed;inset:${margin}px;z-index:6;pointer-events:none;background:rgba(6,10,16,0.35);border:1px solid rgba(120,155,195,0.4);border-radius:8px;padding:8px;box-sizing:border-box;display:${display}`;
       this.canvas.style.opacity = '0.72';
-      this.keyHint.textContent = t('[M] ミニマップに戻す', '[M] Minimap');
+      const hint = t('[M] ミニマップに戻す', '[M] Minimap');
+      this.keyHint.textContent = hint;
+      this.lastHintText = hint;
     } else {
       this.viewW = MINIMAP_SIZE;
       this.viewH = MINIMAP_SIZE;
       this.root.style.cssText =
         `position:fixed;top:12px;left:12px;z-index:5;pointer-events:none;background:rgba(10,14,20,0.78);border:1px solid rgba(120,155,195,0.45);border-radius:6px;padding:6px;box-shadow:0 2px 10px rgba(0,0,0,0.45);display:${display}`;
       this.canvas.style.opacity = '1';
-      this.keyHint.textContent = t('[M] 拡大', '[M] Expand');
+      const hint = t('[M] 拡大', '[M] Expand');
+      this.keyHint.textContent = hint;
+      this.lastHintText = hint;
     }
-    this.canvas.width = Math.round(this.viewW * this.dpr);
-    this.canvas.height = Math.round(this.viewH * this.dpr);
+    this.canvas.width = Math.round(this.viewW * dpr);
+    this.canvas.height = Math.round(this.viewH * dpr);
     this.canvas.style.display = 'block';
     this.canvas.style.width = `${this.viewW}px`;
     this.canvas.style.height = `${this.viewH}px`;
     this.canvas.style.borderRadius = '3px';
+    this.staticKey = '';
   }
 
   private onResize = (): void => {
@@ -762,49 +832,108 @@ export class Minimap {
     this.render();
   }
 
+  private ensureStaticLayer(floorY: number): PlanTransform {
+    const pad = this.expanded ? 24 : 10;
+    const key = `${floorY}|${this.viewW}|${this.viewH}|${this.expanded ? 1 : 0}|${getLocale()}`;
+    if (key === this.staticKey && this.staticXf) return this.staticXf;
+
+    const xf = computePlanTransform(this.map, this.viewW, this.viewH, pad);
+    this.staticXf = xf;
+    this.staticCanvas ??= document.createElement('canvas');
+    this.staticCtx ??= this.staticCanvas.getContext('2d');
+    this.staticCanvas.width = this.canvas.width;
+    this.staticCanvas.height = this.canvas.height;
+    if (this.staticCtx) {
+      this.staticCtx.save();
+      this.staticCtx.setTransform(this.currentDpr, 0, 0, this.currentDpr, 0, 0);
+      drawStaticFloorPlan(this.staticCtx, this.map, xf, {
+        width: this.viewW,
+        height: this.viewH,
+        padding: pad,
+        showRoomLabels: this.expanded,
+        showSpawn: false,
+        compact: !this.expanded,
+        floorY,
+      });
+      this.staticCtx.restore();
+      this.staticKey = key;
+    }
+    return xf;
+  }
+
   private render(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    this.doorStates.clear();
     for (const d of this.doors.doors) {
-      this.doorStates.set(d.id, {
-        id: d.id,
-        angle: d.angle,
-        maxAngle: d.maxAngle,
-        stage: d.stage,
-        locked: d.locked,
-      });
+      let st = this.doorStates.get(d.id);
+      if (!st) {
+        st = {
+          id: d.id,
+          angle: d.angle,
+          maxAngle: d.maxAngle,
+          stage: d.stage,
+          locked: d.locked,
+        };
+        this.doorStates.set(d.id, st);
+      } else {
+        st.angle = d.angle;
+        st.maxAngle = d.maxAngle;
+        st.stage = d.stage;
+        st.locked = d.locked;
+      }
     }
     const floor = resolveActiveFloor(this.player.position.y, this.floorLevels, this.activeFloorY);
     this.activeFloorY = floor.floorY;
+    const xf = this.ensureStaticLayer(floor.floorY);
+    const pad = this.expanded ? 24 : 10;
+    this.playerState.x = this.player.position.x;
+    this.playerState.z = this.player.position.z;
+    this.playerState.yawRad = this.player.yawRad;
+
     ctx.save();
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    drawFloorPlan(ctx, this.map, {
+    ctx.setTransform(this.currentDpr, 0, 0, this.currentDpr, 0, 0);
+    if (this.staticCanvas && this.staticCtx && typeof ctx.drawImage === 'function') {
+      ctx.clearRect(0, 0, this.viewW, this.viewH);
+      ctx.drawImage(this.staticCanvas, 0, 0, this.viewW, this.viewH);
+    } else {
+      drawStaticFloorPlan(ctx, this.map, xf, {
+        width: this.viewW,
+        height: this.viewH,
+        padding: pad,
+        showRoomLabels: this.expanded,
+        showSpawn: false,
+        compact: !this.expanded,
+        floorY: floor.floorY,
+      });
+    }
+    drawDynamicFloorPlan(ctx, this.map, xf, {
       width: this.viewW,
       height: this.viewH,
-      padding: this.expanded ? 24 : 10,
-      showRoomLabels: this.expanded,
+      padding: pad,
       showMarkerLabels: this.expanded,
-      showSpawn: false,
       compact: !this.expanded,
       coverage: this.coverage,
       doors: this.doorStates,
       floorY: floor.floorY,
       allies: this.getAllies?.(),
       waypoints: this.getWaypoints?.(),
-      player: {
-        x: this.player.position.x,
-        z: this.player.position.z,
-        yawRad: this.player.yawRad,
-      },
+      player: this.playerState,
     });
     ctx.restore();
+
     if (this.floorTitle) {
       const base = t('間取り', 'FLOOR PLAN');
-      this.floorTitle.textContent = this.floorLevels.length > 1 ? `${base} ${floor.label}` : base;
+      const titleText = this.floorLevels.length > 1 ? `${base} ${floor.label}` : base;
+      if (titleText !== this.lastFloorTitle) {
+        this.lastFloorTitle = titleText;
+        this.floorTitle.textContent = titleText;
+      }
     }
     const hint = this.expanded ? t('[M] ミニマップに戻す', '[M] Minimap') : t('[M] 拡大', '[M] Expand');
-    if (this.keyHint.textContent !== hint) this.keyHint.textContent = hint;
+    if (hint !== this.lastHintText) {
+      this.lastHintText = hint;
+      this.keyHint.textContent = hint;
+    }
   }
 
   dispose(): void {
@@ -813,6 +942,14 @@ export class Minimap {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('resize', this.onResize);
     this.doorStates.clear();
+    this.staticKey = '';
+    this.staticXf = null;
+    if (this.staticCanvas) {
+      this.staticCanvas.width = 0;
+      this.staticCanvas.height = 0;
+      this.staticCanvas = null;
+      this.staticCtx = null;
+    }
     this.root.remove();
   }
 }

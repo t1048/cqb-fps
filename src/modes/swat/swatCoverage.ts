@@ -7,6 +7,7 @@ import type { FriendlyPos } from '../../ai/cqbEntry';
 import type { EntryPortal } from '../../ai/SwatTactics';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
+import type { AABB } from '../../world/WorldBuilder';
 import type { SwatHunter } from './SwatHunter';
 import {
   COVER_CELL,
@@ -40,7 +41,17 @@ export class SwatCoverage {
   /** pickCell 中に hunt へ切り替えたい隊員（sweep 更新中の再入を避けるため次フレームで遷移） */
   private readonly pendingHunt = new Set<SwatHunter>();
   private cells: CoverCell[] | null = null;
-  private coverCd = 0;
+  private readonly cellsByRoom = new Map<string, CoverCell[]>();
+  private readonly cellsByZone = new Map<string, CoverCell[]>();
+  private readonly touchedRooms = new Set<string>();
+  private readonly takenScratch: CoverCell[] = [];
+  private readonly otherPosPool: FriendlyPos[] = [];
+  private readonly otherPosOut: FriendlyPos[] = [];
+  private readonly aabbScratch: AABB = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+  private readonly eyeTmp: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly cellPtTmp: Vec3 = { x: 0, y: 0, z: 0 };
+  private scanBudget = 2;
+  private scanCursor = 0;
   private droneCd = 0;
   private readonly ray = new THREE.Ray();
   private readonly box = new THREE.Box3();
@@ -53,13 +64,25 @@ export class SwatCoverage {
   }
 
   tickCoverage(dt: number, started: boolean): void {
-    this.coverCd -= dt;
-    if (started && this.coverCd <= 0) {
-      this.coverCd = COVER_TICK;
-      for (const h of this.host.hunters) {
-        if (h.alive && h.state !== 'staging' && h.blindLeft <= 0) this.scanCoverage(h);
+    if (!started) return;
+    const hunters = this.host.hunters;
+    const n = hunters.length;
+    if (n === 0) return;
+    this.scanBudget = Math.min(n, this.scanBudget + (dt * n) / COVER_TICK);
+    const toVisit = Math.min(n, Math.floor(this.scanBudget));
+    if (toVisit <= 0) return;
+    let scanned = 0;
+    let visited = 0;
+    while (visited < toVisit && scanned < 2) {
+      if (this.scanCursor >= n) this.scanCursor = 0;
+      const h = hunters[this.scanCursor++]!;
+      visited++;
+      if (h.alive && h.state !== 'staging' && h.blindLeft <= 0) {
+        this.scanCoverage(h);
+        scanned++;
       }
     }
+    this.scanBudget -= visited;
   }
 
   flushPendingHunt(): void {
@@ -73,17 +96,40 @@ export class SwatCoverage {
   coverCells(): CoverCell[] {
     if (this.cells) return this.cells;
     const out: CoverCell[] = [];
+    this.cellsByRoom.clear();
+    this.cellsByZone.clear();
     for (const r of this.host.rooms) {
       const fy = r.floorY ?? 0;
       const nx = Math.max(1, Math.round((r.width - 0.8) / COVER_CELL));
       const nz = Math.max(1, Math.round((r.depth - 0.8) / COVER_CELL));
+      let roomBucket = this.cellsByRoom.get(r.id);
+      if (!roomBucket) {
+        roomBucket = [];
+        this.cellsByRoom.set(r.id, roomBucket);
+      }
+      let roomZoneBucket = this.cellsByZone.get(r.id);
+      if (!roomZoneBucket) {
+        roomZoneBucket = [];
+        this.cellsByZone.set(r.id, roomZoneBucket);
+      }
       for (let i = 0; i < nx; i++) {
         for (let j = 0; j < nz; j++) {
           const x = r.x - r.width / 2 + 0.4 + ((i + 0.5) * (r.width - 0.8)) / nx;
           const z = r.z - r.depth / 2 + 0.4 + ((j + 0.5) * (r.depth - 0.8)) / nz;
           if (blockedAtFiltered(this.host.d.colliders, x, z, 0.3, fy)) continue;
           const zone = this.indoorRoomAt(x, z, fy)?.id ?? r.id;
-          out.push({ x, y: fy, z, room: r.id, seen: false, bad: false, zone });
+          const cell: CoverCell = { x, y: fy, z, room: r.id, seen: false, bad: false, zone };
+          out.push(cell);
+          roomBucket.push(cell);
+          roomZoneBucket.push(cell);
+          if (zone !== r.id) {
+            let zb = this.cellsByZone.get(zone);
+            if (!zb) {
+              zb = [];
+              this.cellsByZone.set(zone, zb);
+            }
+            zb.push(cell);
+          }
         }
       }
     }
@@ -113,32 +159,51 @@ export class SwatCoverage {
     const allowedRoom = here?.id ?? nearSillRoom;
     if (!allowedRoom) return;
 
-    const cells = this.coverCells();
-    const eye = { x: h.body.px, y: h.body.footY + 1.5, z: h.body.pz };
+    this.coverCells();
+    const roomCells = this.cellsByZone.get(allowedRoom);
+    if (!roomCells || roomCells.length === 0) return;
+
+    const eye = this.eyeTmp;
+    eye.x = h.body.px;
+    eye.y = h.body.footY + 1.5;
+    eye.z = h.body.pz;
     const fx = -Math.sin(h.body.yawRad);
     const fz = -Math.cos(h.body.yawRad);
     const cosHalf = Math.cos((COVER_FOV_DEG / 2) * DEG2RAD);
-    const touched = new Set<string>();
-    for (const c of cells) {
+    this.touchedRooms.clear();
+    const cellPt = this.cellPtTmp;
+    for (let i = 0; i < roomCells.length; i++) {
+      const c = roomCells[i]!;
       if (c.seen || Math.abs(c.y - h.body.footY) > 0.9) continue;
-      if (c.room !== allowedRoom && (c.zone ?? c.room) !== allowedRoom) continue;
       const dx = c.x - eye.x;
       const dz = c.z - eye.z;
       const d = Math.hypot(dx, dz);
       if (d > COVER_RANGE) continue;
       if (d > COVER_NEAR && (dx * fx + dz * fz) / d < cosHalf) continue;
-      if (d > 0.6 && !hasLineOfSight(this.host.d.colliders, eye, { x: c.x, y: c.y + 1.0, z: c.z })) continue;
+      if (d > 0.6) {
+        cellPt.x = c.x;
+        cellPt.y = c.y + 1.0;
+        cellPt.z = c.z;
+        if (!hasLineOfSight(this.host.d.colliders, eye, cellPt)) continue;
+      }
       c.seen = true;
-      touched.add(c.room);
+      this.touchedRooms.add(c.room);
     }
-    for (const id of touched) this.checkRoomClear(id, h);
+    for (const id of this.touchedRooms) this.checkRoomClear(id, h);
   }
 
   /** PoD 保持中に look 方向の ±50° 扇・8m 内の同室セルを seen にマークする（§5-2） */
   markEntryLookSector(h: SwatHunter, look: Vec3): void {
     const here = this.indoorRoomAt(h.body.px, h.body.pz, h.body.footY);
     if (!here) return;
-    const eye = { x: h.body.px, y: h.body.footY + 1.5, z: h.body.pz };
+    this.coverCells();
+    const roomCells = this.cellsByZone.get(here.id);
+    if (!roomCells || roomCells.length === 0) return;
+
+    const eye = this.eyeTmp;
+    eye.x = h.body.px;
+    eye.y = h.body.footY + 1.5;
+    eye.z = h.body.pz;
     const lx = look.x - eye.x;
     const lz = look.z - eye.z;
     const ll = Math.hypot(lx, lz);
@@ -146,27 +211,38 @@ export class SwatCoverage {
     const fx = lx / ll;
     const fz = lz / ll;
     const cosHalf = Math.cos(ENTRY_LOOK_HALF_DEG * DEG2RAD);
-    const touched = new Set<string>();
-    for (const c of this.coverCells()) {
+    this.touchedRooms.clear();
+    const cellPt = this.cellPtTmp;
+    for (let i = 0; i < roomCells.length; i++) {
+      const c = roomCells[i]!;
       if (c.seen || Math.abs(c.y - h.body.footY) > 0.9) continue;
-      if (c.room !== here.id && (c.zone ?? c.room) !== here.id) continue;
       const dx = c.x - eye.x;
       const dz = c.z - eye.z;
       const d = Math.hypot(dx, dz);
       if (d > ENTRY_LOOK_RANGE) continue;
       if (d > 0.6 && (dx * fx + dz * fz) / d < cosHalf) continue;
-      if (d > 0.6 && !hasLineOfSight(this.host.d.colliders, eye, { x: c.x, y: c.y + 1.0, z: c.z })) continue;
+      if (d > 0.6) {
+        cellPt.x = c.x;
+        cellPt.y = c.y + 1.0;
+        cellPt.z = c.z;
+        if (!hasLineOfSight(this.host.d.colliders, eye, cellPt)) continue;
+      }
       c.seen = true;
-      touched.add(c.room);
+      this.touchedRooms.add(c.room);
     }
-    for (const id of touched) this.checkRoomClear(id, h);
+    for (const id of this.touchedRooms) this.checkRoomClear(id, h);
   }
 
   /** 部屋の全マスを確認し終えたら「クリア」を無線で報告する */
   checkRoomClear(roomId: string, by: SwatHunter): void {
     if (this.cleared.has(roomId)) return;
-    const mine = this.coverCells().filter((c) => c.room === roomId);
-    if (mine.some((c) => !c.seen && !c.bad)) return;
+    this.coverCells();
+    const mine = this.cellsByRoom.get(roomId);
+    if (!mine) return;
+    for (let i = 0; i < mine.length; i++) {
+      const c = mine[i]!;
+      if (!c.seen && !c.bad) return;
+    }
     const r = this.host.rooms.find((x) => x.id === roomId);
     if (r) this.markCleared(r, by);
   }
@@ -189,9 +265,10 @@ export class SwatCoverage {
     let cell = this.nearestCell(h);
     if (cell) return cell;
     // 全区画クリア: 再捜索
-    for (const c of this.coverCells()) c.seen = false;
+    const allCells = this.coverCells();
+    for (let i = 0; i < allCells.length; i++) allCells[i]!.seen = false;
     this.cleared.clear();
-    if (this.coverCells().every((c) => c.bad)) for (const c of this.coverCells()) c.bad = false;
+    if (allCells.every((c) => c.bad)) for (let i = 0; i < allCells.length; i++) allCells[i]!.bad = false;
     if (this.droneCd <= 0) {
       this.droneCd = 30;
       const p = this.host.d.player.position;
@@ -237,16 +314,22 @@ export class SwatCoverage {
 
   nearestCell(h: SwatHunter): CoverCell | null {
     const confine = this.unclearedIndoorRoom(h)?.id ?? null;
-    const taken: CoverCell[] = [];
+    this.coverCells();
+    const pool = confine ? (this.cellsByRoom.get(confine) ?? []) : this.coverCells();
+    const taken = this.takenScratch;
+    taken.length = 0;
     for (const x of this.host.hunters) if (x !== h && x.alive && x.goalCell) taken.push(x.goalCell);
     let best: CoverCell | null = null;
     let bestScore = Infinity;
-    for (const c of this.coverCells()) {
+    for (let i = 0; i < pool.length; i++) {
+      const c = pool[i]!;
       if (c.seen || c.bad) continue;
-      if (confine && c.room !== confine) continue;
       let score = Math.hypot(c.x - h.body.px, c.z - h.body.pz) + Math.abs(c.y - h.body.footY) * 6;
       if (h.goalRoom === c.room) score -= 3; // 今いる部屋を先に塗りつぶす
-      for (const tCell of taken) if (Math.hypot(tCell.x - c.x, tCell.z - c.z) < 4 && Math.abs(tCell.y - c.y) < 0.9) score += 20;
+      for (let j = 0; j < taken.length; j++) {
+        const tCell = taken[j]!;
+        if (Math.hypot(tCell.x - c.x, tCell.z - c.z) < 4 && Math.abs(tCell.y - c.y) < 0.9) score += 20;
+      }
       score += Math.random() * 1.2;
       if (score < bestScore) {
         bestScore = score;
@@ -300,9 +383,14 @@ export class SwatCoverage {
   unclearedIndoorRoom(h: SwatHunter): RoomDef | null {
     const room = this.indoorRoomAt(h.body.px, h.body.pz, h.body.footY);
     if (!room || this.cleared.has(room.id) || this.sweptRooms.has(room.id)) return null;
-    const cells = this.coverCells().filter((c) => c.room === room.id);
-    if (cells.length === 0 || cells.every((c) => c.seen || c.bad)) return null;
-    return room;
+    this.coverCells();
+    const cells = this.cellsByRoom.get(room.id);
+    if (!cells || cells.length === 0) return null;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!c.seen && !c.bad) return room;
+    }
+    return null;
   }
 
   /** ハンターと目標が同じ屋内部屋にいるか。 */
@@ -363,7 +451,7 @@ export class SwatCoverage {
     this.ray.direction.set(dx / len, dy / len, dz / len);
     for (const c of this.host.d.civilians()) {
       if (!c.alive) continue;
-      const a = c.body.getAABB();
+      const a = c.body.getAABB(this.aabbScratch);
       this.box.min.set(a.min.x - 0.05, a.min.y, a.min.z - 0.05);
       this.box.max.set(a.max.x + 0.05, a.max.y, a.max.z + 0.05);
       if (this.ray.intersectBox(this.box, this.hit) && this.hit.distanceTo(this.ray.origin) < len - 0.2) return true;
@@ -375,18 +463,28 @@ export class SwatCoverage {
   friendlyInLine(shooter: SwatHunter, from: Vec3, to: Vec3): boolean {
     for (const other of this.host.hunters) {
       if (other === shooter || !other.alive) continue;
-      if (segmentHitsAABB(other.body.getAABB(), from, to)) return true;
+      if (segmentHitsAABB(other.body.getAABB(this.aabbScratch), from, to)) return true;
     }
     return false;
   }
 
   /** 指定隊員以外の生存 SWAT 隊員の位置一覧（ローレディ判定用） */
   otherHunterPositions(exclude: SwatHunter): FriendlyPos[] {
-    const out: FriendlyPos[] = [];
-    for (const other of this.host.hunters) {
+    let count = 0;
+    for (let i = 0; i < this.host.hunters.length; i++) {
+      const other = this.host.hunters[i]!;
       if (other === exclude || !other.alive) continue;
-      out.push({ x: other.body.px, y: other.body.footY, z: other.body.pz });
+      let slot = this.otherPosPool[count];
+      if (!slot) {
+        slot = { x: 0, y: 0, z: 0 };
+        this.otherPosPool.push(slot);
+      }
+      slot.x = other.body.px;
+      slot.y = other.body.footY;
+      slot.z = other.body.pz;
+      this.otherPosOut[count++] = slot;
     }
-    return out;
+    this.otherPosOut.length = count;
+    return this.otherPosOut;
   }
 }

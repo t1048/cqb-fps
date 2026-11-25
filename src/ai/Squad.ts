@@ -16,7 +16,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import { hasLineOfSight, type Flashbang } from '../weapons/Flashbang';
 import type { TearGas } from '../weapons/TearGas';
-import type { Collider } from '../world/WorldBuilder';
+import type { AABB, Collider } from '../world/WorldBuilder';
 import type { StairMark } from '../world/Walk';
 import type { TextureLibrary } from '../world/Materials';
 import type { DoorSystem } from '../world/Door';
@@ -38,6 +38,7 @@ import {
   EngageBehavior,
   SuspectNavigator,
   blockedAt,
+  type AllyTarget,
   type CombatContext,
   type XZ,
 } from './EngageBehavior';
@@ -165,6 +166,7 @@ export {
  */
 export class SquadSystem implements SquadContext {
   readonly coverage: Cell[] = [];
+  readonly cellsByRoom = new Map<string, Cell[]>();
   sampleTimer = 0;
   /** 視認セル判定の巡回位置（毎フレーム一部ずつ処理する） */
   coverageCursor = 0;
@@ -181,6 +183,9 @@ export class SquadSystem implements SquadContext {
   readonly announcedRooms = new Set<string>();
   readonly announcedStacks = new Set<string>();
   private readonly unsubs: (() => void)[] = [];
+  private readonly livingAlliesBuf: (AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean })[] = [];
+  private readonly coverEyeTmp = new THREE.Vector3();
+  private readonly labelChestTmp: Vec3 = { x: 0, y: 0, z: 0 };
   readonly menu: CommandMenu;
 
   readonly thrownFlashes: ThrownFlash[] = [];
@@ -198,6 +203,7 @@ export class SquadSystem implements SquadContext {
   flashRefill = 0;
   gasLeft = SWAT_GAS_PER_TEAM;
   gasCd = 0;
+  gasRetryCd = 0;
   rushCd = 0;
   pincerCd = 0;
   contactRadioCd = 0;
@@ -240,15 +246,21 @@ export class SquadSystem implements SquadContext {
     this.flashbang = gadgets?.flashbang;
     this.tearGas = gadgets?.tearGas;
     this.windows = gadgets?.windows ?? [];
-    for (const room of this.rooms) {
-      if (room.outdoor) continue;
-      const y = room.floorY ?? 0;
-      for (let x = room.x - room.width / 2 + 0.25; x < room.x + room.width / 2; x += 0.5) {
-        for (let z = room.z - room.depth / 2 + 0.25; z < room.z + room.depth / 2; z += 0.5) {
-          if (!blockedAt(this.colliders, x, z, 0.04, y)) {
-            this.coverage.push({ x, z, y, room, seen: false, visible: false });
+    if (defs.length > 0) {
+      for (const room of this.rooms) {
+        if (room.outdoor) continue;
+        const y = room.floorY ?? 0;
+        const roomCells: Cell[] = [];
+        for (let x = room.x - room.width / 2 + 0.25; x < room.x + room.width / 2; x += 0.5) {
+          for (let z = room.z - room.depth / 2 + 0.25; z < room.z + room.depth / 2; z += 0.5) {
+            if (!blockedAt(this.colliders, x, z, 0.04, y)) {
+              const cell: Cell = { x, z, y, room, seen: false, visible: false };
+              this.coverage.push(cell);
+              roomCells.push(cell);
+            }
           }
         }
+        this.cellsByRoom.set(room.id, roomCells);
       }
     }
 
@@ -297,6 +309,28 @@ export class SquadSystem implements SquadContext {
       };
       const nav = new SuspectNavigator(body, allyCtx);
       const engageBus = createAllyEngageBus(this, shielded);
+      const eyeScratch = new THREE.Vector3();
+      const chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
+      const aabbScratch: AABB = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+      const targetWrapper: AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean } = {
+        id: def.id,
+        get px() {
+          return body.px;
+        },
+        get pz() {
+          return body.pz;
+        },
+        get footY() {
+          return body.footY;
+        },
+        get height() {
+          return body.height;
+        },
+        getEye: () => body.eye(eyeScratch),
+        getChest: () => body.chestPos(chestScratch),
+        getAABB: () => body.getAABB(aabbScratch),
+        shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
+      };
       const ally: AllyUnit = {
         id: def.id,
         name: def.name,
@@ -410,6 +444,9 @@ export class SquadSystem implements SquadContext {
         peekHold: 0,
         peekDone: false,
         stealthEntry: false,
+        flashRetryCd: 0,
+        sweepRetryCd: 0,
+        targetWrapper,
         label,
         getAABB: () => body.getAABB(),
         shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
@@ -477,7 +514,7 @@ export class SquadSystem implements SquadContext {
   /** 交渉等を含め、指定点へ視線が通り威圧距離内にいる生存隊員数（チーム数値優位計算用）。 */
   countAlliesCovering(point: Vec3, maxDist = 10): number {
     let n = 0;
-    const eye = new THREE.Vector3();
+    const eye = this.coverEyeTmp;
     for (const a of this.allies) {
       if (a.down) continue;
       a.body.eye(eye);
@@ -501,19 +538,12 @@ export class SquadSystem implements SquadContext {
     getAABB(): ReturnType<HumanoidBody['getAABB']>;
     shieldBlocks(from: Vec3, hit: Vec3): boolean;
   }[] {
-    return this.allies
-      .filter((a) => !a.down)
-      .map((a) => ({
-        id: a.id,
-        px: a.body.px,
-        pz: a.body.pz,
-        footY: a.body.footY,
-        height: a.body.height,
-        getEye: () => a.body.eye(new THREE.Vector3()),
-        getChest: () => a.body.chestPos(),
-        getAABB: () => a.body.getAABB(),
-        shieldBlocks: (from, hit) => shieldBlocks(a.body, from, hit),
-      }));
+    this.livingAlliesBuf.length = 0;
+    for (let i = 0; i < this.allies.length; i++) {
+      const a = this.allies[i]!;
+      if (!a.down) this.livingAlliesBuf.push(a.targetWrapper);
+    }
+    return this.livingAlliesBuf;
   }
 
   getRoster(): SquadRosterEntry[] {
@@ -604,6 +634,7 @@ export class SquadSystem implements SquadContext {
     this.ackLeft = Math.max(0, this.ackLeft - dt);
     this.flashCd = Math.max(0, this.flashCd - dt);
     this.gasCd = Math.max(0, this.gasCd - dt);
+    this.gasRetryCd = Math.max(0, this.gasRetryCd - dt);
     this.rushCd = Math.max(0, this.rushCd - dt);
     this.pincerCd = Math.max(0, this.pincerCd - dt);
     this.contactRadioCd = Math.max(0, this.contactRadioCd - dt);
@@ -642,6 +673,8 @@ export class SquadSystem implements SquadContext {
       ally.doorWait = Math.max(0, ally.doorWait - dt);
       ally.suppressCd = Math.max(0, ally.suppressCd - dt);
       ally.pepperCd = Math.max(0, ally.pepperCd - dt);
+      ally.flashRetryCd = Math.max(0, ally.flashRetryCd - dt);
+      ally.sweepRetryCd = Math.max(0, ally.sweepRetryCd - dt);
       for (const [doorId, left] of ally.skippedDoors) {
         if (left - dt <= 0) ally.skippedDoors.delete(doorId);
         else ally.skippedDoors.set(doorId, left - dt);
@@ -693,7 +726,7 @@ export class SquadSystem implements SquadContext {
         ally.body.setLean(0);
         ally.optics.hide();
       }
-      const c = ally.body.chestPos();
+      const c = ally.body.chestPos(this.labelChestTmp);
       ally.label.sprite.position.set(c.x, ally.body.footY + ally.body.height + 0.28, c.z);
       const distance = this.player.position.distanceTo(ally.body.group.position);
       const labelWidth = Math.min(0.78, Math.max(0.32, distance * 0.085));
@@ -778,8 +811,16 @@ export class SquadSystem implements SquadContext {
           ally.progress = t('隊列待機', 'Holding Formation');
           if (!ally.idleLook) {
             // 停止中の視線: 2名以上なら最後尾は後方警戒（360°セキュリティ）、前方はプレイヤー向き±0.42 に固定
-            const alive = this.allies.filter((a) => !a.down);
-            const isRearGuard = alive.length >= 2 && alive[alive.length - 1] === ally;
+            let aliveCount = 0;
+            let lastAlive: AllyUnit | null = null;
+            for (let i = 0; i < this.allies.length; i++) {
+              const a = this.allies[i]!;
+              if (!a.down) {
+                aliveCount++;
+                lastAlive = a;
+              }
+            }
+            const isRearGuard = aliveCount >= 2 && lastAlive === ally;
             const sideAngle = isRearGuard
               ? this.player.yawRad + Math.PI
               : this.player.yawRad + (ally.index % 2 === 0 ? 0.42 : -0.42);
@@ -914,10 +955,11 @@ export class SquadSystem implements SquadContext {
     this.thrownFlashes.length = 0;
     for (const b of this.c2Blasts) {
       this.root.remove(b.mesh);
-      b.mesh.geometry.dispose();
       (b.mesh.material as THREE.Material).dispose();
     }
     this.c2Blasts.length = 0;
+    this.livingAlliesBuf.length = 0;
+    this.cellsByRoom.clear();
     this.radioQueue.length = 0;
     this.radioSpeakGap = 0;
     this.flashGeo.dispose();

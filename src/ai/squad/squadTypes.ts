@@ -22,6 +22,7 @@ import type { Door, DoorSystem } from '../../world/Door';
 import type { AIDebugLabel } from '../../ui/AIDebugLabel';
 import type { CommandMenu } from '../../ui/CommandMenu';
 import type {
+  AllyTarget,
   CombatThreat,
   EngageBehavior,
   SuspectNavigator,
@@ -275,6 +276,9 @@ export interface AllyUnit extends HitTarget {
   peekDone: boolean;
   /** 今回の突入がステルスモード由来か（速度・足音に反映） */
   stealthEntry: boolean;
+  flashRetryCd: number;
+  sweepRetryCd: number;
+  readonly targetWrapper: AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean };
   label: AIDebugLabel;
 }
 
@@ -354,6 +358,7 @@ export interface SquadContext {
 
   readonly root: THREE.Group;
   readonly coverage: Cell[];
+  readonly cellsByRoom: Map<string, Cell[]>;
   readonly allies: AllyUnit[];
   readonly provoked: Set<string>;
   readonly announcedRooms: Set<string>;
@@ -384,6 +389,7 @@ export interface SquadContext {
   flashRefill: number;
   gasLeft: number;
   gasCd: number;
+  gasRetryCd: number;
   rushCd: number;
   pincerCd: number;
   contactRadioCd: number;

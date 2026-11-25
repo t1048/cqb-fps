@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { GameEventBus } from '../../core/events';
 import type { CombatParams, Vec3 } from '../../core/types';
 import {
@@ -5,6 +6,7 @@ import {
   SuspectNavigator,
   findNearestVisibleThreat,
   resolveFloorY,
+  type AllyTarget,
   type CombatContext,
   type CombatThreat,
 } from '../../ai/EngageBehavior';
@@ -50,7 +52,7 @@ import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { HitTarget } from '../../weapons/WeaponSystem';
 import type { Door } from '../../world/Door';
 import type { TextureLibrary } from '../../world/Materials';
-import type { Collider } from '../../world/WorldBuilder';
+import type { AABB, Collider } from '../../world/WorldBuilder';
 import { lerp } from './swatHelpers';
 import {
   COVER_NEAR,
@@ -211,6 +213,9 @@ export class SwatHunter implements HitTarget {
   private stepAccum = 0;
   private lastStepX: number;
   private lastStepZ: number;
+  flashRetryCd = 0;
+  readonly targetWrapper: AllyTarget;
+  private readonly selfPosTmp: Vec3 = { x: 0, y: 0, z: 0 };
 
   constructor(
     readonly id: string,
@@ -230,6 +235,29 @@ export class SwatHunter implements HitTarget {
     this.body = new HumanoidBody(spawn.x, spawn.z, 0, SWAT_UNIFORM_COLOR, true, { role: 'ally', footY: spawn.y, textures, shield: shielded });
     this.body.ground = ctx.colliders;
     this.body.setReadyPose(SWAT_READY_POSE);
+    const body = this.body;
+    const eyeScratch = new THREE.Vector3();
+    const chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
+    const aabbScratch: AABB = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+    this.targetWrapper = {
+      id,
+      get px() {
+        return body.px;
+      },
+      get pz() {
+        return body.pz;
+      },
+      get footY() {
+        return body.footY;
+      },
+      get height() {
+        return body.height;
+      },
+      getEye: () => body.eye(eyeScratch),
+      getChest: () => body.chestPos(chestScratch),
+      getAABB: () => body.getAABB(aabbScratch),
+      shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
+    };
     this.nav = new SuspectNavigator(this.body, ctx);
     this.engage = new EngageBehavior(
       this.combat,
@@ -436,6 +464,7 @@ export class SwatHunter implements HitTarget {
 
   private updateInner(dt: number): void {
     this.stateTime += dt;
+    this.flashRetryCd = Math.max(0, this.flashRetryCd - dt);
     this.blockedWindow = Math.max(0, this.blockedWindow - dt);
     if (this.blockedWindow <= 0) this.blockedCount = 0;
     this.tickBlockedPortals(dt);
@@ -528,8 +557,11 @@ export class SwatHunter implements HitTarget {
       0.18,
       this.body.footY,
     );
+    this.selfPosTmp.x = this.body.px;
+    this.selfPosTmp.y = this.body.footY;
+    this.selfPosTmp.z = this.body.pz;
     const low = shouldUseLowReady(
-      { x: this.body.px, y: this.body.footY, z: this.body.pz },
+      this.selfPosTmp,
       this.body.yawRad,
       this.team.otherHunterPositions(this),
       wallClose,
@@ -786,8 +818,11 @@ export class SwatHunter implements HitTarget {
 
     // PoD 到着後: 1.0s 静止して look 方向を保持し、±50°・8m 扇のセルを seen にマーク → sweep
     this.body.faceToward(plan.look.x, plan.look.z, 4 * dt);
-    this.team.markEntryLookSector(this, plan.look);
+    const prevHold = this.entryHold;
     this.entryHold += dt;
+    if (prevHold === 0 || Math.floor(prevHold / 0.25) !== Math.floor(this.entryHold / 0.25)) {
+      this.team.markEntryLookSector(this, plan.look);
+    }
     if (this.entryHold >= ENTRY_POD_HOLD_SEC) {
       this.assignedPortal = null;
       this.setState('sweep');

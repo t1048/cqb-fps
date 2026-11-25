@@ -87,6 +87,11 @@ export function boxToAABB(def: BoxDef): AABB {
   };
 }
 
+const KNOWN_BOX_TEXTURES: ReadonlySet<string> = new Set<TextureName>([
+  'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
+  'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
+]);
+
 /**
  * MapData から壁・床・天井・遮蔽物・階段・窓・置物を生成する。
  * 床と階段の上面は歩行支持面（kind floor / stair）。
@@ -96,6 +101,8 @@ export class WorldBuilder {
   readonly colliders: Collider[] = [];
   readonly stairs: StairMark[] = [];
   private readonly materials: THREE.Material[] = [];
+  private readonly materialCache = new Map<string, THREE.MeshStandardMaterial>();
+  private readonly diffuserCache = new Map<number, THREE.MeshBasicMaterial>();
   private disposed = false;
   private housingGeo?: THREE.BoxGeometry;
   private housingMat?: THREE.MeshStandardMaterial;
@@ -116,12 +123,20 @@ export class WorldBuilder {
     this.buildCovers();
     this.buildBoxes(map.floors, 'floor', this.motif?.groundTex ?? 'wood', 0x8a6844);
     this.buildStairs();
-    for (const w of map.windows) this.root.add(buildWindow(w, textures));
-    for (const item of map.items) this.root.add(buildItem(item, textures));
+    const propPool = new Map<string, THREE.MeshStandardMaterial>();
+    for (const w of map.windows) this.root.add(buildWindow(w, textures, propPool));
+    for (const item of map.items) this.root.add(buildItem(item, textures, propPool));
+    for (const m of propPool.values()) this.materials.push(m);
     if (this.motif) addMotifDecals(this.root, map, textures, (m) => this.materials.push(m));
     this.buildLights();
     // 静的ジオメトリを統合してドローコールを削減する（コライダは別管理なので見た目だけに影響）
     batchStaticMeshes(this.root, { cellSize: STATIC_BATCH_CELL });
+    // 動的に位置が変わる太陽・点光源を除き、残った全静的オブジェクトのローカル行列更新を凍結する
+    this.root.traverse((obj) => {
+      if (obj === this.root || obj === this.sun || obj === this.sun.target || (obj as THREE.Light).isLight) return;
+      obj.updateMatrix();
+      obj.matrixAutoUpdate = false;
+    });
   }
 
   /** 毎フレーム: カメラ近傍の部屋へ照明を割り当てる。 */
@@ -142,15 +157,18 @@ export class WorldBuilder {
   }
 
   private material(name: TextureName, color: number, doubleSide = false, opacity = 1): THREE.MeshStandardMaterial {
-    const map = this.textures.get(name);
+    const cacheKey = `${name}|${color}|${doubleSide ? 1 : 0}|${opacity}`;
+    const hit = this.materialCache.get(cacheKey);
+    if (hit) return hit;
+    const map = this.textures.get(name) as THREE.CanvasTexture | undefined;
     const themed = this.motif !== null;
     const metal = name === 'metal' || name === 'corrugated';
     const baseRoughness = themed ? (name === 'marble' ? 0.32 : name === 'carpet' || name === 'linen' ? 0.94 : metal ? 0.42 : 0.84) : metal ? 0.4 : 0.86;
     // ガラス系以外は同一 canvas 派生の bump / roughness で肌理を出す（派生は TextureLibrary がキャッシュ・解放する）
-    const textured = name !== 'glass' && name !== 'frostedGlass';
-    const derived = textured ? this.textures.getDerivedMaps(map) : null;
+    const textured = Boolean(map) && name !== 'glass' && name !== 'frostedGlass';
+    const derived = textured && map ? this.textures.getDerivedMaps(map) : null;
     const m = new THREE.MeshStandardMaterial({
-      map,
+      ...(map ? { map } : {}),
       color,
       roughness: derived ? Math.max(0.05, baseRoughness - 0.05) : baseRoughness,
       metalness: themed ? (name === 'marble' ? 0.14 : metal ? 0.48 : 0.02) : metal ? 0.35 : 0.02,
@@ -160,6 +178,7 @@ export class WorldBuilder {
       depthWrite: opacity >= 1,
       ...(derived ? { bumpMap: derived.bumpMap, bumpScale: 0.02, roughnessMap: derived.roughnessMap } : {}),
     });
+    this.materialCache.set(cacheKey, m);
     this.materials.push(m);
     return m;
   }
@@ -173,9 +192,11 @@ export class WorldBuilder {
         plain.push(def);
         continue;
       }
+      group.userData.noShadow = true;
       group.traverse((obj) => {
         obj.castShadow = false;
         obj.receiveShadow = true;
+        obj.userData.noShadow = true;
       });
       this.root.add(group);
       this.colliders.push({ kind: 'cover', aabb: boxToAABB(def) });
@@ -367,11 +388,7 @@ export class WorldBuilder {
 
   private buildBoxes(defs: readonly BoxDef[], kind: ColliderKind, fallback: TextureName, color: number): void {
     for (const def of defs) {
-      const names: readonly TextureName[] = [
-        'camo', 'fabric', 'metal', 'wood', 'tile', 'carpet', 'plaster', 'concrete', 'brick', 'skin', 'glass',
-        'marble', 'linoleum', 'panel', 'siding', 'corrugated', 'ceiling', 'linen', 'tatami',
-      ];
-      const safe = names.find((n) => n === def.material) ?? fallback;
+      const safe = def.material !== undefined && KNOWN_BOX_TEXTURES.has(def.material) ? (def.material as TextureName) : fallback;
       const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);
       const y = (def.y ?? 0) + def.height / 2;
       const yaw = (def.yaw ?? 0) * DEG2RAD;
@@ -537,8 +554,12 @@ export class WorldBuilder {
       housing.position.set(room.x, lightY + 0.24, room.z);
       const tint = tints[idx % tints.length] ?? 0xffebcc;
       const dimmed = (((tint >> 16) & 255) * 0.82 << 16) | (((tint >> 8) & 255) * 0.82 << 8) | ((tint & 255) * 0.82);
-      const diffuserMat = new THREE.MeshBasicMaterial({ color: dimmed });
-      this.materials.push(diffuserMat);
+      let diffuserMat = this.diffuserCache.get(dimmed);
+      if (!diffuserMat) {
+        diffuserMat = new THREE.MeshBasicMaterial({ color: dimmed });
+        this.diffuserCache.set(dimmed, diffuserMat);
+        this.materials.push(diffuserMat);
+      }
       const diffuser = new THREE.Mesh(this.diffuserGeo ??= new THREE.BoxGeometry(0.94, 0.028, 0.2), diffuserMat);
       diffuser.position.y = -0.054;
       housing.add(diffuser);
@@ -555,5 +576,7 @@ export class WorldBuilder {
     disposeObject(this.root);
     for (const m of this.materials) m.dispose();
     this.materials.length = 0;
+    this.materialCache.clear();
+    this.diffuserCache.clear();
   }
 }

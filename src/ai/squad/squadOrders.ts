@@ -361,6 +361,8 @@ export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
   ally.peekHold = 0;
   ally.peekDone = false;
   ally.stealthEntry = false;
+  ally.flashRetryCd = 0;
+  ally.sweepRetryCd = 0;
   ally.body.setPose('stand');
   ally.body.setLean(0);
 }
@@ -401,26 +403,29 @@ export function getRoster(ctx: SquadContext): SquadRosterEntry[] {
   }));
 }
 
+const aimEyeTmp = new THREE.Vector3();
+const aimChestTmp = { x: 0, y: 0, z: 0 };
+
 export function aimedAlly(ctx: SquadContext): AllyUnit | null {
-  const eye = ctx.player.getEyePosition();
+  if (ctx.allies.length === 0) return null;
+  const eye = ctx.player.getEyePosition(aimEyeTmp);
   const cp = Math.cos(ctx.player.pitchRad);
-  const dir = new THREE.Vector3(
-    -Math.sin(ctx.player.yawRad) * cp,
-    Math.sin(ctx.player.pitchRad),
-    -Math.cos(ctx.player.yawRad) * cp,
-  );
+  const dirX = -Math.sin(ctx.player.yawRad) * cp;
+  const dirY = Math.sin(ctx.player.pitchRad);
+  const dirZ = -Math.cos(ctx.player.yawRad) * cp;
   let best: AllyUnit | null = null;
   let bestT = 12;
-  for (const ally of ctx.allies) {
-    const c = ally.body.chestPos();
+  for (let i = 0; i < ctx.allies.length; i++) {
+    const ally = ctx.allies[i]!;
+    const c = ally.body.chestPos(aimChestTmp);
     const vx = c.x - eye.x;
     const vy = c.y - eye.y;
     const vz = c.z - eye.z;
-    const tDist = vx * dir.x + vy * dir.y + vz * dir.z;
+    const tDist = vx * dirX + vy * dirY + vz * dirZ;
     if (tDist < 0.4 || tDist > bestT) continue;
-    const dx = eye.x + dir.x * tDist - c.x;
-    const dy = eye.y + dir.y * tDist - c.y;
-    const dz = eye.z + dir.z * tDist - c.z;
+    const dx = eye.x + dirX * tDist - c.x;
+    const dy = eye.y + dirY * tDist - c.y;
+    const dz = eye.z + dirZ * tDist - c.z;
     if (dx * dx + dy * dy + dz * dz < 0.45 * 0.45) {
       best = ally;
       bestT = tDist;
@@ -431,11 +436,14 @@ export function aimedAlly(ctx: SquadContext): AllyUnit | null {
 
 export function hudText(ctx: SquadContext): string {
   const look = aimedAlly(ctx);
+  const hasAck = ctx.ackLeft > 0 && ctx.ack.length > 0;
+  if (!look && !hasAck) return '';
   const lookLine = look
     ? t(
         `照準隊員: ${look.callsign} ${look.name} / ${stateText(look)}`,
         `Aimed: ${look.callsign} ${look.name} / ${stateText(look)}`,
       )
     : '';
-  return [lookLine, ctx.ackLeft > 0 ? ctx.ack : ''].filter(Boolean).join('\n');
+  if (lookLine && hasAck) return `${lookLine}\n${ctx.ack}`;
+  return lookLine || ctx.ack;
 }

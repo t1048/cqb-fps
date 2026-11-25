@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { BoxDef, MapData, RoomDef } from '../core/types';
 import type { TextureLibrary } from './Materials';
 import { motifById, type DecalKind, type MotifDef } from './Motif';
@@ -11,9 +12,48 @@ const WALL_KINDS: ReadonlySet<DecalKind> = new Set([
   'poster', 'graffiti', 'sign', 'vault', 'medcross', 'stripe', 'hazard', 'scuff',
 ]);
 
+interface DecalBucket {
+  geos: THREE.BufferGeometry[];
+  hasSign: boolean;
+}
+
+const _pos = new THREE.Vector3();
+const _euler = new THREE.Euler();
+const _quat = new THREE.Quaternion();
+const _one = new THREE.Vector3(1, 1, 1);
+const _mat4 = new THREE.Matrix4();
+
+function addBakedDecal(
+  buckets: Map<THREE.Material, DecalBucket>,
+  mat: THREE.Material,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  z: number,
+  rx: number,
+  ry: number,
+  rz: number,
+  isSign = false,
+): void {
+  const geo = new THREE.PlaneGeometry(w, h);
+  _pos.set(x, y, z);
+  _euler.set(rx, ry, rz);
+  _quat.setFromEuler(_euler);
+  _mat4.compose(_pos, _quat, _one);
+  geo.applyMatrix4(_mat4);
+  let bucket = buckets.get(mat);
+  if (!bucket) {
+    bucket = { geos: [], hasSign: false };
+    buckets.set(mat, bucket);
+  }
+  bucket.geos.push(geo);
+  if (isSign) bucket.hasSign = true;
+}
+
 /**
  * 部屋の床と壁にモチーフ用デカールを貼る。コライダは足さない。
- * テクスチャは TextureLibrary にキャッシュし、種類ごとにマテリアルを共有する。
+ * テクスチャは TextureLibrary にキャッシュし、種類ごとにマテリアル・メッシュを共有統合する。
  */
 export function addMotifDecals(
   root: THREE.Object3D,
@@ -26,11 +66,14 @@ export function addMotifDecals(
   const rng = new Rng((map.seed ^ 0x51edec01) >>> 0);
   const floorMats = new Map<DecalKind, THREE.MeshStandardMaterial>();
   const wallMats = new Map<DecalKind, THREE.MeshStandardMaterial>();
+  const buckets = new Map<THREE.Material, DecalBucket>();
+
   const matOfFloor = (kind: DecalKind): THREE.MeshStandardMaterial => {
     const hit = floorMats.get(kind);
     if (hit) return hit;
+    const decalMap = textures.getDecal(kind) as THREE.CanvasTexture | undefined;
     const m = new THREE.MeshStandardMaterial({
-      map: textures.getDecal(kind),
+      ...(decalMap ? { map: decalMap } : {}),
       color: 0xffffff,
       transparent: true,
       opacity: 0.8,
@@ -48,8 +91,9 @@ export function addMotifDecals(
   const matOfWall = (kind: DecalKind): THREE.MeshStandardMaterial => {
     const hit = wallMats.get(kind);
     if (hit) return hit;
+    const decalMap = textures.getDecal(kind) as THREE.CanvasTexture | undefined;
     const m = new THREE.MeshStandardMaterial({
-      map: textures.getDecal(kind),
+      ...(decalMap ? { map: decalMap } : {}),
       color: 0xffffff,
       transparent: true,
       opacity: 0.92,
@@ -70,13 +114,29 @@ export function addMotifDecals(
   for (const room of rooms) {
     if (placed >= MAX_DECALS) break;
     if (rng.chance(0.45)) {
-      if (addFloorDecal(root, room, map, motif, rng, matOfFloor)) placed++;
+      if (addFloorDecal(buckets, room, map, motif, rng, matOfFloor)) placed++;
     }
     if (placed < MAX_DECALS && rng.chance(0.5)) {
-      if (addWallDecal(root, room, map, motif, rng, matOfWall)) placed++;
+      if (addWallDecal(buckets, room, map, motif, rng, matOfWall)) placed++;
     }
   }
-  addFacadeSign(root, map, motif, matOfWall);
+  addFacadeSign(buckets, map, motif, matOfWall);
+
+  for (const [mat, bucket] of buckets) {
+    let geo: THREE.BufferGeometry | null;
+    if (bucket.geos.length === 1) {
+      geo = bucket.geos[0]!;
+    } else {
+      geo = mergeGeometries(bucket.geos, false);
+      for (const g of bucket.geos) g.dispose();
+    }
+    if (!geo) continue;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = bucket.hasSign ? 'decal-sign' : 'decal';
+    mesh.updateMatrix();
+    mesh.matrixAutoUpdate = false;
+    root.add(mesh);
+  }
 }
 
 function pickFloorKind(motif: MotifDef, rng: Rng): DecalKind | undefined {
@@ -92,7 +152,7 @@ function pickWallKind(motif: MotifDef, rng: Rng): DecalKind | undefined {
 }
 
 function addFloorDecal(
-  root: THREE.Object3D,
+  buckets: Map<THREE.Material, DecalBucket>,
   room: RoomDef,
   map: MapData,
   motif: MotifDef,
@@ -103,18 +163,14 @@ function addFloorDecal(
   if (!kind) return false;
   const w = 0.4 + rng.next() * 0.5;
   const d = kind === 'stripe' || kind === 'hazard' ? 0.25 + rng.next() * 0.45 : 0.25 + rng.next() * 0.45;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), matOf(kind));
   const ix = room.width / 2 - 0.7;
   const iz = room.depth / 2 - 0.7;
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.rotation.z = rng.next() * Math.PI * 2;
+  const rz = rng.next() * Math.PI * 2;
   const px = room.x + (rng.next() - 0.5) * Math.max(0.2, ix * 1.2);
   const pz = room.z + (rng.next() - 0.5) * Math.max(0.2, iz * 1.2);
   const spawn = map.playerSpawn;
   if (Math.hypot(px - spawn.x, pz - spawn.z) < 1.5) return false;
-  mesh.position.set(px, (room.floorY ?? 0) + 0.025, pz);
-  mesh.name = 'decal';
-  root.add(mesh);
+  addBakedDecal(buckets, matOf(kind), w, d, px, (room.floorY ?? 0) + 0.025, pz, -Math.PI / 2, 0, rz);
   return true;
 }
 
@@ -207,7 +263,7 @@ function openingOverlapsDecal(
 }
 
 function addWallDecal(
-  root: THREE.Object3D,
+  buckets: Map<THREE.Material, DecalBucket>,
   room: RoomDef,
   map: MapData,
   motif: MotifDef,
@@ -233,22 +289,16 @@ function addWallDecal(
     if (!wall) continue;
     if (openingOverlapsDecal(map, side, room, cx, cz, y, w, h)) continue;
 
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), matOf(kind));
     const gap = 0.015;
     if (side === 0) {
-      mesh.position.set(cx, y, wall.z + wall.depth / 2 + gap);
+      addBakedDecal(buckets, matOf(kind), w, h, cx, y, wall.z + wall.depth / 2 + gap, 0, 0, 0);
     } else if (side === 1) {
-      mesh.position.set(cx, y, wall.z - wall.depth / 2 - gap);
-      mesh.rotation.y = Math.PI;
+      addBakedDecal(buckets, matOf(kind), w, h, cx, y, wall.z - wall.depth / 2 - gap, 0, Math.PI, 0);
     } else if (side === 2) {
-      mesh.position.set(wall.x + wall.width / 2 + gap, y, cz);
-      mesh.rotation.y = Math.PI / 2;
+      addBakedDecal(buckets, matOf(kind), w, h, wall.x + wall.width / 2 + gap, y, cz, 0, Math.PI / 2, 0);
     } else {
-      mesh.position.set(wall.x - wall.width / 2 - gap, y, cz);
-      mesh.rotation.y = -Math.PI / 2;
+      addBakedDecal(buckets, matOf(kind), w, h, wall.x - wall.width / 2 - gap, y, cz, 0, -Math.PI / 2, 0);
     }
-    mesh.name = 'decal';
-    root.add(mesh);
     return true;
   }
   return false;
@@ -256,7 +306,7 @@ function addWallDecal(
 
 /** 突入側から見える外壁に、モチーフ名の看板を 1 枚だけ貼る。 */
 function addFacadeSign(
-  root: THREE.Object3D,
+  buckets: Map<THREE.Material, DecalBucket>,
   map: MapData,
   motif: MotifDef,
   matOf: (kind: DecalKind) => THREE.Material,
@@ -275,18 +325,37 @@ function addFacadeSign(
   }
   if (!best || bestD > 28) return;
   const thinX = best.width < best.depth;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.62), matOf('sign'));
   const y = (best.y ?? 0) + Math.min(best.height - 0.4, 2.35);
   const gap = 0.06;
   if (thinX) {
     const sign = spawn.x >= best.x ? 1 : -1;
-    mesh.position.set(best.x + sign * (best.width / 2 + gap), y, best.z);
-    mesh.rotation.y = sign > 0 ? Math.PI / 2 : -Math.PI / 2;
+    addBakedDecal(
+      buckets,
+      matOf('sign'),
+      1.7,
+      0.62,
+      best.x + sign * (best.width / 2 + gap),
+      y,
+      best.z,
+      0,
+      sign > 0 ? Math.PI / 2 : -Math.PI / 2,
+      0,
+      true,
+    );
   } else {
     const sign = spawn.z >= best.z ? 1 : -1;
-    mesh.position.set(best.x, y, best.z + sign * (best.depth / 2 + gap));
-    mesh.rotation.y = sign > 0 ? 0 : Math.PI;
+    addBakedDecal(
+      buckets,
+      matOf('sign'),
+      1.7,
+      0.62,
+      best.x,
+      y,
+      best.z + sign * (best.depth / 2 + gap),
+      0,
+      sign > 0 ? 0 : Math.PI,
+      0,
+      true,
+    );
   }
-  mesh.name = 'decal-sign';
-  root.add(mesh);
 }

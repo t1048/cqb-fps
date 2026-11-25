@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { CivilianState, SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
-import type { RoomDef } from '../../core/types';
+import type { RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
-import { squadRoute } from '../SquadRoute';
+import { pathSegmentClear, squadRoute } from '../SquadRoute';
 import { blockedAt, type XZ } from '../EngageBehavior';
 import {
   COVERAGE_PERIOD,
@@ -18,47 +18,85 @@ import {
 import { navigateTo } from './squadMovement';
 import { holdAtPod } from './squadEntry';
 
+const playerEyeTmp = new THREE.Vector3();
+const sweepEyeTmp = new THREE.Vector3();
+const cellTargetTmp: Vec3 = { x: 0, y: 0, z: 0 };
+const observersPool: { feet: number; eye: THREE.Vector3; dir: THREE.Vector3 }[] = [];
+const lastDoorStagesByCtx = new WeakMap<SquadContext, string[]>();
+
 export function updateCoverage(ctx: SquadContext, dt: number): void {
+  const total = ctx.coverage.length;
+  if (total === 0) return;
+
   ctx.sampleTimer -= dt;
   if (ctx.sampleTimer <= 0) {
     ctx.sampleTimer += 0.1;
-    const stages = ctx.doors.doors.map((d) => d.stage).join(',');
-    if (stages !== ctx.doorStages) {
-      for (const ally of ctx.allies) ally.skipped.clear();
-      ctx.doorStages = stages;
+    const doors = ctx.doors.doors;
+    let prev = lastDoorStagesByCtx.get(ctx);
+    let changed = false;
+    if (!prev || prev.length !== doors.length) {
+      prev = doors.map((d) => d.stage);
+      lastDoorStagesByCtx.set(ctx, prev);
+      changed = true;
+    } else {
+      for (let i = 0; i < doors.length; i++) {
+        const st = doors[i]!.stage;
+        if (prev[i] !== st) {
+          prev[i] = st;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      const stages = prev.join(',');
+      if (stages !== ctx.doorStages) {
+        for (const ally of ctx.allies) ally.skipped.clear();
+        ctx.doorStages = stages;
+      }
     }
   }
   // 全セルの視線判定は大型マップで 1 回数十〜百 ms かかるため、まとめて行わず
   // COVERAGE_PERIOD 秒で一巡するよう毎フレーム dt に比例した分だけ処理する（スパイク防止）
-  const total = ctx.coverage.length;
-  if (total === 0) return;
   const chunk = Math.min(total, Math.ceil((total * Math.min(dt, MAX_DT)) / COVERAGE_PERIOD));
-  const eye = ctx.player.getEyePosition();
-  const observers = ctx.allies
-    .filter((a) => !a.down)
-    .map((a) => ({
-      feet: a.body.footY,
-      eye: a.body.eye(new THREE.Vector3()),
-      dir: a.body.gaze(new THREE.Vector3()),
-    }));
+  const eye = ctx.player.getEyePosition(playerEyeTmp);
+  let obsCount = 0;
+  for (let i = 0; i < ctx.allies.length; i++) {
+    const a = ctx.allies[i]!;
+    if (a.down) continue;
+    let slot = observersPool[obsCount];
+    if (!slot) {
+      slot = { feet: 0, eye: new THREE.Vector3(), dir: new THREE.Vector3() };
+      observersPool.push(slot);
+    }
+    slot.feet = a.body.footY;
+    a.body.eye(slot.eye);
+    a.body.gaze(slot.dir);
+    obsCount++;
+  }
   for (let n = 0; n < chunk; n++) {
     if (ctx.coverageCursor >= total) ctx.coverageCursor = 0;
     const cell = ctx.coverage[ctx.coverageCursor++]!;
-    const target = { x: cell.x, y: cell.y + 0.35, z: cell.z };
+    cellTargetTmp.x = cell.x;
+    cellTargetTmp.y = cell.y + 0.35;
+    cellTargetTmp.z = cell.z;
     cell.visible =
       Math.abs(ctx.player.position.y - cell.y) < 0.7 &&
-      ctx.player.inCameraView(target) &&
-      hasLineOfSight(ctx.colliders, eye, target);
+      ctx.player.inCameraView(cellTargetTmp) &&
+      hasLineOfSight(ctx.colliders, eye, cellTargetTmp);
     if (!cell.visible) {
-      cell.visible = observers.some((a) => {
-        if (Math.abs(a.feet - cell.y) > 0.7) return false;
+      for (let i = 0; i < obsCount; i++) {
+        const a = observersPool[i]!;
+        if (Math.abs(a.feet - cell.y) > 0.7) continue;
         const dx = cell.x - a.eye.x;
         const dz = cell.z - a.eye.z;
         const hDist = Math.hypot(dx, dz);
         const fLen = Math.hypot(a.dir.x, a.dir.z) || 1;
-        if (hDist > 0.2 && (dx * a.dir.x + dz * a.dir.z) < hDist * fLen * 0.45) return false;
-        return hasLineOfSight(ctx.colliders, a.eye, target);
-      });
+        if (hDist > 0.2 && (dx * a.dir.x + dz * a.dir.z) < hDist * fLen * 0.45) continue;
+        if (hasLineOfSight(ctx.colliders, a.eye, cellTargetTmp)) {
+          cell.visible = true;
+          break;
+        }
+      }
     }
     cell.seen ||= cell.visible;
   }
@@ -141,17 +179,39 @@ export function updateSweeping(ctx: SquadContext, ally: AllyUnit, dt: number): v
   }
 
   if (!ally.sweepCell) {
+    if (ally.sweepElapsed > 7.5) {
+      enterSecured(ctx, ally, room, portal);
+      return;
+    }
+    if (ally.sweepRetryCd > 0) return;
+
+    const roomCells = ctx.cellsByRoom.get(room.id);
     let best: Cell | null = null;
     let bestDist = Infinity;
-    for (const c of ctx.coverage) {
-      if (c.room !== room || c.seen || ally.skipped.has(c)) continue;
-      const d = Math.hypot(c.x - body.px, c.z - body.pz);
-      if (d < bestDist) {
-        bestDist = d;
-        best = c;
+    let unseenCount = 0;
+    if (roomCells) {
+      for (let i = 0; i < roomCells.length; i++) {
+        const c = roomCells[i]!;
+        if (c.seen || ally.skipped.has(c)) continue;
+        unseenCount++;
+        const d = Math.hypot(c.x - body.px, c.z - body.pz);
+        if (d < bestDist) {
+          bestDist = d;
+          best = c;
+        }
+      }
+    } else {
+      for (const c of ctx.coverage) {
+        if (c.room !== room || c.seen || ally.skipped.has(c)) continue;
+        unseenCount++;
+        const d = Math.hypot(c.x - body.px, c.z - body.pz);
+        if (d < bestDist) {
+          bestDist = d;
+          best = c;
+        }
       }
     }
-    if (!best || ally.sweepElapsed > 7.5) {
+    if (!best) {
       enterSecured(ctx, ally, room, portal);
       return;
     }
@@ -160,13 +220,21 @@ export function updateSweeping(ctx: SquadContext, ally: AllyUnit, dt: number): v
     if (!ally.vantage) {
       ally.skipped.add(best);
       ally.sweepCell = null;
+      if (unseenCount <= 1) {
+        enterSecured(ctx, ally, room, portal);
+      } else {
+        ally.sweepRetryCd = 0.25;
+      }
       return;
     }
   }
 
   const targetCell = ally.sweepCell;
-  const eye = body.eye(new THREE.Vector3());
-  if (hasLineOfSight(ctx.colliders, eye, { x: targetCell.x, y: targetCell.y + 0.35, z: targetCell.z })) {
+  const eye = body.eye(sweepEyeTmp);
+  cellTargetTmp.x = targetCell.x;
+  cellTargetTmp.y = targetCell.y + 0.35;
+  cellTargetTmp.z = targetCell.z;
+  if (hasLineOfSight(ctx.colliders, eye, cellTargetTmp)) {
     ally.progress = t('死角クリア中', 'Clearing Blind Spot');
     // 重要: 床(0.18m)ではなく常に胸〜目線高(1.38m)を向く！
     if (!ally.engaging) {
@@ -458,31 +526,61 @@ export function resolveRestrainTaskById(
 }
 
 export function findVantageForCell(ctx: SquadContext, ally: AllyUnit, room: RoomDef, cell: Cell): XZ | null {
-  const candidates = ctx.coverage.filter(
-    (c) =>
-      c.room === room &&
-      !blockedAt(ctx.colliders, c.x, c.z, ctx.cfg.bodyRadius, c.y) &&
-      hasLineOfSight(ctx.colliders, { x: c.x, y: c.y + 1.55, z: c.z }, { x: cell.x, y: cell.y + 0.35, z: cell.z }),
-  );
-  candidates.sort((a, b) => Math.hypot(a.x - ally.body.px, a.z - ally.body.pz) - Math.hypot(b.x - ally.body.px, b.z - ally.body.pz));
-  const nearby = candidates.slice(0, 8);
-  const unknown = ctx.coverage.filter((c) => c.room === room && !c.seen);
-  const ranked = nearby
-    .map((c) => {
-      const gain = unknown.reduce(
-        (n, u) => n + Number(hasLineOfSight(ctx.colliders, { x: c.x, y: c.y + 1.55, z: c.z }, { x: u.x, y: u.y + 0.35, z: u.z })),
-        0,
-      );
-      // 部屋中央へ出ていくより、壁沿いから死角を覗く位置を優先（中央からの距離ボーナス）
-      const fromCenter = Math.min(4, Math.hypot(c.x - room.x, c.z - room.z));
-      return { c, score: gain * (1 + 0.25 * fromCenter) + fromCenter * 0.5 };
-    })
-    .sort((a, b) => b.score - a.score);
+  const roomCells = ctx.cellsByRoom.get(room.id) ?? ctx.coverage.filter((c) => c.room === room);
+  const candidates: Cell[] = [];
+  const unknown: Cell[] = [];
+  const cellPt: Vec3 = { x: cell.x, y: cell.y + 0.35, z: cell.z };
+  const fromPt: Vec3 = { x: 0, y: 0, z: 0 };
+  for (let i = 0; i < roomCells.length; i++) {
+    const c = roomCells[i]!;
+    if (!c.seen) unknown.push(c);
+    if (!blockedAt(ctx.colliders, c.x, c.z, ctx.cfg.bodyRadius, c.y)) {
+      fromPt.x = c.x;
+      fromPt.y = c.y + 1.55;
+      fromPt.z = c.z;
+      if (hasLineOfSight(ctx.colliders, fromPt, cellPt)) {
+        candidates.push(c);
+      }
+    }
+  }
+  if (candidates.length === 0) return null;
 
-  for (const { c } of ranked) {
-    const path = squadRoute({ x: ally.body.px, z: ally.body.pz }, c, cell.y, ctx.colliders, ctx.bounds, ctx.cfg.bodyRadius);
-    const end = path.at(-1);
-    if (end && Math.hypot(end.x - c.x, end.z - c.z) < 0.35) return c;
+  candidates.sort((a, b) => Math.hypot(a.x - ally.body.px, a.z - ally.body.pz) - Math.hypot(b.x - ally.body.px, b.z - ally.body.pz));
+  const nearbyLen = Math.min(8, candidates.length);
+  const uPt: Vec3 = { x: 0, y: 0, z: 0 };
+  const ranked: { c: Cell; score: number }[] = [];
+  for (let i = 0; i < nearbyLen; i++) {
+    const c = candidates[i]!;
+    fromPt.x = c.x;
+    fromPt.y = c.y + 1.55;
+    fromPt.z = c.z;
+    let gain = 0;
+    for (let j = 0; j < unknown.length; j++) {
+      const u = unknown[j]!;
+      uPt.x = u.x;
+      uPt.y = u.y + 0.35;
+      uPt.z = u.z;
+      if (hasLineOfSight(ctx.colliders, fromPt, uPt)) gain++;
+    }
+    // 部屋中央へ出ていくより、壁沿いから死角を覗く位置を優先（中央からの距離ボーナス）
+    const fromCenter = Math.min(4, Math.hypot(c.x - room.x, c.z - room.z));
+    ranked.push({ c, score: gain * (1 + 0.25 * fromCenter) + fromCenter * 0.5 });
+  }
+  ranked.sort((a, b) => b.score - a.score);
+
+  const origin: XZ = { x: ally.body.px, z: ally.body.pz };
+  let routeChecks = 0;
+  for (let i = 0; i < ranked.length; i++) {
+    const c = ranked[i]!.c;
+    if (pathSegmentClear(ctx.colliders, origin, c, ctx.cfg.bodyRadius, cell.y)) {
+      return c;
+    }
+    if (routeChecks < 3) {
+      routeChecks++;
+      const path = squadRoute(origin, c, cell.y, ctx.colliders, ctx.bounds, ctx.cfg.bodyRadius);
+      const end = path.at(-1);
+      if (end && Math.hypot(end.x - c.x, end.z - c.z) < 0.35) return c;
+    }
   }
   return null;
 }

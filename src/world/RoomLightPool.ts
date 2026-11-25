@@ -17,6 +17,8 @@ export interface LightSpot {
 export const ROOM_LIGHT_SLOTS = 8;
 const RESELECT_SEC = 0.5;
 const SHADOW_MAP = 512;
+/** キューブ影 6 面描画の更新周期（秒, ~18Hz）。静的シーンで毎フレーム 6 面描き直さない。 */
+const SHADOW_REFRESH_SEC = 1 / 18;
 const FADE_PER_SEC = 3;
 /** 切替境界での明滅を防ぐヒステリシス閾値（m）。 */
 const HYSTERESIS_METERS = 1.5;
@@ -36,6 +38,8 @@ export class RoomLightPool {
   private readonly wanted = new Set<LightSpot>();
   /** 最寄りの照明（影付きスロットへ回す） */
   private nearest: LightSpot | null = null;
+  private lastShadowSpot: LightSpot | null = null;
+  private shadowTimer = 0;
 
   constructor(
     private readonly spots: readonly LightSpot[],
@@ -46,8 +50,10 @@ export class RoomLightPool {
       const light = new THREE.PointLight(0xffffff, 0, 1, 1);
       light.name = 'room-light';
       if (i === 0) {
-        // 先頭スロットだけ影を落とす（キューブ影 6 面描画なので 1 灯に限定）
+        // 先頭スロットだけ影を落とす（キューブ影 6 面描画なので 1 灯に限定し、手動スロットル更新）
         light.castShadow = true;
+        light.shadow.autoUpdate = false;
+        light.shadow.needsUpdate = false;
         light.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP);
         light.shadow.bias = -0.004;
         light.shadow.normalBias = 0.03;
@@ -97,6 +103,21 @@ export class RoomLightPool {
       this.assign(free, spot, 0);
     }
     for (const s of this.slots) s.light.intensity = s.spot ? s.spot.intensity * s.w : 0;
+
+    if (shadow.light.castShadow) {
+      if (shadow.spot !== null && shadow.light.intensity > 0.01) {
+        this.shadowTimer -= dt;
+        if (shadow.spot !== this.lastShadowSpot || this.shadowTimer <= 0) {
+          this.lastShadowSpot = shadow.spot;
+          this.shadowTimer = SHADOW_REFRESH_SEC;
+          shadow.light.shadow.needsUpdate = true;
+        }
+      } else {
+        this.lastShadowSpot = null;
+        this.shadowTimer = 0;
+        shadow.light.shadow.needsUpdate = false;
+      }
+    }
   }
 
   private assign(s: Slot, spot: LightSpot, w: number): void {
@@ -117,6 +138,12 @@ export class RoomLightPool {
     for (const s of this.slots) {
       s.w = 1;
       s.light.intensity = s.spot ? s.spot.intensity : 0;
+    }
+    const s0 = this.slots[0];
+    if (s0 && s0.light.castShadow && s0.spot !== null && s0.light.intensity > 0.01) {
+      this.lastShadowSpot = s0.spot;
+      this.shadowTimer = SHADOW_REFRESH_SEC;
+      s0.light.shadow.needsUpdate = true;
     }
     this.timer = RESELECT_SEC;
   }

@@ -23,6 +23,9 @@ export class Arrest {
   private readonly bar = document.createElement('div');
   private readonly txt = document.createElement('div');
   private holdProgress = -1; // <0: 今フレーム保持なし
+  private shown = false;
+  private lastPct = -1;
+  private lastTxt = '';
   private disposed = false;
 
   constructor(
@@ -73,7 +76,10 @@ export class Arrest {
   }
 
   private progress(sec: number, need: number, text: string, done: () => void): void {
-    this.txt.textContent = text;
+    if (text !== this.lastTxt) {
+      this.lastTxt = text;
+      this.txt.textContent = text;
+    }
     this.holdProgress = Math.min(1, sec / need);
     if (sec >= need) {
       this.holdProgress = -1;
@@ -165,9 +171,18 @@ export class Arrest {
   update(_rawDt: number): void {
     if (this.disposed) return;
     if (this.holdProgress >= 0) {
-      this.el.style.display = 'block';
-      this.bar.style.width = `${Math.round(this.holdProgress * 100)}%`;
-    } else {
+      if (!this.shown) {
+        this.shown = true;
+        this.el.style.display = 'block';
+      }
+      const pct = Math.round(this.holdProgress * 100);
+      if (pct !== this.lastPct) {
+        this.lastPct = pct;
+        this.bar.style.width = `${pct}%`;
+      }
+    } else if (this.shown) {
+      this.shown = false;
+      this.lastPct = -1;
       this.el.style.display = 'none';
     }
     this.holdProgress = -1;
