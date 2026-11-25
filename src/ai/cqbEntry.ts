@@ -33,6 +33,9 @@ export interface CqbRoom {
   depth: number;
 }
 
+/** 突入スタイル: dynamic = 強行突入、stealth = 慎重（半開き・パイ切り・静音進入） */
+export type EntryMode = 'dynamic' | 'stealth';
+
 export interface EntryPlan {
   /** axis 方向の符号。スタック枠の lateral 符号と同じ（0 は左 = -1 扱い） */
   side: -1 | 1;
@@ -45,6 +48,8 @@ export interface EntryPlan {
   pod: Vec3;
   /** PoD で保持する視線点 */
   look: Vec3;
+  /** 敷居直後の自サイドハードコーナー視線点（ボタンフック中のコーナーチェック用） */
+  hardCornerLook: Vec3;
 }
 
 export interface PlanEntryOptions {
@@ -401,7 +406,208 @@ export function planEntry(
     }
     pods.push(pod);
     waypoints.push(pod);
-    plans[index] = { side, rank, order, waypoints, pod, look };
+    // 自サイド入口脇のハードコーナー視線点（rank 0 は壁沿いコーナー、rank 1+ は最終 look と同じ）
+    const hardCornerLook =
+      rank === 0
+        ? fromPortalFrame(portal, side * Math.max(halfL + 0.35, 1.2), 0.75, lookY)
+        : look;
+    plans[index] = { side, rank, order, waypoints, pod, look, hardCornerLook };
   }
   return plans;
 }
+
+// ---------- フェーズ1〜3 共有純関数（射線管理・後方警戒・パイ切り・角リーン） ----------
+
+export interface FriendlyPos {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * マズルディシプリン判定: 銃口前方に味方・プレイヤーが重なるか、至近距離の壁がある場合にローレディを返す。
+ * yawRad は HumanoidBody の規約（前方 = (-sin(yaw), -cos(yaw))）。
+ */
+export function shouldUseLowReady(
+  pos: FriendlyPos,
+  yawRad: number,
+  friendlies: readonly FriendlyPos[],
+  wallClose = false,
+  maxDist = 2.6,
+  halfWidth = 0.52,
+): boolean {
+  if (wallClose) return true;
+  const fx = -Math.sin(yawRad);
+  const fz = -Math.cos(yawRad);
+  const rx = Math.cos(yawRad);
+  const rz = -Math.sin(yawRad);
+  for (const f of friendlies) {
+    if (Math.abs(f.y - pos.y) > 0.75) continue;
+    const dx = f.x - pos.x;
+    const dz = f.z - pos.z;
+    const fwd = dx * fx + dz * fz;
+    if (fwd <= 0.15 || fwd > maxDist) continue;
+    const lat = Math.abs(dx * rx + dz * rz);
+    if (lat < halfWidth) return true;
+  }
+  return false;
+}
+
+/**
+ * スタック・ドア準備中のセクター視線点を算出する。
+ * - 先頭 (rank === 0): ドア開口部中央を注視
+ * - 最後尾 (groupSize >= 3 かつ order === groupSize - 1): 後方警戒（リアセキュリティ）
+ * - 中間: ドア開口の自サイド外縁〜側方をカバー
+ */
+export function computeStackLookPoint(
+  portal: CqbPortal,
+  order: number,
+  groupSize: number,
+  rank: number,
+  side: -1 | 1,
+  lookHeight = 1.38,
+): Vec3 {
+  const y = portal.center.y + lookHeight;
+  if (groupSize >= 3 && order === groupSize - 1) {
+    // 最後尾は廊下後方・背後を警戒
+    return fromPortalFrame(portal, side * 0.4, -4.5, y);
+  }
+  if (rank === 0) {
+    return fromPortalFrame(portal, 0, 0.25, y);
+  }
+  // 中間員はドア開口の反対側エッジ〜斜め前方をカバー
+  return fromPortalFrame(portal, -side * Math.max(0.55, portal.width * 0.45), 0.15, y);
+}
+
+export interface PieStep {
+  /** ドア外側の弧上の立ち位置 */
+  pos: Vec3;
+  /** 視線・照準点（室内奥を反対側から順にスライスする） */
+  look: Vec3;
+  /** ポート座標系での開口方向符号（+1 = +axis 側へ傾く, -1 = -axis 側へ傾く） */
+  portalLeanAxis: -1 | 0 | 1;
+}
+
+export interface PlanDoorPieOptions {
+  isStandable(p: Vec3): boolean;
+  steps?: number;
+  radius?: number;
+  lookHeight?: number;
+}
+
+/**
+ * ドア外周のスライシング・ザ・パイ（弧状移動＋視線スイープ）経路を生成する。
+ * 開始サイド `side` (-1=左, +1=右) の外側約 62° から開口正面（〜反対側少し）へ弧を描いて移動し、
+ * 各ステップで開口を通して室内の未視認角度を順に切る。
+ */
+export function planDoorPieArc(
+  portal: CqbPortal,
+  room: CqbRoom,
+  side: -1 | 1,
+  opts: PlanDoorPieOptions,
+): PieStep[] {
+  const steps = Math.max(2, opts.steps ?? 4);
+  const baseRadius = opts.radius ?? 1.35;
+  const lookY = portal.center.y + (opts.lookHeight ?? 1.38);
+  const depth = Math.max(1.6, entryRoomDepth(portal, room));
+  const lookDist = Math.min(4.6, Math.max(1.8, depth - 0.45));
+
+  // 開始角（自サイド 62°）→ 終了角（正面〜わずかに反対側 -12°）
+  const startDeg = side * 62;
+  const endDeg = -side * 12;
+  const out: PieStep[] = [];
+  const radii = [baseRadius, Math.max(0.9, baseRadius - 0.35), Math.max(0.75, baseRadius - 0.55)];
+
+  for (let i = 0; i < steps; i++) {
+    const t = steps === 1 ? 0.5 : i / (steps - 1);
+    const deg = startDeg + (endDeg - startDeg) * t;
+    const rad = (deg * Math.PI) / 180;
+    const sinA = Math.sin(rad);
+    const cosA = Math.cos(rad);
+    let chosen: Vec3 | null = null;
+    for (const r of radii) {
+      const cand = fromPortalFrame(portal, r * sinA, -r * cosA);
+      if (opts.isStandable(cand)) {
+        chosen = cand;
+        break;
+      }
+    }
+    if (!chosen) continue;
+    // 立ち位置からドア中心を通るレイで室内奥の視線点を算出
+    const dx = portal.center.x - chosen.x;
+    const dz = portal.center.z - chosen.z;
+    const dLen = Math.hypot(dx, dz) || 1;
+    const look: Vec3 = {
+      x: portal.center.x + (dx / dLen) * lookDist,
+      y: lookY,
+      z: portal.center.z + (dz / dLen) * lookDist,
+    };
+    const uPos = toPortalFrame(portal, chosen).u;
+    const portalLeanAxis: -1 | 0 | 1 = Math.abs(uPos) > 0.18 ? (uPos > 0 ? -1 : 1) : 0;
+    out.push({ pos: chosen, look, portalLeanAxis });
+  }
+  return out;
+}
+
+/**
+ * ポート座標のリーン軸符号 (portalLeanAxis: -1 | 0 | 1) を、
+ * 隊員の体向き yawRad に対するローカル左右リーン量 (-1=左, +1=右) へ変換する。
+ */
+export function portalLeanToBodyLean(portal: CqbPortal, yawRad: number, portalLeanAxis: -1 | 0 | 1): number {
+  if (portalLeanAxis === 0) return 0;
+  // HumanoidBody ローカル +X (右) = (cos(yaw), -sin(yaw))
+  const rx = Math.cos(yawRad);
+  const rz = -Math.sin(yawRad);
+  const dot = portal.axis.x * portalLeanAxis * rx + portal.axis.z * portalLeanAxis * rz;
+  return dot >= 0 ? 0.85 : -0.85;
+}
+
+/**
+ * 味方が射線上にいるとき、左右どちらかに半歩ずれて射線を通せる位置を探す。
+ */
+export function computeStepOutPoint(
+  pos: Vec3,
+  target: Vec3,
+  isStandable: (p: Vec3) => boolean,
+  isClear: (p: Vec3) => boolean,
+  offset = 0.78,
+): Vec3 | null {
+  const dx = target.x - pos.x;
+  const dz = target.z - pos.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.3) return null;
+  // 射線に直交する単位ベクトル
+  const px = -dz / len;
+  const pz = dx / len;
+  for (const dist of [offset, offset * 1.35]) {
+    for (const sign of [1, -1] as const) {
+      const cand: Vec3 = { x: pos.x + px * dist * sign, y: pos.y, z: pos.z + pz * dist * sign };
+      if (isStandable(cand) && isClear(cand)) return cand;
+    }
+  }
+  return null;
+}
+
+/**
+ * 壁際・角待ち時の自動リーン方向を算出する。
+ * 左右 0.52m に壁がある側を検出し、片側だけ壁で反対側が開けていれば壁から離れる方向へリーンする。
+ */
+export function computeCornerLean(
+  pos: Vec3,
+  yawRad: number,
+  isBlocked: (x: number, z: number) => boolean,
+  probeDist = 0.52,
+): number {
+  const rx = Math.cos(yawRad);
+  const rz = -Math.sin(yawRad);
+  const fx = -Math.sin(yawRad);
+  const fz = -Math.cos(yawRad);
+  const leftBlocked = isBlocked(pos.x - rx * probeDist, pos.z - rz * probeDist);
+  const rightBlocked = isBlocked(pos.x + rx * probeDist, pos.z + rz * probeDist);
+  if (leftBlocked === rightBlocked) return 0;
+  // 壁から離れる側（開いている側）へ、さらに前方に抜けがあるときだけリーン
+  const dir = leftBlocked ? 1 : -1;
+  const openFwdBlocked = isBlocked(pos.x + rx * probeDist * dir + fx * 0.45, pos.z + rz * probeDist * dir + fz * 0.45);
+  return openFwdBlocked ? 0 : dir * 0.8;
+}
+

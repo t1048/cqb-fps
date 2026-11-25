@@ -16,6 +16,7 @@ export type Action =
   | 'slot2'
   | 'slot3'
   | 'orderMenu'
+  | 'toggleEntryMode'
   | 'quickOrder'
   | 'regroup'
   | 'cycleElement'
@@ -40,7 +41,8 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   slot1: ['Digit1'],
   slot2: ['Digit2'],
   slot3: ['Digit3'],
-  orderMenu: ['Tab'],
+  orderMenu: [],
+  toggleEntryMode: ['Tab'],
   quickOrder: ['KeyZ'],
   regroup: ['KeyX'],
   cycleElement: ['KeyT'],
@@ -166,7 +168,7 @@ export class InputManager {
   private onKeyDown = (e: KeyboardEvent): void => {
     // プレイ中（ポインタロック中）は Ctrl/⌘ との組み合わせによるブラウザ既定動作（保存・ブックマーク等）を抑止する
     if (this.isPointerLocked && (e.ctrlKey || e.metaKey)) e.preventDefault();
-    const orderMenuCodes = this.actionToCodes.get('orderMenu') ?? ['Tab'];
+    const orderMenuCodes = this.actionToCodes.get('orderMenu') ?? [];
     if (orderMenuCodes.includes(e.code)) {
       if (this.isPointerLocked) e.preventDefault();
       if (!e.repeat && this.isPointerLocked && this.onOrderMenu && this.orderMenuEnabled && !this.choosing && !this.suppressSquadShortcuts) {
@@ -177,6 +179,10 @@ export class InputManager {
       }
       this.down.add(e.code);
       return;
+    }
+    const toggleEntryModeCodes = this.actionToCodes.get('toggleEntryMode') ?? ['Tab'];
+    if (this.isPointerLocked && toggleEntryModeCodes.includes(e.code)) {
+      e.preventDefault();
     }
     if (this.choosing && !e.repeat && /^Digit[1-9]$/.test(e.code)) {
       e.preventDefault();
@@ -195,7 +201,7 @@ export class InputManager {
   };
   private onKeyUp = (e: KeyboardEvent): void => {
     this.down.delete(e.code);
-    const orderMenuCodes = this.actionToCodes.get('orderMenu') ?? ['Tab'];
+    const orderMenuCodes = this.actionToCodes.get('orderMenu') ?? [];
     if (orderMenuCodes.includes(e.code) && this.choosing && this.choosingTrigger === 'tab') {
       this.choosing = false;
       this.choosingTrigger = null;

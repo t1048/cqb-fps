@@ -26,6 +26,9 @@ const BODY_D = 0.28;
 const HEAD_YAW_LIMIT = 0.5;
 /** 1tick の移動がこれ未満なら歩行ストライドに数えない(m) */
 const STRIDE_DEADZONE = 0.004;
+/** AIリーンの最大横オフセット(m)と最大ロール角(rad) */
+const MAX_LEAN_OFFSET = 0.24;
+const MAX_LEAN_ROLL_RAD = 0.24;
 
 /**
  * 頭・胴・四肢・装備を組み合わせた人型。姿勢で高さ・AABB が変わる。
@@ -50,6 +53,8 @@ export class HumanoidBody {
   private fallStart = 0;
   private readonly headPivot = new THREE.Group();
   private shake = 0;
+  private leanTarget = 0;
+  private leanCurrent = 0;
   private lastDt = 1 / 60;
   /** 今フレームの残り旋回予算(rad)。faceToward が消費し tick で 5*dt にリセット */
   private turnBudget = 5 / 60;
@@ -396,16 +401,24 @@ export class HumanoidBody {
       this.rig.position.z = -0.55*t;
       for (const leg of this.legs) leg.knee.rotation.x += (-0.85-leg.knee.rotation.x)*blend;
     }
-    this.torso.rotation.z = this.shake * 0.18;
+    const leanGoal = this.pose === 'stand' || this.pose === 'crouch' ? this.leanTarget : 0;
+    this.leanCurrent += (leanGoal - this.leanCurrent) * (1 - Math.exp(-9 * dt));
+    if (Math.abs(this.leanCurrent) < 1e-4 && leanGoal === 0) this.leanCurrent = 0;
+    this.torso.position.x = this.leanCurrent * MAX_LEAN_OFFSET;
+    this.torso.rotation.z = this.shake * 0.18 - this.leanCurrent * MAX_LEAN_ROLL_RAD;
     this.torso.rotation.y += (this.torsoTarget - this.torso.rotation.y) * (1 - Math.exp(-8 * dt));
     this.torsoTarget *= Math.exp(-8 * dt);
     if (this.gunShown && this.gun && this.gun.parent === this.rig) {
+      const targetGunX = 0.125 + this.leanCurrent * MAX_LEAN_OFFSET;
       const targetGunY = this.readyPose === 'high' ? 1.24 : 1.13;
       const targetGunZ = this.readyPose === 'high' ? -0.23 : -0.21;
       const targetPitch = this.readyPose === 'high' ? this.aimPitch * 0.65 : -0.28;
+      const targetRoll = -this.leanCurrent * MAX_LEAN_ROLL_RAD * 0.85;
+      this.gun.position.x += (targetGunX - this.gun.position.x) * blend;
       this.gun.position.y += (targetGunY - this.gun.position.y) * blend;
       this.gun.position.z += (targetGunZ - this.gun.position.z) * blend;
       this.gun.rotation.x += (targetPitch - this.gun.rotation.x) * blend;
+      this.gun.rotation.z += (targetRoll - this.gun.rotation.z) * blend;
     }
     if (this.gunShown && this.gun && this.gun.parent === this.group) {
       const t = THREE.MathUtils.smoothstep(this.poseTime,0.05,0.42);
@@ -440,7 +453,16 @@ export class HumanoidBody {
   }
 
   chestPos(): { x: number; y: number; z: number } {
-    return { x: this.x, y: this.footY + Math.min(this.height * 0.72, 1.25), z: this.z };
+    const off = this.leanCurrent * MAX_LEAN_OFFSET * 0.6;
+    if (Math.abs(off) < 1e-4) {
+      return { x: this.x, y: this.footY + Math.min(this.height * 0.72, 1.25), z: this.z };
+    }
+    const yaw = this.group.rotation.y;
+    return {
+      x: this.x + Math.cos(yaw) * off,
+      y: this.footY + Math.min(this.height * 0.72, 1.25),
+      z: this.z - Math.sin(yaw) * off,
+    };
   }
 
   get yawRad(): number {
@@ -490,6 +512,19 @@ export class HumanoidBody {
 
   setReadyPose(mode: 'low' | 'high'): void {
     this.readyPose = mode;
+  }
+
+  getReadyPose(): 'low' | 'high' {
+    return this.readyPose;
+  }
+
+  /** AI の左右リーン量を設定する（-1=左, 0=直立, +1=右）。tick() で滑らかに補間される。 */
+  setLean(amount: number): void {
+    this.leanTarget = THREE.MathUtils.clamp(amount, -1, 1);
+  }
+
+  getLean(): number {
+    return this.leanCurrent;
   }
 
   /** 指定ワールド座標へ体・頭・銃口を滑らかに向ける（胸・目線高さの戦術エイム用）。 */

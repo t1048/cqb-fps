@@ -31,6 +31,10 @@ const STYLE = `
 .cqb-hud .bottom-left{position:absolute;left:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;max-width:410px}
 .cqb-hud .roster{padding:8px 10px;background:rgba(10,16,24,.76);border:1px solid rgba(110,145,180,.38);border-radius:5px}
 .cqb-hud .roster-head{display:flex;justify-content:space-between;align-items:center;font:bold 11px monospace;color:#8eb0d0;margin-bottom:5px;gap:10px}
+.cqb-hud .roster-badges{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.cqb-hud .roster-mode{padding:1px 5px;border-radius:3px;font-size:10px;border:1px solid transparent}
+.cqb-hud .roster-mode.dynamic{background:rgba(242,193,78,.18);border-color:rgba(242,193,78,.5);color:#ffd978}
+.cqb-hud .roster-mode.stealth{background:rgba(86,200,216,.18);border-color:rgba(86,200,216,.5);color:#8be4f2}
 .cqb-hud .roster-el{color:#f2c14e}
 .cqb-hud .ally-row{display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:3px;font-size:12px;margin-top:2px;border-left:3px solid transparent}
 .cqb-hud .ally-row.selected{background:rgba(86,200,216,.14);border-left-color:#56c8d8}
@@ -95,6 +99,7 @@ export class Hud {
   private readonly hpFillEl = document.createElement('div');
   private readonly stanceEl = document.createElement('span');
   private readonly rosterEl = document.createElement('div');
+  private readonly rosterModeEl = document.createElement('span');
   private readonly rosterElLabel = document.createElement('span');
   private readonly rosterListEl = document.createElement('div');
   private readonly rosterLookEl = document.createElement('div');
@@ -160,8 +165,13 @@ export class Hud {
     rHead.className = 'roster-head';
     const rTitle = document.createElement('span');
     rTitle.textContent = 'SQUAD [右クリック指示 / Z簡易 / X集合]';
+    const rBadges = document.createElement('span');
+    rBadges.className = 'roster-badges';
+    this.rosterModeEl.className = 'roster-mode dynamic';
+    this.rosterModeEl.textContent = '[Tab] DYNAMIC';
     this.rosterElLabel.className = 'roster-el';
-    rHead.append(rTitle, this.rosterElLabel);
+    rBadges.append(this.rosterModeEl, this.rosterElLabel);
+    rHead.append(rTitle, rBadges);
     this.rosterLookEl.className = 'squad-hint';
     this.rosterLookEl.style.display = 'none';
     this.rosterEl.append(rHead, this.rosterListEl, this.rosterLookEl);
@@ -327,14 +337,19 @@ export class Hud {
     if (this.squad) {
       const roster = this.squad.getRoster();
       const lookText = this.squad.hudText();
+      const entryMode = this.squad.getEntryMode();
       const key =
         this.squad.elementLabel +
+        '|' +
+        entryMode +
         '|' +
         lookText +
         '|' +
         roster.map((r) => `${r.id}:${r.hp}:${r.down}:${r.selected}:${r.orderLabel}:${r.statusText}`).join(';');
       if (key !== this.lastRosterKey) {
         this.lastRosterKey = key;
+        this.rosterModeEl.textContent = entryMode === 'stealth' ? '[Tab] STEALTH' : '[Tab] DYNAMIC';
+        this.rosterModeEl.className = `roster-mode ${entryMode}`;
         this.rosterElLabel.textContent = `[T] ${this.squad.elementLabel}`;
         this.rosterListEl.textContent = '';
         for (const r of roster) {

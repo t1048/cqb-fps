@@ -54,14 +54,22 @@ import {
 import { layoutStackSlots, type StackSlot } from './stackSlots';
 import {
   assignStackSlots,
+  computeCornerLean,
   computeEntryOrder,
+  computeStackLookPoint,
+  computeStepOutPoint,
   cqbPortalFromStackSlotPortal,
   cqbRoomFromRoomDef,
   entryHalfWidth,
   entryRoomDepth,
   fromPortalFrame,
+  planDoorPieArc,
   planEntry,
+  portalLeanToBodyLean,
+  shouldUseLowReady,
+  type EntryMode,
   type EntryPlan,
+  type PieStep,
 } from './cqbEntry';
 import { shieldBlocks } from './ShieldGuard';
 import { HumanoidBody } from './HumanoidBody';
@@ -210,6 +218,19 @@ export interface Cell extends XZ {
   visible: boolean;
 }
 
+/** ステルス突入: ドア半開き(peekAngle)での確認保持時間(s) */
+const STEALTH_PEEK_HOLD_SEC = 0.65;
+/** スライシング・ザ・パイ各ステップでの静止確認時間(s) */
+const PIE_STEP_HOLD_SEC = 0.32;
+/** スライシング・ザ・パイの移動速度倍率 */
+const PIE_SPEED_MUL = 0.62;
+/** ステルス突入時の室内進入速度倍率 */
+const STEALTH_ENTRY_SPEED_MUL = 0.74;
+/** スライシング・ザ・パイ全体のタイムアウト(s) */
+const PIE_TIMEOUT_SEC = 6.5;
+/** 味方射線ブロックが続いてステップアウトを発動する閾値(s) */
+const STEP_OUT_TRIGGER_SEC = 0.38;
+
 type TacticalPhase =
   | 'follow'
   | 'hold'
@@ -217,6 +238,7 @@ type TacticalPhase =
   | 'overwatch'
   | 'stacking'
   | 'door_prep'
+  | 'pieing'
   | 'c2_plant'
   | 'c2_standoff'
   | 'flash_wait'
@@ -345,6 +367,20 @@ interface AllyUnit extends HitTarget {
   securedTurnRate: number;
   podReturnT: number;
   coverHold: { suspectId: string; threatPos: Vec3; hide: XZ; peek: XZ; lostSec: number } | null;
+  /** 味方射線ブロックの継続秒（一定時間でステップアウト発動） */
+  holdingFireSec: number;
+  /** 味方射線回避のステップアウト目標位置 */
+  stepOutPos: Vec3 | null;
+  /** スライシング・ザ・パイ経路と進行状態 */
+  pieSteps: PieStep[];
+  pieIdx: number;
+  pieHold: number;
+  pieElapsed: number;
+  /** ステルス突入時の半開き確認タイマー・完了フラグ */
+  peekHold: number;
+  peekDone: boolean;
+  /** 今回の突入がステルスモード由来か（速度・足音に反映） */
+  stealthEntry: boolean;
   label: AIDebugLabel;
 }
 
@@ -450,6 +486,8 @@ export class SquadSystem {
   private followHeading: XZ = { x: 0, z: -1 };
   private lastPlayerPos: XZ = { x: 0, z: 0 };
   private readonly portalGroups = new Map<string, PortalGroup>();
+  /** 突入モード: dynamic = ダイナミック強行突入, stealth = ステルス慎重突入（Tab 切替） */
+  private entryMode: EntryMode = 'dynamic';
   private disposed = false;
 
   constructor(
@@ -634,6 +672,15 @@ export class SquadSystem {
         securedTurnRate: Math.PI * 1.4,
         podReturnT: 0,
         coverHold: null,
+        holdingFireSec: 0,
+        stepOutPos: null,
+        pieSteps: [],
+        pieIdx: 0,
+        pieHold: 0,
+        pieElapsed: 0,
+        peekHold: 0,
+        peekDone: false,
+        stealthEntry: false,
         label,
         getAABB: () => body.getAABB(),
         shieldBlocks: (from, hit) => shieldBlocks(body, from, hit),
@@ -891,12 +938,15 @@ export class SquadSystem {
             }
           }
           this.applySeparation(ally, dt);
+          this.updateMuzzleDiscipline(ally);
+          this.updateAllyLean(ally);
           this.updateAllyOptics(ally);
           this.updateAllyFootstep(ally);
         }
       } else {
         ally.vel.x = 0;
         ally.vel.z = 0;
+        ally.body.setLean(0);
         ally.optics.hide();
       }
       const c = ally.body.chestPos();
@@ -911,8 +961,38 @@ export class SquadSystem {
     this.tryAutonomousGas();
   }
 
+  getEntryMode(): EntryMode {
+    return this.entryMode;
+  }
+
+  setEntryMode(mode: EntryMode): void {
+    this.entryMode = mode;
+  }
+
+  toggleEntryMode(): EntryMode {
+    this.entryMode = this.entryMode === 'dynamic' ? 'stealth' : 'dynamic';
+    const isStealth = this.entryMode === 'stealth';
+    this.ack = isStealth
+      ? '突入モード: ステルス（半開き・パイ切り・慎重進入）'
+      : '突入モード: ダイナミック（強行突入）';
+    this.ackLeft = 2.0;
+    const lead = this.allies.find((a) => !a.down);
+    if (lead) {
+      this.emitRadio(
+        lead,
+        isStealth ? '了解、ステルス進入モードに切り替える。慎重に切るぞ' : '了解、ダイナミック突入モードに切り替える！',
+        isStealth ? 'Switching to stealth deliberate entry.' : 'Switching to dynamic entry!',
+      );
+    }
+    return this.entryMode;
+  }
+
   private handleShortcuts(): void {
     if (!this.input.isPointerLocked || this.input.suppressSquadShortcuts || !this.player.alive) return;
+
+    if (this.input.wasPressed('toggleEntryMode')) {
+      this.toggleEntryMode();
+    }
 
     if (this.input.wasPressed('cycleElement')) {
       // 隊員がいないチームは飛ばす（隊員 1 名なら GOLD ⇔ ALPHA のみ）
@@ -1589,7 +1669,17 @@ export class SquadSystem {
     ally.securedLookSet = false;
     ally.podReturnT = 0;
     ally.coverHold = null;
+    ally.holdingFireSec = 0;
+    ally.stepOutPos = null;
+    ally.pieSteps = [];
+    ally.pieIdx = 0;
+    ally.pieHold = 0;
+    ally.pieElapsed = 0;
+    ally.peekHold = 0;
+    ally.peekDone = false;
+    ally.stealthEntry = false;
     ally.body.setPose('stand');
+    ally.body.setLean(0);
   }
 
   private emitRadioNow(ally: AllyUnit, text: string, voiceText?: string): void {
@@ -1621,6 +1711,7 @@ export class SquadSystem {
       ally.phase === 'restraining' ||
       ally.phase === 'stacking' ||
       ally.phase === 'door_prep' ||
+      ally.phase === 'pieing' ||
       ally.phase === 'c2_plant' ||
       ally.phase === 'c2_standoff' ||
       ally.phase === 'flash_wait' ||
@@ -1715,8 +1806,12 @@ export class SquadSystem {
           ally.anchor = { x: body.px, z: body.pz };
           ally.progress = '隊列待機';
           if (!ally.idleLook) {
-            // 停止中の視線はプレイヤー向き±0.35 に固定（毎フレーム再計算しない）
-            const sideAngle = this.player.yawRad + (ally.index % 2 === 0 ? 0.35 : -0.35);
+            // 停止中の視線: 2名以上なら最後尾は後方警戒（360°セキュリティ）、前方はプレイヤー向き±0.42 に固定
+            const alive = this.allies.filter((a) => !a.down);
+            const isRearGuard = alive.length >= 2 && alive[alive.length - 1] === ally;
+            const sideAngle = isRearGuard
+              ? this.player.yawRad + Math.PI
+              : this.player.yawRad + (ally.index % 2 === 0 ? 0.42 : -0.42);
             ally.idleLook = {
               x: body.px - Math.sin(sideAngle) * 4,
               y: body.footY + 1.45,
@@ -1798,7 +1893,14 @@ export class SquadSystem {
           return;
         }
         if (!ally.engaging) {
-          body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
+          const stackLook = computeStackLookPoint(
+            cqbPortalFromStackSlotPortal(portal, portal.sillY),
+            ally.entryOrder,
+            ally.groupSize,
+            ally.entryPlan?.rank ?? ally.roleIndex,
+            ally.entryPlan?.side ?? -1,
+          );
+          body.aimAt(stackLook.x, stackLook.y, stackLook.z, dt, Math.PI * 2 * dt);
         }
         // door_prep への遷移はグループ単位（updatePortalGroups）。個人のタイムアウトで先走らない
         const g = this.portalGroups.get(portal.id);
@@ -1814,6 +1916,7 @@ export class SquadSystem {
           return;
         }
         const door = portal.door;
+        const cqbPortal = cqbPortalFromStackSlotPortal(portal, portal.sillY);
         const isDoorLead =
           ally.roleIndex === 0 ||
           !this.allies.some(
@@ -1821,8 +1924,18 @@ export class SquadSystem {
           );
         const settledAtSlot = ally.stackPos ? this.updateStackSettle(ally, portal, ally.stackPos, dt) : true;
         if (!ally.engaging && settledAtSlot) {
-          body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
+          const stackLook = computeStackLookPoint(
+            cqbPortal,
+            ally.entryOrder,
+            ally.groupSize,
+            ally.entryPlan?.rank ?? ally.roleIndex,
+            ally.entryPlan?.side ?? -1,
+          );
+          body.aimAt(stackLook.x, stackLook.y, stackLook.z, dt, Math.PI * 2 * dt);
         }
+
+        const useStealth = ally.order === 'pieDoor' || (ally.order === 'clear' && this.entryMode === 'stealth');
+
         if (door) {
           if (ally.order === 'pieDoor' && door.locked) {
             ally.progress = '施錠のため開けません';
@@ -1848,11 +1961,44 @@ export class SquadSystem {
             return;
           }
 
+          // ステルス／pieDoor: まず peekAngle（半開き）まで静かに開けて内部を覗き確認
+          if (useStealth && !door.locked && !ally.peekDone && door.angle < this.cfg.doorOpenAngle) {
+            const peekReadyAngle = Math.max(8, door.peekAngle - 2);
+            if (isDoorLead) {
+              if (door.angle < peekReadyAngle && !door.isMoving) {
+                door.command(door.peekAngle, false, body.px, body.pz);
+                this.emitRadio(ally, '扉を少し開けて内部を確認する…', 'Cracking the door, checking inside...');
+              }
+              if (door.angle >= peekReadyAngle) {
+                ally.peekHold += dt;
+                if (!ally.engaging) {
+                  body.aimAt(
+                    portal.centerX + portal.intoX * 2.4,
+                    portal.sillY + 1.38,
+                    portal.centerZ + portal.intoZ * 2.4,
+                    dt,
+                    Math.PI * 2 * dt,
+                  );
+                }
+                if (ally.peekHold >= STEALTH_PEEK_HOLD_SEC) {
+                  for (const u of this.allies) {
+                    if (!u.down && u.entryPortal?.id === portal.id) u.peekDone = true;
+                  }
+                  door.command(door.maxAngle, false, body.px, body.pz);
+                }
+              }
+              ally.progress = '扉半開き確認中';
+            } else {
+              ally.progress = '扉開放援護中';
+            }
+            return;
+          }
+
           if (isDoorLead && !door.isMoving && door.angle < this.cfg.doorOpenAngle) {
             if (ally.order === 'breachClear' || door.locked) {
               door.breach(body.px, body.pz, 'swat');
             } else {
-              door.command(door.maxAngle, ally.order !== 'pieDoor', body.px, body.pz);
+              door.command(door.maxAngle, !useStealth, body.px, body.pz);
             }
           }
 
@@ -1860,7 +2006,33 @@ export class SquadSystem {
             ally.progress = door.locked ? 'ブリーチ準備' : 'ドア開放中';
             return;
           }
+        }
 
+        // ステルスモードの clear または pieDoor: 先頭がドア外周をスライシング・ザ・パイ
+        if (useStealth) {
+          const someonePieing = this.allies.some(
+            (u) => !u.down && u.entryPortal?.id === portal.id && u.phase === 'pieing',
+          );
+          if (someonePieing) {
+            ally.progress = 'パイ切り援護中';
+            return;
+          }
+          if (isDoorLead && ally.targetRoom) {
+            const side: -1 | 1 = ally.entryPlan?.side ?? -1;
+            const steps = planDoorPieArc(cqbPortal, cqbRoomFromRoomDef(ally.targetRoom), side, {
+              isStandable: (p) => !blockedAt(this.colliders, p.x, p.z, this.cfg.bodyRadius, portal.sillY),
+            });
+            if (steps.length > 0) {
+              ally.pieSteps = steps;
+              ally.pieIdx = 0;
+              ally.pieHold = 0;
+              ally.pieElapsed = 0;
+              ally.stealthEntry = ally.order === 'clear';
+              ally.phase = 'pieing';
+              this.emitRadio(ally, 'パイを切って室内を確認する', 'Slicing the pie...');
+              return;
+            }
+          }
           if (ally.order === 'pieDoor') {
             ally.progress = 'ドア外から警戒中';
             if (!ally.engaging) {
@@ -1911,6 +2083,7 @@ export class SquadSystem {
           return;
         }
 
+        ally.stealthEntry = useStealth && ally.order === 'clear';
         ally.phase = 'entering';
         ally.phaseTimer = 0;
         if (isDoorLead) {
@@ -1919,6 +2092,64 @@ export class SquadSystem {
             ally.order === 'breachClear' ? 'ブリーチ！突入する！' : '突入、クリアする！',
             ally.order === 'breachClear' ? 'Breaching, moving in!' : 'Moving in, clearing room!',
           );
+        }
+        return;
+      }
+
+      case 'pieing': {
+        const portal = ally.entryPortal;
+        if (!portal || ally.pieSteps.length === 0) {
+          ally.phase = ally.order === 'pieDoor' ? 'door_prep' : 'entering';
+          ally.phaseTimer = 0;
+          return;
+        }
+        ally.pieElapsed += dt;
+        // パイ切り中に敵を視認したら室外からそのまま交戦（Limited Penetration）
+        if (ally.engaging) {
+          ally.progress = '室外から交戦中';
+          return;
+        }
+        const idx = Math.min(ally.pieIdx, ally.pieSteps.length - 1);
+        const step = ally.pieSteps[idx]!;
+        const d = Math.hypot(step.pos.x - body.px, step.pos.z - body.pz);
+        if (d > 0.26) {
+          ally.progress = 'スライシング・ザ・パイ';
+          this.navigateTo(
+            ally,
+            step.pos.x,
+            step.pos.z,
+            portal.sillY,
+            dt,
+            false,
+            false,
+            null,
+            ally.combat.moveSpeed * PIE_SPEED_MUL,
+            true,
+          );
+          body.aimAt(step.look.x, step.look.y, step.look.z, dt, Math.PI * 2.2 * dt);
+        } else {
+          body.aimAt(step.look.x, step.look.y, step.look.z, dt, Math.PI * 2.2 * dt);
+          ally.pieHold += dt;
+          ally.progress = ally.pieIdx >= ally.pieSteps.length ? 'ドア外から警戒中' : 'クリア角確認中';
+          if (ally.pieIdx < ally.pieSteps.length && ally.pieHold >= PIE_STEP_HOLD_SEC) {
+            ally.pieIdx++;
+            ally.pieHold = 0;
+          }
+        }
+        if (ally.pieIdx >= ally.pieSteps.length || ally.pieElapsed >= PIE_TIMEOUT_SEC) {
+          if (ally.order === 'pieDoor') {
+            ally.progress = 'ドア外から警戒中';
+            return;
+          }
+          // パイ切り完了: グループ全員をステルス進入（entering）へ移行
+          for (const u of this.allies) {
+            if (!u.down && u.entryPortal?.id === portal.id && (u.phase === 'door_prep' || u.phase === 'pieing')) {
+              u.stealthEntry = true;
+              u.phase = 'entering';
+              u.phaseTimer = 0;
+            }
+          }
+          this.emitRadio(ally, '室外確認クリア、静かに進入する', 'Threshold clear, moving in quiet.');
         }
         return;
       }
@@ -2088,12 +2319,22 @@ export class SquadSystem {
         const timedOut = ally.phaseTimer >= ENTRY_TIMEOUT_SEC || ally.stalled >= ENTRY_STALL_SEC;
         if (!(isLast && d <= ENTRY_POD_ARRIVE) && !timedOut) {
           ally.progress = '室内に突入展開';
-          this.navigateTo(ally, dest.x, dest.z, portal.sillY, dt, false, false, null, undefined, isLast);
+          const entrySpeed = ally.stealthEntry ? ally.combat.moveSpeed * STEALTH_ENTRY_SPEED_MUL : undefined;
+          this.navigateTo(ally, dest.x, dest.z, portal.sillY, dt, false, false, null, entrySpeed, isLast);
           if (!ally.engaging) {
-            // 敷居までは自サイド反対側のコーナー（最初に脅威が見える方向）、以降は PoD の保持視線
-            const key = this.holdLook(ally, ally.entered ? 'pod' : 'threat', dt);
+            // 敷居までは自サイド反対側のコーナー、rank0 は壁沿い移動中にハードコーナー、以降は PoD 保持視線
+            const wantKey = !ally.entered
+              ? 'threat'
+              : plan && plan.rank === 0 && ally.entryWp < wps.length - 1
+                ? 'corner'
+                : 'pod';
+            const key = this.holdLook(ally, wantKey, dt);
             const look =
-              (key === 'threat' ? ally.entryThreatLook : null) ??
+              (key === 'threat'
+                ? ally.entryThreatLook
+                : key === 'corner'
+                  ? plan?.hardCornerLook
+                  : ally.podLook) ??
               ally.podLook ?? {
                 x: dest.x + portal.intoX * 1.5,
                 y: portal.sillY + 1.38,
@@ -3334,6 +3575,7 @@ export class SquadSystem {
     if (ally.coverHold !== null && ally.settled) return true;
     switch (ally.phase) {
       case 'door_prep':
+      case 'pieing':
       case 'c2_plant':
       case 'c2_standoff':
       case 'flash_wait':
@@ -3948,6 +4190,43 @@ export class SquadSystem {
 
     ally.engaging = ally.sees || ally.pepperTarget !== null || ally.holdingFire;
 
+    // 味方射線ブロックが一定時間続いたら左右へ半歩ステップアウトして射線を確保する
+    if (ally.holdingFire && !ally.pepperTarget) {
+      ally.holdingFireSec += dt;
+      if (ally.holdingFireSec >= STEP_OUT_TRIGGER_SEC && best && !this.isOrderLockedForAutonomousMove(ally)) {
+        if (!ally.stepOutPos) {
+          ally.stepOutPos = computeStepOutPoint(
+            { x: ally.body.px, y: ally.body.footY, z: ally.body.pz },
+            best.pos,
+            (p) => !blockedAt(this.colliders, p.x, p.z, this.cfg.bodyRadius, ally.body.footY),
+            (p) => this.checkLineBlock(ally, { x: p.x, y: ally.body.footY + 1.25, z: p.z }, best.pos, best.id) === 'none',
+          );
+        }
+        if (ally.stepOutPos) {
+          const dStep = Math.hypot(ally.stepOutPos.x - ally.body.px, ally.stepOutPos.z - ally.body.pz);
+          if (dStep > 0.22) {
+            this.navigateTo(
+              ally,
+              ally.stepOutPos.x,
+              ally.stepOutPos.z,
+              ally.body.footY,
+              dt,
+              false,
+              false,
+              null,
+              ally.combat.moveSpeed * 0.7,
+              true,
+            );
+            ally.body.aimAt(best.pos.x, best.pos.y, best.pos.z, dt);
+            return;
+          }
+        }
+      }
+    } else {
+      ally.holdingFireSec = 0;
+      ally.stepOutPos = null;
+    }
+
     // ペッパーボール発射（HOSTAGE_SHIELD または民間人が射線上）
     if (!ally.sees && ally.pepperTarget && ally.pepperCd <= 0) {
       this.firePepper(ally, ally.pepperTarget);
@@ -4245,8 +4524,69 @@ export class SquadSystem {
     }
   }
 
+  private updateMuzzleDiscipline(ally: AllyUnit): void {
+    if (ally.sees || ally.pepperTarget) {
+      ally.body.setReadyPose('high');
+      return;
+    }
+    const friendlies: { x: number; y: number; z: number }[] = [];
+    if (this.player.alive) {
+      friendlies.push({
+        x: this.player.position.x,
+        y: this.player.position.y,
+        z: this.player.position.z,
+      });
+    }
+    for (const other of this.allies) {
+      if (other === ally || other.down) continue;
+      friendlies.push({ x: other.body.px, y: other.body.footY, z: other.body.pz });
+    }
+    const yaw = ally.body.yawRad;
+    const wx = ally.body.px - Math.sin(yaw) * 0.55;
+    const wz = ally.body.pz - Math.cos(yaw) * 0.55;
+    const wallClose = blockedAt(this.colliders, wx, wz, 0.12, ally.body.footY);
+    const low = shouldUseLowReady(
+      { x: ally.body.px, y: ally.body.footY, z: ally.body.pz },
+      yaw,
+      friendlies,
+      wallClose,
+    );
+    ally.body.setReadyPose(low ? 'low' : 'high');
+  }
+
+  private updateAllyLean(ally: AllyUnit): void {
+    let lean = 0;
+    if (ally.phase === 'pieing' && ally.entryPortal && ally.pieSteps.length > 0) {
+      const idx = Math.min(ally.pieIdx, ally.pieSteps.length - 1);
+      const step = ally.pieSteps[idx]!;
+      lean = portalLeanToBodyLean(
+        cqbPortalFromStackSlotPortal(ally.entryPortal, ally.entryPortal.sillY),
+        ally.body.yawRad,
+        step.portalLeanAxis,
+      );
+    } else if (ally.phase === 'door_prep' && ally.peekHold > 0 && ally.entryPortal) {
+      const side: -1 | 1 = ally.entryPlan?.side ?? -1;
+      const towardDoor: -1 | 1 = side === -1 ? 1 : -1;
+      lean = portalLeanToBodyLean(
+        cqbPortalFromStackSlotPortal(ally.entryPortal, ally.entryPortal.sillY),
+        ally.body.yawRad,
+        towardDoor,
+      );
+    } else if (
+      (ally.phase === 'overwatch' || ally.phase === 'hold' || ally.phase === 'secured' || ally.engaging) &&
+      Math.hypot(ally.vel.x, ally.vel.z) < 0.25
+    ) {
+      lean = computeCornerLean(
+        { x: ally.body.px, y: ally.body.footY, z: ally.body.pz },
+        ally.body.yawRad,
+        (x, z) => blockedAt(this.colliders, x, z, 0.2, ally.body.footY),
+      );
+    }
+    ally.body.setLean(lean);
+  }
+
   private updateAllyOptics(ally: AllyUnit): void {
-    if (ally.down || ally.blindLeft > 0) {
+    if (ally.down || ally.blindLeft > 0 || ally.body.getReadyPose() === 'low') {
       ally.optics.hide();
       return;
     }
@@ -4263,17 +4603,19 @@ export class SquadSystem {
     ally.lastStepZ = ally.body.pz;
     if (moved <= 1e-4) return;
     ally.stepAccum += moved;
-    const isFast = ally.rushTimer > 0 || ally.phase === 'entering';
+    const quiet = ally.stealthEntry || ally.phase === 'pieing';
+    const isFast = !quiet && (ally.rushTimer > 0 || ally.phase === 'entering');
     const stride = isFast ? SWAT_FOOTSTEP_STRIDE_FAST : SWAT_FOOTSTEP_STRIDE_NORMAL;
     if (ally.stepAccum >= stride) {
       ally.stepAccum -= stride;
       const heavy =
-        ally.shielded ||
-        ally.rushTimer > 0 ||
-        ally.phase === 'stacking' ||
-        ally.phase === 'door_prep' ||
-        ally.phase === 'c2_plant' ||
-        ally.phase === 'c2_standoff';
+        !quiet &&
+        (ally.shielded ||
+          ally.rushTimer > 0 ||
+          ally.phase === 'stacking' ||
+          ally.phase === 'door_prep' ||
+          ally.phase === 'c2_plant' ||
+          ally.phase === 'c2_standoff');
       this.bus.emit('swatFootstep', {
         pos: { x: ally.body.px, y: ally.body.footY, z: ally.body.pz },
         heavy,
