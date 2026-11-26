@@ -212,6 +212,9 @@ export class SwatTeam implements SwatTeamHost {
       get radioCd() {
         return self.radioCd;
       },
+      get lastSightingAge() {
+        return self.lastSightingAge;
+      },
       portals: () => this.entry.portals(),
       doorById: (id) => this.doorById(id),
       radio: (h, text, voice, force) => this.radio(h, text, voice, force),

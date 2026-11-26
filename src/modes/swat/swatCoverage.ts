@@ -29,6 +29,7 @@ export interface SwatCoverageHost {
   readonly rooms: readonly RoomDef[];
   readonly hunters: readonly SwatHunter[];
   readonly radioCd: number;
+  readonly lastSightingAge: number;
   portals(): EntryPortal[];
   doorById(id: string): Door | null;
   radio(h: SwatHunter | undefined, text: string, voice: string, force?: boolean): void;
@@ -64,8 +65,12 @@ export class SwatCoverage {
     this.droneCd = Math.max(0, this.droneCd - dt);
   }
 
+  private stallSig = -1;
+  private stallSec = 0;
+
   tickCoverage(dt: number, started: boolean): void {
     if (!started) return;
+    this.watchStall(dt);
     const hunters = this.host.hunters;
     const n = hunters.length;
     if (n === 0) return;
@@ -309,6 +314,81 @@ export class SwatCoverage {
     return this.nearestCell(h);
   }
 
+  /** セル c の近傍（同階・約3.5m）に確認済みマスがあるか */
+  private bordersSeen(c: CoverCell): boolean {
+    const pool = this.cellsByRoom.get(c.room) ?? [];
+    for (let i = 0; i < pool.length; i++) {
+      const o = pool[i]!;
+      if (o.seen && Math.hypot(o.x - c.x, o.z - c.z) < 3.5) return true;
+    }
+    // 部屋をまたぐ隣接（ドア越し）も、どこかの確認済み他室マスが近ければ縁とみなす
+    for (const o of this.coverCells()) {
+      if (o.seen && o.room !== c.room && Math.abs(o.y - c.y) < 0.9 && Math.hypot(o.x - c.x, o.z - c.z) < 3.5) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 停滞監視: クリア済みマス数が一定時間増えず、交戦中でもないなら、
+   * 立ち止まっている掃討役の目標を引き直して前進させる（bad マスも復活）。
+   */
+  private pursuitSec = 0;
+
+  /**
+   * 追撃監視: 交戦も目撃も 15 秒以上途絶えたら、掃討役を（ドローン熱源の大まかな推定で）
+   * プレイヤー付近へ向かわせる。奥へ逃げても SWAT が止まらないようにする。
+   */
+  private watchPursuit(dt: number): void {
+    const hs = this.host.hunters;
+    let busy = false;
+    for (const x of hs) {
+      if (x.alive && (x.state === 'engage' || x.state === 'rush')) busy = true;
+    }
+    if (busy || this.host.lastSightingAge < 15) {
+      this.pursuitSec = 0;
+      return;
+    }
+    this.pursuitSec += dt;
+    if (this.pursuitSec < 3) return;
+    this.pursuitSec = -12; // 次の更新まで 15 秒空ける
+    const p = this.host.d.player.position;
+    for (const x of hs) {
+      if (!x.alive || x.state !== 'sweep' || x.leader) continue;
+      const room = this.indoorRoomAt(x.body.px, x.body.pz, x.body.footY);
+      if (room) this.sweptRooms.add(room.id); // 部屋に閉じ込められず次へ進ませる
+      const a = Math.random() * Math.PI * 2;
+      const rr = 2 + Math.random() * 4;
+      x.huntTarget = { x: p.x + Math.cos(a) * rr, y: p.y, z: p.z + Math.sin(a) * rr };
+      x.setState('hunt');
+    }
+  }
+
+  private watchStall(dt: number): void {
+    this.watchPursuit(dt);
+    const cells = this.coverCells();
+    let seen = 0;
+    for (let i = 0; i < cells.length; i++) if (cells[i]!.seen) seen++;
+    const sig = seen + this.cleared.size * 1000;
+    if (sig !== this.stallSig) {
+      this.stallSig = sig;
+      this.stallSec = 0;
+      return;
+    }
+    this.stallSec += dt;
+    if (this.stallSec < 8) return;
+    this.stallSec = 4; // 以後 4 秒ごとに再試行
+    for (const x of this.host.hunters) {
+      if (!x.alive) continue;
+      if (x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || x.state === 'disarm') return;
+    }
+    for (let i = 0; i < cells.length; i++) cells[i]!.bad = false;
+    for (const x of this.host.hunters) {
+      if (!x.alive || x.state !== 'sweep' || x.leader) continue;
+      x.goalCell = null;
+      x.goalTime = 0;
+    }
+  }
+
   nearestCell(h: SwatHunter): CoverCell | null {
     const confine = this.unclearedIndoorRoom(h)?.id ?? null;
     this.coverCells();
@@ -323,6 +403,8 @@ export class SwatCoverage {
       if (c.seen || c.bad) continue;
       let score = Math.hypot(c.x - h.body.px, c.z - h.body.pz) + Math.abs(c.y - h.body.footY) * 6;
       if (h.goalRoom === c.room) score -= 3; // 今いる部屋を先に塗りつぶす
+      // クリア済みエリアの縁（確認済みマスに隣接）を優先し、クリア範囲を連続的に広げる
+      if (this.bordersSeen(c)) score -= 5;
       for (let j = 0; j < taken.length; j++) {
         const tCell = taken[j]!;
         if (Math.hypot(tCell.x - c.x, tCell.z - c.z) < 4 && Math.abs(tCell.y - c.y) < 0.9) score += 20;
