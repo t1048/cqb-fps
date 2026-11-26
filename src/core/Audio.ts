@@ -95,6 +95,33 @@ export function radioVoiceProfile(allyId: string): { pitch: number; rate: number
   return { ...CELL_VOICE_PROFILES[idx]! };
 }
 
+export interface SpeechVoiceRef {
+  name: string;
+  lang: string;
+}
+
+/** 名前に性別が付かない既定の en-US（Chrome の Google US English）は女性。男性名を先に取る。 */
+const FEMALE_VOICE_NAME =
+  /female|zira|samantha|victoria|karen|moira|tessa|fiona|susan|serena|salli|kimberly|joanna|kendra|nicole|emma|amy|libby|hazel|heather|jenny|aria|sara|sonia|linda|catherine|allison|ava|emily|natasha|zoe|alexa/i;
+const MALE_VOICE_NAME =
+  /male|david|daniel|alex|fred|guy|ryan|mark|george|james|arthur|brian|christopher|eric|gordon|ralph|rishi|thomas|reed|bruce|aaron/i;
+
+/**
+ * 英語の speechSynthesis ボイスから男性を選ぶ。
+ * en-US の男性（Microsoft David など）を優先し、無ければ Google UK English Male を使う。
+ * 男性が居ないときだけ、従来どおり先頭の en-US に戻す。
+ */
+export function pickEnglishVoice<T extends SpeechVoiceRef>(voices: readonly T[]): T | undefined {
+  const english = voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
+  const male = english.filter((v) => MALE_VOICE_NAME.test(v.name) && !FEMALE_VOICE_NAME.test(v.name));
+  return (
+    male.find((v) => v.lang.toLowerCase().startsWith('en-us')) ??
+    male[0] ??
+    english.find((v) => v.lang.toLowerCase().startsWith('en-us')) ??
+    english[0]
+  );
+}
+
 function isFiniteVec3(v: Vec3): boolean {
   return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
 }
@@ -1771,9 +1798,7 @@ export class AudioEngine {
     const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
     if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return null;
     const voices = typeof synth.getVoices === 'function' ? synth.getVoices() : [];
-    const voice =
-      voices.find((v) => v.lang.toLowerCase().startsWith('en-us')) ??
-      voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+    const voice = pickEnglishVoice(voices);
     return voice ? { synth, voice } : null;
   }
 

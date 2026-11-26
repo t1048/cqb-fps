@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { createGameEventBus } from '../../src/core/events';
-import { radioVoiceProfile } from '../../src/core/Audio';
+import { pickEnglishVoice, radioVoiceProfile } from '../../src/core/Audio';
 import { AudioBridge, type AudioBridgeSink } from '../../src/core/AudioBridge';
 import {
   SwatTeam,
@@ -48,6 +48,26 @@ const DOOR_CFG: DoorConfig = {
 };
 
 describe('F12 — Tactical Radio Chatter & Stack/C2/Gas Audio', () => {
+  it('pickEnglishVoice prefers a male English voice over the default female en-US voice', () => {
+    const chrome = [
+      { name: 'Google US English', lang: 'en-US' },
+      { name: 'Google UK English Female', lang: 'en-GB' },
+      { name: 'Google UK English Male', lang: 'en-GB' },
+      { name: 'Google 日本語', lang: 'ja-JP' },
+    ];
+    expect(pickEnglishVoice(chrome)?.name).toBe('Google UK English Male');
+
+    const windows = [
+      { name: 'Microsoft Zira - English (United States)', lang: 'en-US' },
+      { name: 'Microsoft David - English (United States)', lang: 'en-US' },
+      { name: 'Google UK English Male', lang: 'en-GB' },
+    ];
+    expect(pickEnglishVoice(windows)?.name).toBe('Microsoft David - English (United States)');
+
+    expect(pickEnglishVoice([{ name: 'Google US English', lang: 'en-US' }])?.name).toBe('Google US English');
+    expect(pickEnglishVoice([{ name: 'Google 日本語', lang: 'ja-JP' }])).toBeUndefined();
+  });
+
   it('radioVoiceProfile differentiates cells/SWAT IDs within safe Web Speech bounds and preserves legacy allies', () => {
     expect(radioVoiceProfile('ally_miller')).toEqual({ pitch: 0.85, rate: 1.15, baseHz: 128 });
     expect(radioVoiceProfile('ally_cole')).toEqual({ pitch: 1.05, rate: 1.2, baseHz: 162 });
