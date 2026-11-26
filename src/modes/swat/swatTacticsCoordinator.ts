@@ -1,6 +1,23 @@
 import * as THREE from 'three';
 import type { NoiseKind, NoiseSource } from '../../core/events';
-import { isEn, t, tRoomName } from '../../core/i18n';
+import { t } from '../../core/i18n';
+import {
+  BREACH_CALL,
+  C2_DETONATE,
+  C2_PLANT,
+  FLASH,
+  LESS_LETHAL,
+  NOISE_BY_KIND,
+  PRESS_BY_STEP,
+  RUSH_BY_REASON,
+  contactInRoom,
+  droneLine,
+  dugInGasLine,
+  flankLine,
+  manDownLine,
+  pickRadio,
+  reinforceLine,
+} from '../../ai/radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { resolveFloorY, type CombatContext } from '../../ai/EngageBehavior';
 import { noiseRayOriginY } from '../../ai/Perception';
@@ -271,11 +288,8 @@ export class SwatTacticsCoordinator {
     this.killsAtLastWave = this.host.kills;
     this.waveCooldown = REINFORCEMENT_COOLDOWN_SEC;
     if (members[0]) {
-      this.host.queueRadio(
-        members[0],
-        `増援 ${cellName}班、外周より突入する！`,
-        `Reinforcements, ${cellName} team moving in!`,
-      );
+      const [reJa, reEn] = reinforceLine(cellName);
+      this.host.queueRadio(members[0], reJa, reEn);
     }
     this.host.d.subtitle.show(
       t(
@@ -321,12 +335,8 @@ export class SwatTacticsCoordinator {
         this.host.d.subtitle.show(t('SWAT「警察だ！武器を捨てろ！」', 'SWAT: "Police! Drop your weapon!"'), 2.0);
       }
       const room = this.host.roomName(pos);
-      this.host.radio(
-        by,
-        `容疑者を視認！${room}だ！`,
-        isEn() ? `Contact! Suspect spotted in ${room}!` : 'Contact! Suspect spotted!',
-        true,
-      );
+      const [contactJa, contactEn] = contactInRoom(room);
+      this.host.radio(by, contactJa, contactEn, true);
     }
     this.alertTeam(pos, true, 30, by);
     if (this.host.d.player.hp !== undefined && this.host.d.player.hp > 0 && this.host.d.player.hp <= SWAT_RUSH_LOW_HP) {
@@ -355,13 +365,7 @@ export class SwatTacticsCoordinator {
     }
     this.rushCd = SWAT_RUSH_TEAM_COOLDOWN;
     this.shareSighting(pos);
-    const lines: Record<'blind' | 'reload' | 'pepper' | 'lowHp', [string, string]> = {
-      blind: ['フラッシュ命中！ 今だ、一気に詰めろ！', 'Flash hit! Push in now!'],
-      reload: ['リロード音だ！ 撃ち切る前に突っ込め！', 'He is reloading! Move in!'],
-      pepper: ['ペッパーが効いている、距離を詰めろ！', 'Pepper hit! Close the distance!'],
-      lowHp: ['相手は負傷している！ 一気に制圧しろ！', 'Suspect is wounded! Press the attack!'],
-    };
-    const [ja, en] = lines[reason];
+    const [ja, en] = pickRadio(RUSH_BY_REASON[reason]);
     this.host.radio(candidates[0]!.h, ja, en, true);
     return true;
   }
@@ -491,12 +495,8 @@ export class SwatTacticsCoordinator {
           const pinMembers = cellMap.get(pinIdx)!;
           const pinName = pinMembers[0]!.cellName;
           const flankName = flankSpeaker!.cellName;
-          this.host.radio(
-            pinMembers[0],
-            `${pinName}班は正面から釘付けにしろ！ ${flankName}班は裏へ回り込め！`,
-            `${pinName} team, pin him down! ${flankName} team, flank around!`,
-            true,
-          );
+          const [flankJa, flankEn] = flankLine(`${pinName}班`, `${flankName}班`);
+          this.host.radio(pinMembers[0], flankJa, flankEn, true);
         }
         return;
       }
@@ -580,14 +580,11 @@ export class SwatTacticsCoordinator {
       return;
     }
     if (heard && this.host.radioCd <= 0) {
-      const lines: Record<string, [string, string]> = {
-        gunshot: ['発砲音！音の方向へ前進する。', 'Shots fired, moving to the sound.'],
-        footstep: ['足音を確認、調べる。', 'Footsteps, checking it out.'],
-        door: ['ドアの音がした。確認に向かう。', 'Heard a door, moving to check.'],
-        voice: ['咳き込む声が聞こえた！ 目標はその部屋だ！', 'Coughing heard! Suspect is in that room!'],
-      };
-      const line = lines[kind];
-      if (line) this.host.radio(this.host.firstAlive(), line[0], line[1]);
+      const noisePool = NOISE_BY_KIND[kind];
+      if (noisePool) {
+        const [noiseJa, noiseEn] = pickRadio(noisePool);
+        this.host.radio(this.host.firstAlive(), noiseJa, noiseEn);
+      }
     }
   }
 
@@ -600,14 +597,16 @@ export class SwatTacticsCoordinator {
     if (h.cellIndex === this.pinningCellIndex && !h.cell.some((m) => m.alive)) {
       this.pinningCellIndex = null;
     }
-    this.host.radio(speaker, `${h.callsign} ダウン！ 隊員負傷、警戒しろ！`, `${h.callsign} is down! Officer down!`, true);
+    const [downJa, downEn] = manDownLine(h.callsign);
+    this.host.radio(speaker, downJa, downEn, true);
     // 組のリーダーが倒れたら次の序列の隊員が自動的にリーダーを引き継ぐ（leader ゲッター）。相方が全滅すれば単独行動
     const p = this.host.d.player.position;
     this.alertTeam({ x: p.x, y: p.y, z: p.z }, true);
   }
 
   onBreach(by: SwatHunter, door: Door): void {
-    this.host.radio(by, 'ブリーチ！', 'Breaching!', true);
+    const [breachJa, breachEn] = pickRadio(BREACH_CALL);
+    this.host.radio(by, breachJa, breachEn, true);
     // 突入前に閃光弾を投げ込む
     const side = (by.body.px - door.centerX) * door.normalX + (by.body.pz - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
     const target = {
@@ -645,7 +644,8 @@ export class SwatTacticsCoordinator {
   }
 
   onC2PlantStart(by: SwatHunter, door: Door): void {
-    this.host.radio(by, '施錠ドア確認、C2を設置する！ 下がれ！', 'Door is locked, planting C2! Stand back!', true);
+    const [plantJa, plantEn] = pickRadio(C2_PLANT);
+    this.host.radio(by, plantJa, plantEn, true);
     if (this.host.canPlayerHear({ x: door.centerX, y: door.sillY, z: door.centerZ }, 10)) {
       this.host.d.subtitle.show(
         t('ドアの向こうで C2 爆薬を設置している音がする…！', 'You hear C2 explosives being planted on the other side of the door...!'),
@@ -694,7 +694,8 @@ export class SwatTacticsCoordinator {
     this.c2BlastLight.position.set(blastOrigin.x, blastOrigin.y, blastOrigin.z);
 
     this.host.d.bus.emit('c2Detonated', { doorId: door.id, pos: doorCenter, dir: blastDir, radius: C2_BLAST_RADIUS });
-    this.host.radio(by, 'C2起爆！ 突入しろ！', 'Breach! Go, go, go!', true);
+    const [detJa, detEn] = pickRadio(C2_DETONATE);
+    this.host.radio(by, detJa, detEn, true);
 
     let playerStunned = false;
     if (this.host.d.player.alive) {
@@ -786,7 +787,8 @@ export class SwatTacticsCoordinator {
     this.host.d.flashbang.throwFrom(origin, velocity, by.id, fuse);
     this.flashesLeft--;
     this.flashCd = lerp(FLASH_TEAM_CD, FLASH_TEAM_CD * 0.5, this.pressure);
-    this.host.radio(by, 'フラッシュ投下！', 'Flashbang out!', true);
+    const [flashJa, flashEn] = pickRadio(FLASH);
+    this.host.radio(by, flashJa, flashEn, true);
   }
 
   /** F10: プレイヤーが同じ室内に一定時間以上籠り続けたら CS 催涙ガスを投げ込む */
@@ -843,11 +845,8 @@ export class SwatTacticsCoordinator {
         gas.throwFrom(origin, plan.velocity, h.id, plan.fuse);
         this.gasLeft--;
         this.gasCd = THREE.MathUtils.lerp(GAS_TEAM_CD, GAS_TEAM_CD * 0.65, this.pressure);
-        this.host.queueRadio(
-          h,
-          `${room.name}に籠もっている！ 催涙ガスを撃ち込む！`,
-          isEn() ? `Suspect is dug in at ${tRoomName(room.name)}! Deploying CS gas!` : 'Suspect is dug in! Deploying CS gas!',
-        );
+        const [gasJa, gasEn] = dugInGasLine(room.name);
+        this.host.queueRadio(h, gasJa, gasEn);
         return true;
       }
     }
@@ -863,7 +862,8 @@ export class SwatTacticsCoordinator {
     this.pepperShots++;
     this.host.d.bus.emit('noise', { pos: from, radius: 14, kind: 'gunshot', source: 'ally' });
     if (this.host.radioCd <= 0 && Math.random() < 0.3) {
-      this.host.radio(by, '人質がいる、実弾は撃つな！ ペッパーで制圧する！', 'Hostage in line, pepperball only!');
+      const [lessJa, lessEn] = pickRadio(LESS_LETHAL);
+      this.host.radio(by, lessJa, lessEn);
     }
     const hitChance = Math.max(0.2, 0.75 - dist * 0.025);
     if (Math.random() >= hitChance) return;
@@ -930,13 +930,11 @@ export class SwatTacticsCoordinator {
     const step = p >= 1 ? 4 : p >= 0.66 ? 3 : p >= 0.33 ? 2 : 1;
     if (step > this.pressureStep) {
       this.pressureStep = step;
-      const lines: Record<number, [string, string]> = {
-        2: ['時間をかけるな、距離を詰めろ！', 'Tighten up, push in!'],
-        3: ['容疑者は追い詰められている。一気に制圧する！', 'He is cornered, press the attack!'],
-        4: ['全員突っ込め！ 逃がすな！', 'All units, press! Do not let him breathe!'],
-      };
-      const line = lines[step];
-      if (line) this.host.radio(this.host.firstAlive(), line[0], line[1], true);
+      const pressPool = PRESS_BY_STEP[step];
+      if (pressPool) {
+        const [pressJa, pressEn] = pickRadio(pressPool);
+        this.host.radio(this.host.firstAlive(), pressJa, pressEn, true);
+      }
     }
   }
 
@@ -973,12 +971,8 @@ export class SwatTacticsCoordinator {
     if (sent) {
       this.shareSighting(guess);
       const room = this.host.roomName(guess);
-      this.host.radio(
-        this.host.firstAlive(),
-        `ドローンが熱源を探知！ ${room}付近だ、包囲しろ！`,
-        isEn() ? `Drone has a heat signature near ${room}! Surround the area!` : 'Drone has a heat signature! Surround the area!',
-        true,
-      );
+      const [droneJa, droneEn] = droneLine(room);
+      this.host.radio(this.host.firstAlive(), droneJa, droneEn, true);
     }
   }
 

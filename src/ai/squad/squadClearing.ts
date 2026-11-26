@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CivilianState, SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
+import { AREA_SECURE, CIVILIAN_SECURE, CUFF, WEAPON_SECURE, pickRadio, roomClearLine } from '../radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import { pathSegmentClear, squadRoute } from '../SquadRoute';
@@ -111,11 +112,8 @@ export function setPostClearActive(ctx: SquadContext, active: boolean): void {
   if (living.length === 0) return;
   if (!ctx.postClearAnnounced) {
     ctx.postClearAnnounced = true;
-    ctx.emitRadio(
-      living[0]!,
-      '全脅威制圧。残余の拘束・人質確保・証拠品押収を実施する！',
-      'All threats neutralized. Securing remaining targets and evidence.',
-    );
+    const [secureJa, secureEn] = pickRadio(AREA_SECURE);
+    ctx.emitRadio(living[0]!, secureJa, secureEn);
   }
 }
 
@@ -287,8 +285,8 @@ export function enterSecured(ctx: SquadContext, ally: AllyUnit, room: RoomDef, p
   const key = `${room.id}:${portal.id}`;
   if (!ctx.announcedRooms.has(key)) {
     ctx.announcedRooms.add(key);
-    const extra = exits.length > 0 ? `（別扉${exits.length}か所あり）` : '';
-    ctx.emitRadio(ally, `${room.name}、クリア！${extra}`, 'Room clear!');
+    const [clearJa, clearEn] = roomClearLine(room.name, exits.length > 0);
+    ctx.emitRadio(ally, clearJa, clearEn);
   }
 }
 
@@ -384,12 +382,14 @@ export function performRestrainTask(ctx: SquadContext, ally: AllyUnit, task: Res
         ctx.bus.emit('evidence', { targetId: s.id, pos: wp });
       }
       ctx.bus.emit('arrest', { targetId: s.id, evidenceCollected: s.evidenceCollected });
-      ctx.emitRadio(ally, '容疑者を拘束、武器を押収した！', 'Suspect restrained, weapon secured.');
+      const [cuffJa, cuffEn] = pickRadio(CUFF);
+      ctx.emitRadio(ally, cuffJa, cuffEn);
     }
   } else if (task.kind === 'civilian') {
     const c = ctx.entities.civilians.get(task.id);
     if (c && c.secure()) {
-      ctx.emitRadio(ally, '民間人を安全に確保した！', 'Civilian is safe and secure.');
+      const [civJa, civEn] = pickRadio(CIVILIAN_SECURE);
+      ctx.emitRadio(ally, civJa, civEn);
     }
   } else {
     const s = ctx.entities.suspects.get(task.id);
@@ -397,7 +397,8 @@ export function performRestrainTask(ctx: SquadContext, ally: AllyUnit, task: Res
     if (s && wp && s.hasUncollectedEvidence) {
       s.collectEvidence();
       ctx.bus.emit('evidence', { targetId: s.id, pos: wp });
-      ctx.emitRadio(ally, '証拠の武器を回収した', 'Evidence secured.');
+      const [evJa, evEn] = pickRadio(WEAPON_SECURE);
+      ctx.emitRadio(ally, evJa, evEn);
     }
   }
   ally.assignment = null;

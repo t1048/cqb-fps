@@ -1,6 +1,22 @@
 import * as THREE from 'three';
 import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
+import {
+  BREACH_IN,
+  C2_DETONATE,
+  C2_PLANT,
+  CHECK_FROM_DOOR,
+  CRACK_DOOR,
+  DOOR_LOCKED,
+  FLASH,
+  FLASH_GO,
+  GAS,
+  GAS_GO,
+  MOVE_IN,
+  QUIET_ENTRY,
+  STACKED_READY,
+  pickRadio,
+} from '../radioLines';
 import type { RoomDef, SquadOrder, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
@@ -280,7 +296,8 @@ export function updatePortalGroups(ctx: SquadContext, dt: number): void {
     if (g.order === 'stack') {
       if (g.allSettled && !ctx.announcedStacks.has(id)) {
         ctx.announcedStacks.add(id);
-        ctx.emitRadio(stacking[0]!, 'スタック完了、突入準備よし！', 'Stacked up, ready to make entry.');
+        const [ja, en] = pickRadio(STACKED_READY);
+        ctx.emitRadio(stacking[0]!, ja, en);
       }
       continue;
     }
@@ -592,7 +609,8 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
     plan?.velocity ?? computeBallisticVelocity(origin, target, ctx.tearGas.gravity, 9, 0.25, 0.75);
   ctx.tearGas.throwFrom(origin, velocity, thrower.id, plan?.fuse ?? 1.5);
   ctx.gasLeft = Math.max(0, ctx.gasLeft - 1);
-  ctx.emitRadio(thrower, 'CSガス投入！', 'Deploying CS gas!');
+  const [gasJa, gasEn] = pickRadio(GAS);
+  ctx.emitRadio(thrower, gasJa, gasEn);
 }
 
 export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos: Vec3): boolean {
@@ -625,7 +643,8 @@ export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos:
   ctx.flashbang.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
   ctx.flashesLeft--;
   ctx.flashCd = FLASH_TEAM_COOLDOWN;
-  ctx.emitRadio(ally, 'フラッシュ投擲！', 'Flash out!');
+  const [flashJa, flashEn] = pickRadio(FLASH);
+  ctx.emitRadio(ally, flashJa, flashEn);
   return true;
 }
 
@@ -652,7 +671,8 @@ export function tryAutonomousGas(ctx: SquadContext): void {
     ctx.tearGas.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
     ctx.gasLeft--;
     ctx.gasCd = GAS_TEAM_COOLDOWN;
-    ctx.emitRadio(ally, '催涙ガスで炙り出す！', 'Deploying tear gas to flush them out!');
+    const [flushJa, flushEn] = pickRadio(GAS);
+    ctx.emitRadio(ally, flushJa, flushEn);
     return;
   }
   if (attempted) {
@@ -671,7 +691,8 @@ export function beginC2Sequence(ctx: SquadContext, lead: AllyUnit, portal: Entry
   lead.c2IsLead = true;
   lead.body.setPose('crouch');
   lead.progress = t('C2爆薬設置中', 'Planting C2');
-  ctx.emitRadio(lead, 'C2爆薬を設置する！ 退避しろ！', 'Planting C2! Stand clear!');
+  const [plantJa, plantEn] = pickRadio(C2_PLANT);
+  ctx.emitRadio(lead, plantJa, plantEn);
 
   // 同じポータルの仲間も安全な退避距離へ下がる
   for (const u of ctx.allies) {
@@ -736,7 +757,8 @@ export function detonateC2(ctx: SquadContext, lead: AllyUnit, portal: EntryPorta
     lead.id,
   );
 
-  ctx.emitRadio(lead, 'C2起爆！突入する！', 'Breach! Breach! Moving in!');
+  const [detJa, detEn] = pickRadio(C2_DETONATE);
+  ctx.emitRadio(lead, detJa, detEn);
   for (const u of ctx.allies) {
     if (u.down || u.entryPortal?.id !== portal.id) continue;
     if (u.phase === 'c2_standoff' || u.phase === 'c2_plant' || u.phase === 'door_prep') {
@@ -856,7 +878,8 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
     if (ally.order === 'pieDoor' && door.locked) {
       ally.progress = t('施錠のため開けません', 'Door Locked');
       if (isDoorLead) {
-        ctx.emitRadio(ally, 'ドアが施錠されている！ブリーチ指示を！', 'Door is locked, awaiting breach order!');
+        const [lockJa, lockEn] = pickRadio(DOOR_LOCKED);
+        ctx.emitRadio(ally, lockJa, lockEn);
       }
       ally.phase = 'hold';
       ally.watchYaw = ally.body.yawRad;
@@ -883,7 +906,8 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       if (isDoorLead) {
         if (door.angle < peekReadyAngle && !door.isMoving) {
           door.command(door.peekAngle, false, body.px, body.pz);
-          ctx.emitRadio(ally, '扉を少し開けて内部を確認する…', 'Cracking the door, checking inside...');
+          const [crackJa, crackEn] = pickRadio(CRACK_DOOR);
+          ctx.emitRadio(ally, crackJa, crackEn);
         }
         if (door.angle >= peekReadyAngle) {
           ally.peekHold += dt;
@@ -945,7 +969,8 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
         ally.pieElapsed = 0;
         ally.stealthEntry = ally.order === 'clear';
         ally.phase = 'pieing';
-        ctx.emitRadio(ally, 'パイを切って室内を確認する', 'Slicing the pie...');
+        const [pieJa, pieEn] = pickRadio(CHECK_FROM_DOOR);
+        ctx.emitRadio(ally, pieJa, pieEn);
         return;
       }
     }
@@ -1003,11 +1028,8 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   ally.phase = 'entering';
   ally.phaseTimer = 0;
   if (isDoorLead) {
-    ctx.emitRadio(
-      ally,
-      ally.order === 'breachClear' ? 'ブリーチ！突入する！' : '突入、クリアする！',
-      ally.order === 'breachClear' ? 'Breaching, moving in!' : 'Moving in, clearing room!',
-    );
+    const [goJa, goEn] = pickRadio(ally.order === 'breachClear' ? BREACH_IN : MOVE_IN);
+    ctx.emitRadio(ally, goJa, goEn);
   }
 }
 
@@ -1069,7 +1091,8 @@ export function updatePieingPhase(ctx: SquadContext, ally: AllyUnit, dt: number)
         u.phaseTimer = 0;
       }
     }
-    ctx.emitRadio(ally, '室外確認クリア、静かに進入する', 'Threshold clear, moving in quiet.');
+    const [quietJa, quietEn] = pickRadio(QUIET_ENTRY);
+    ctx.emitRadio(ally, quietJa, quietEn);
   }
 }
 
@@ -1157,7 +1180,10 @@ export function updateFlashWaitPhase(ctx: SquadContext, ally: AllyUnit, dt: numb
   if (ally.phaseTimer <= 0) {
     ally.phase = 'entering';
     ally.phaseTimer = 0;
-    if (ally.roleIndex === 0) ctx.emitRadio(ally, 'フラッシュ炸裂！突入！', 'Flash out, go, go, go!');
+    if (ally.roleIndex === 0) {
+      const [ja, en] = pickRadio(FLASH_GO);
+      ctx.emitRadio(ally, ja, en);
+    }
   }
 }
 
@@ -1171,7 +1197,10 @@ export function updateGasWaitPhase(ctx: SquadContext, ally: AllyUnit, dt: number
   if (ally.phaseTimer <= 0) {
     ally.phase = 'entering';
     ally.phaseTimer = 0;
-    if (ally.roleIndex === 0) ctx.emitRadio(ally, 'ガス展開完了！マスク確認、突入！', 'Gas deployed! Masks on, moving in!');
+    if (ally.roleIndex === 0) {
+      const [ja, en] = pickRadio(GAS_GO);
+      ctx.emitRadio(ally, ja, en);
+    }
   }
 }
 

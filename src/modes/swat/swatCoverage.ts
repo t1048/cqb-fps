@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { isEn, t, tRoomName } from '../../core/i18n';
+import { t, tRoomName } from '../../core/i18n';
+import { RESCAN, pickRadio, roomClearLine } from '../../ai/radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { segmentHitsAABB } from '../../ai/HostageShield';
 import { blockedAtFiltered } from '../../ai/SquadRoute';
@@ -275,12 +276,8 @@ export class SwatCoverage {
       const a = Math.random() * Math.PI * 2;
       const rr = Math.random() * 4;
       const guess = { x: p.x + Math.cos(a) * rr, y: p.y, z: p.z + Math.sin(a) * rr };
-      this.host.radio(
-        h,
-        '全区画クリア、容疑者なし。ドローンが熱源を探知、その付近を再捜索する。',
-        'No suspect. Drone has a heat signature, moving.',
-        true,
-      );
+      const [scanJa, scanEn] = pickRadio(RESCAN);
+      this.host.radio(h, scanJa, scanEn, true);
       for (const x of this.host.hunters) {
         if (
           !x.alive ||
@@ -345,7 +342,8 @@ export class SwatCoverage {
     if (this.cleared.has(r.id)) return;
     this.cleared.add(r.id);
     if (this.host.radioCd <= 0 && Math.random() < 0.45) {
-      this.host.radio(by, `${r.name}、クリア。`, isEn() ? `${tRoomName(r.name)}, clear.` : 'Room clear.');
+      const [clearJa, clearEn] = roomClearLine(r.name, false);
+      this.host.radio(by, clearJa, clearEn);
     }
   }
 
