@@ -2,6 +2,16 @@ import * as THREE from 'three';
 import type { GameEventBus } from '../../core/events';
 import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
+import {
+  CONTACT,
+  COVER_CALL,
+  LESS_LETHAL,
+  RELOAD,
+  RUSH_BY_REASON,
+  flankLine,
+  manDownLine,
+  pickRadio,
+} from '../radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import { collidersNear } from '../../world/ColliderIndex';
@@ -419,11 +429,8 @@ export function updateRoomCoverHold(ctx: SquadContext, ally: AllyUnit, dt: numbe
       ally.warnCd = ctx.cfg.warningInterval;
       if (ctx.coverRadioCd <= 0) {
         ctx.coverRadioCd = 6.0;
-        ctx.emitRadio(
-          ally,
-          '奥のエリアに容疑者！壁に隠れてカバー、投降を勧告する！',
-          'Suspect in next area! Taking cover and calling for surrender!',
-        );
+        const [ja, en] = pickRadio(COVER_CALL);
+        ctx.emitRadio(ally, ja, en);
       }
     }
   }
@@ -500,7 +507,8 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
       ally.engage.enter(ally.known);
       if (ctx.contactRadioCd <= 0) {
         ctx.contactRadioCd = 6.0;
-        ctx.emitRadio(ally, '敵性対象を視認！交戦する！', 'Contact! Engaging hostile!');
+        const [ja, en] = pickRadio(CONTACT);
+        ctx.emitRadio(ally, ja, en);
       }
       tryTriggerPincer(ctx, ally, ally.known);
     }
@@ -577,7 +585,8 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   // リロード開始の戦術無線コール
   const curLabel = ally.engage.label;
   if (curLabel === 'reload' && ally.prevEngageLabel !== 'reload') {
-    ctx.emitRadio(ally, 'リロード中、カバーを頼む！', 'Reloading! Cover me!');
+    const [reloadJa, reloadEn] = pickRadio(RELOAD);
+    ctx.emitRadio(ally, reloadJa, reloadEn);
   }
   ally.prevEngageLabel = curLabel;
 
@@ -630,7 +639,8 @@ export function firePepper(ctx: SquadContext, ally: AllyUnit, target: { id: stri
   ctx.recentlyPeppered.set(target.id, 4.0);
   if (ctx.pepperRadioCd <= 0) {
     ctx.pepperRadioCd = 5.0;
-    ctx.emitRadio(ally, '人質に注意！ペッパーボールで制圧する！', 'Watch the hostage! Deploying pepperball!');
+    const [lessJa, lessEn] = pickRadio(LESS_LETHAL);
+    ctx.emitRadio(ally, lessJa, lessEn);
   }
 }
 
@@ -690,13 +700,7 @@ export function triggerRush(ctx: SquadContext, pos: Vec3, reason: 'blind' | 'rel
     a.body.setPose('stand');
   }
   ctx.rushCd = SWAT_RUSH_TEAM_COOLDOWN;
-  const lines: Record<'blind' | 'reload' | 'pepper' | 'lowHp', [string, string]> = {
-    blind: ['フラッシュ命中！ 今だ、一気に詰めろ！', 'Flash hit! Push in now!'],
-    reload: ['リロード中だ！ 撃ち切る前に突っ込め！', 'Suspect reloading! Move in!'],
-    pepper: ['ペッパーが効いている、距離を詰めろ！', 'Pepper hit! Close the distance!'],
-    lowHp: ['相手は負傷している！ 一気に制圧しろ！', 'Suspect is wounded! Press the attack!'],
-  };
-  const [ja, en] = lines[reason];
+  const [ja, en] = pickRadio(RUSH_BY_REASON[reason]);
   ctx.emitRadio(candidates[0]!.a, ja, en);
   return true;
 }
@@ -801,11 +805,8 @@ export function tryTriggerPincer(ctx: SquadContext, contactBy: AllyUnit, targetP
     a.pincerTimer = 10.0;
   }
   ctx.pincerCd = PINCER_TEAM_COOLDOWN;
-  ctx.emitRadio(
-    pinGroup[0]!,
-    '正面を釘付けにする！別班は回り込め！',
-    'Pinning target! Flank element, move around!',
-  );
+  const [flankJa, flankEn] = flankLine('こちら', '別班');
+  ctx.emitRadio(pinGroup[0]!, flankJa, flankEn);
 }
 
 export function updatePincerFlank(ctx: SquadContext, ally: AllyUnit, dt: number): void {
@@ -978,7 +979,8 @@ export function onHit(ctx: SquadContext, id: string, damage: number, nonlethal: 
     ally.body.setShake(0);
     ally.body.setPose('down');
     ally.body.removeGun();
-    ctx.emitRadio(ally, `${ally.name}が負傷ダウン！`, `${ally.name} is down!`);
+    const [downJa, downEn] = manDownLine(ally.name);
+    ctx.emitRadio(ally, downJa, downEn);
     return;
   }
   const flinchSec = ally.rushTimer > 0 ? Math.min(ally.combat.flinchSec, 0.08) : ally.combat.flinchSec;

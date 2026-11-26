@@ -1,4 +1,5 @@
 import type { RoomDef, Vec3 } from '../../core/types';
+import { ASSAULT_GO, BREACH_COUNTDOWN, STACK_FRONT, STACK_SPLIT, cellSetLine, pickRadio } from '../../ai/radioLines';
 import { blockedAtFiltered, pathSegmentClear, reachableRouteLength } from '../../ai/SquadRoute';
 import { layoutStackSlots } from '../../ai/stackSlots';
 import {
@@ -154,7 +155,8 @@ export class SwatEntryCoordinator {
     if (!anchor || isIndoorPoint(this.host.d.rooms, anchor.body.px, anchor.body.pz, anchor.body.footY)) {
       this.entryPhase = 'entered';
       for (const h of living) h.setState('sweep');
-      this.host.radio(anchor, '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.');
+      const [goJa, goEn] = pickRadio(ASSAULT_GO);
+      this.host.radio(anchor, goJa, goEn);
       return;
     }
 
@@ -167,7 +169,8 @@ export class SwatEntryCoordinator {
     if (reachable.length === 0) {
       this.entryPhase = 'entered';
       for (const h of living) h.setState('sweep');
-      this.host.radio(anchor, '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.');
+      const [goJa, goEn] = pickRadio(ASSAULT_GO);
+      this.host.radio(anchor, goJa, goEn);
       return;
     }
 
@@ -194,7 +197,8 @@ export class SwatEntryCoordinator {
         h.setState('sweep');
       }
       this.entryPhase = 'entered';
-      this.host.radio(anchor, '全隊、突入開始。容疑者は武装している、注意しろ。', 'All teams, go go go. Suspect is armed.', true);
+      const [soloJa, soloEn] = pickRadio(ASSAULT_GO);
+      this.host.radio(anchor, soloJa, soloEn, true);
       return;
     }
 
@@ -267,9 +271,11 @@ export class SwatEntryCoordinator {
     this.entryCountdown = 0;
     this.reportedStackCells.clear();
     if (reachable.length >= 2 && orderedCells.length >= 2) {
-      this.host.radio(anchor, '全班、各入口へ展開してスタックしろ。', 'All teams, split to assigned entries and stack up.', true);
+      const [splitJa, splitEn] = pickRadio(STACK_SPLIT);
+      this.host.radio(anchor, splitJa, splitEn, true);
     } else {
-      this.host.radio(anchor, '全班、正面ドア前にスタックしろ。', 'All teams, stack up on the front entry.', true);
+      const [frontJa, frontEn] = pickRadio(STACK_FRONT);
+      this.host.radio(anchor, frontJa, frontEn, true);
     }
   }
 
@@ -332,18 +338,15 @@ export class SwatEntryCoordinator {
           const lead = members[0]!;
           const portalPos = lead.assignedPortal?.outside ?? { x: lead.body.px, y: lead.body.footY, z: lead.body.pz };
           const dir = describePortalDirection(portalPos, mapCenter);
-          this.host.queueRadio(
-            lead,
-            `${lead.cellName}班、${dir.ja}配置完了。`,
-            `${lead.cellName} team, set on ${dir.en}.`,
-          );
+          const [setJa, setEn] = cellSetLine(lead.cellName, dir.ja, dir.en);
+          this.host.queueRadio(lead, setJa, setEn);
         }
       }
       const allReady = stacking.every((h) => h.stackReady);
       if (allReady || this.entryStackElapsed >= STACK_TIMEOUT_SEC) {
         this.entryPhase = 'countdown';
         this.host.trimRadioQueueToOne();
-        this.host.queueRadio(stacking[0], '全班配置完了。3、2、1、ブリーチ！', 'All teams set. 3, 2, 1, breach!');
+        this.host.queueRadio(stacking[0], BREACH_COUNTDOWN[0], BREACH_COUNTDOWN[1]);
         this.entryCountdown = Math.min(
           3.1,
           Math.max(ENTRY_COUNTDOWN_SEC, this.host.radioSpeakGap + this.host.radioQueueLength * RADIO_STAGGER_SEC + 0.15),

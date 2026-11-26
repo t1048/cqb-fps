@@ -1,4 +1,5 @@
 import { t } from '../../core/i18n';
+import { BARRICADE, BLAST_DOWN, BLAST_WARN, TRAP_CLEAR, TRAP_FAIL, TRAP_SPOT, pickRadio } from '../../ai/radioLines';
 import type { Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
@@ -91,7 +92,8 @@ export class SwatObstacles {
     h.barricadeCd = h.barricadeBurst > 0 ? Math.max(0.22, h.combat.fireInterval) : 1.1;
     if (this.barricadeRadioCd <= 0) {
       this.barricadeRadioCd = 12;
-      this.host.radio(h, '窓にバリケードだ！ 撃ち抜いて射線を開く！', 'Window is boarded! Shooting it out!');
+      const [boardJa, boardEn] = pickRadio(BARRICADE);
+      this.host.radio(h, boardJa, boardEn);
     }
     return true;
   }
@@ -147,7 +149,8 @@ export class SwatObstacles {
       this.heldDoors.set(id, { wasLocked: door.locked, by: h });
       door.locked = true; // 解除が終わるまで誰も開けない
       h.beginDisarm(door);
-      this.host.radio(h, 'ワイヤーだ！ ドアにブービートラップ！ 解除する、時間をくれ。', 'Tripwire! Door is rigged, stand by.', true);
+      const [trapJa, trapEn] = pickRadio(TRAP_SPOT);
+      this.host.radio(h, trapJa, trapEn, true);
       if (this.host.canPlayerHear({ x: door.centerX, y: door.sillY, z: door.centerZ }, 10)) {
         this.host.d.subtitle.show(
           t('SWAT「トラップだ…慎重にいけ」— 解除に手間取っている', 'SWAT: "It\'s a trap... take it slow" — busy disarming it'),
@@ -170,9 +173,11 @@ export class SwatObstacles {
     if (success) {
       this.trapsDisarmed++;
       this.traps?.disarm(door.id);
-      this.host.radio(h, 'トラップ解除完了。前進する。', 'Trap disarmed, moving.', true);
+      const [clearJa, clearEn] = pickRadio(TRAP_CLEAR);
+      this.host.radio(h, clearJa, clearEn, true);
     } else {
-      this.host.radio(h, 'しまった、解除に失敗——！', 'Oh no—', true);
+      const [failJa, failEn] = pickRadio(TRAP_FAIL);
+      this.host.radio(h, failJa, failEn, true);
       this.traps?.detonate(door.id);
     }
   }
@@ -224,12 +229,8 @@ export class SwatObstacles {
     }
     const speaker = this.host.firstAlive();
     if (speaker) {
-      this.host.radio(
-        speaker,
-        downed > 0 ? '爆発物だ！ 負傷者多数！ ドアに気を付けろ！' : '爆発！ ブービートラップだ、全員ドアを警戒しろ！',
-        downed > 0 ? 'IED! Officers down! Watch the doors!' : 'IED! Booby trap! Watch the doors!',
-        true,
-      );
+      const [blastJa, blastEn] = pickRadio(downed > 0 ? BLAST_DOWN : BLAST_WARN);
+      this.host.radio(speaker, blastJa, blastEn, true);
     }
     this.trapsSeen++; // 以後は警戒してトラップに気付きやすい
   }

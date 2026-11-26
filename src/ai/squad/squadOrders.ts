@@ -3,6 +3,18 @@ import { t, tElementLabel, tOrderLabel } from '../../core/i18n';
 import type { RoomDef, SquadConfig, SquadElement, SquadOrder } from '../../core/types';
 import type { ActiveMarker, OrderContext } from '../../ui/CommandMenu';
 import type { EntryMode } from '../cqbEntry';
+import {
+  ACK_FOLLOW,
+  ACK_HOLD,
+  ACK_MOVE,
+  ACK_OVERWATCH,
+  ACK_RESTRAIN,
+  ACK_RESTRAIN_SEARCH,
+  MODE_DYNAMIC,
+  MODE_SLOW,
+  doorAck,
+  pickRadio,
+} from '../radioLines';
 import { SWAT_RADIO_STAGGER_SEC } from '../SwatProfile';
 import {
   activeTargets,
@@ -49,11 +61,8 @@ export function toggleEntryMode(ctx: SquadContext): EntryMode {
   ctx.ackLeft = 2.0;
   const lead = ctx.allies.find((a) => !a.down);
   if (lead) {
-    ctx.emitRadio(
-      lead,
-      isStealth ? '了解、ステルス進入モードに切り替える。慎重に切るぞ' : '了解、ダイナミック突入モードに切り替える！',
-      isStealth ? 'Switching to stealth deliberate entry.' : 'Switching to dynamic entry!',
-    );
+    const [ja, en] = pickRadio(isStealth ? MODE_SLOW : MODE_DYNAMIC);
+    ctx.emitRadio(lead, ja, en);
   }
   return ctx.entryMode;
 }
@@ -208,16 +217,7 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
   if (isDoorOrder && portal) {
     const lead = assignPortalGroup(ctx, targets, portal, targetRoom, order);
     const alreadyOpen = !portal.door || portal.door.angle >= ctx.cfg.doorOpenAngle;
-    const radioMap: Record<string, [string, string]> = {
-      stack: [alreadyOpen ? '了解、入口脇へスタックする' : '了解、ドア脇へスタックする', 'Roger, stacking up on the entry.'],
-      clear: [alreadyOpen ? '了解、突入しクリアする！' : '了解、ドアを開放し突入する！', alreadyOpen ? 'Copy, moving in and clearing!' : 'Copy, opening and clearing.'],
-      flashClear: ['了解、閃光弾で突入する！', 'Copy, bang and clear!'],
-      breachClear: ['了解、ブリーチ突入する！', 'Copy, breaching and clearing!'],
-      c2Clear: ['了解、C2爆破で突入する！', 'Copy, C2 breach and clear!'],
-      gasClear: ['了解、催涙ガスで突入する！', 'Copy, gas and clear!'],
-      pieDoor: ['了解、ドアを開けて外から警戒する', 'Roger, pieing the door.'],
-    };
-    const [jaText, enText] = radioMap[order] ?? ['了解', 'Roger that.'];
+    const [jaText, enText] = pickRadio(doorAck(order, alreadyOpen));
     ctx.emitRadio(lead, jaText, enText);
     return;
   }
@@ -235,7 +235,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.phase = 'move';
       ally.progress = t('指定位置へ移動中', 'Moving to Position');
     });
-    ctx.emitRadio(targets[0]!, '了解、指定地点へ移動し警戒する', 'Copy, moving to position.');
+    const [moveJa, moveEn] = pickRadio(ACK_MOVE);
+    ctx.emitRadio(targets[0]!, moveJa, moveEn);
     return;
   }
 
@@ -249,7 +250,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.phase = 'overwatch';
       ally.progress = t('射線ロック中', 'Holding Security');
     });
-    ctx.emitRadio(targets[0]!, '了解、この射線をロックする', 'Roger, holding security.');
+    const [watchJa, watchEn] = pickRadio(ACK_OVERWATCH);
+    ctx.emitRadio(targets[0]!, watchJa, watchEn);
     return;
   }
 
@@ -265,11 +267,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.phase = 'restraining';
       ally.progress = idx === 0 ? t('確保へ移動中', 'Moving to Secure') : t('確保を援護中', 'Covering Restraint');
     });
-    ctx.emitRadio(
-      targets[0]!,
-      targetId ? '了解、対象を確保する' : '了解、周囲の確保対象を確認する',
-      targetId ? 'Copy, moving to restrain.' : 'Roger, checking area for restraints.',
-    );
+    const [cuffJa, cuffEn] = pickRadio(targetId ? ACK_RESTRAIN : ACK_RESTRAIN_SEARCH);
+    ctx.emitRadio(targets[0]!, cuffJa, cuffEn);
     return;
   }
 
@@ -283,7 +282,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ally.phase = 'hold';
       ally.progress = t('現在地で警戒待機', 'Holding Position');
     });
-    ctx.emitRadio(targets[0]!, '了解、ここで待機する', 'Copy, holding position.');
+    const [holdJa, holdEn] = pickRadio(ACK_HOLD);
+    ctx.emitRadio(targets[0]!, holdJa, holdEn);
     return;
   }
 
@@ -295,7 +295,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     ally.phase = 'follow';
     ally.progress = t('追従中', 'Following');
   });
-  ctx.emitRadio(targets[0]!, '了解、隊列に戻る', 'Roger, falling in.');
+  const [followJa, followEn] = pickRadio(ACK_FOLLOW);
+  ctx.emitRadio(targets[0]!, followJa, followEn);
 }
 
 export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
