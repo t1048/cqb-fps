@@ -130,7 +130,7 @@
     "sill": 0.95,
     "minMargin": 0.35,
     "keepOutDepth": 0.55,
-    "interiorChance": 0.55,
+    "interiorChance": 0.1,
     "interiorWidth": { "min": 1.1, "max": 2.2 },
     "interiorSill": 1.0,
     "interiorHeight": 0.95,
