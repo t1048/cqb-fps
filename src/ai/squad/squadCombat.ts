@@ -482,6 +482,7 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
     const wasEngaging = ally.engageActive;
     ally.known = { x: best.x, y: best.footY, z: best.z };
     ally.lostSec = 0;
+    ally.gasIntel = { suspectId: best.id, pos: { ...ally.known }, t: ctx.simTime };
     ally.pincerTarget = null;
     ally.body.setReadyPose(SWAT_READY_POSE);
 
@@ -518,6 +519,7 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   }
 
   ally.engaging = ally.sees || ally.pepperTarget !== null || ally.holdingFire;
+  if (ally.engaging) ctx.lastTeamContactT = ctx.simTime;
 
   // 味方射線ブロックが一定時間続いたら左右へ半歩ステップアウトして射線を確保する
   if (ally.holdingFire && !ally.pepperTarget) {

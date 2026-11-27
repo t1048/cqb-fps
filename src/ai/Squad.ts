@@ -211,6 +211,7 @@ export class SquadSystem implements SquadContext {
   gasLeft = 0;
   gasCd = 0;
   gasRetryCd = 0;
+  lastTeamContactT = -Infinity;
   rushCd = 0;
   pincerCd = 0;
   contactRadioCd = 0;
@@ -408,6 +409,7 @@ export class SquadSystem implements SquadContext {
         sees: false,
         threat: null,
         lostSec: 0,
+        gasIntel: null,
         suppressCd: 0,
         pepperTarget: null,
         pepperCd: 0,

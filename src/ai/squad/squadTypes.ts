@@ -16,6 +16,7 @@ import type { PlayerController } from '../../player/PlayerController';
 import type { HitTarget, WeaponSystem } from '../../weapons/WeaponSystem';
 import type { Flashbang } from '../../weapons/Flashbang';
 import type { TearGas } from '../../weapons/TearGas';
+import type { GasIntel } from './squadGas';
 import type { Collider } from '../../world/WorldBuilder';
 import type { StairMark } from '../../world/Walk';
 import type { Door, DoorSystem } from '../../world/Door';
@@ -213,6 +214,8 @@ export interface AllyUnit extends HitTarget {
   sees: boolean;
   threat: CombatThreat | null;
   lostSec: number;
+  /** 最後に視認した敵（自律ガス判定用。視認喪失後も保持） */
+  gasIntel: GasIntel | null;
   suppressCd: number;
   pepperTarget: { id: string; pos: Vec3 } | null;
   pepperCd: number;
@@ -417,6 +420,8 @@ export interface SquadContext {
   gasLeft: number;
   gasCd: number;
   gasRetryCd: number;
+  /** チームの誰かが最後に交戦（視認・ペッパー・射線待ち）していた simTime */
+  lastTeamContactT: number;
   rushCd: number;
   pincerCd: number;
   contactRadioCd: number;
