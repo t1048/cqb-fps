@@ -55,7 +55,7 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   endMission: ['Backspace', 'Enter'],
 };
 
-export type OrderMenuEvent = 'open' | 'move' | 'wheel' | 'confirm' | 'cancel' | 'select';
+export type OrderMenuEvent = 'open' | 'move' | 'wheel' | 'confirm' | 'cancel';
 
 export class InputManager {
   private readonly down = new Set<string>();
@@ -200,14 +200,6 @@ export class InputManager {
     const toggleEntryModeCodes = this.actionToCodes.get('toggleEntryMode') ?? ['Tab'];
     if (this.isPointerLocked && toggleEntryModeCodes.includes(e.code)) {
       e.preventDefault();
-    }
-    if (this.choosing && !e.repeat && /^Digit[1-9]$/.test(e.code)) {
-      e.preventDefault();
-      const idx = Number(e.code.slice(5));
-      this.choosing = false;
-      this.choosingTrigger = null;
-      this.onOrderMenu?.('select', idx);
-      return;
     }
     const warningCallCodes = this.actionToCodes.get('warningCall') ?? ['Space'];
     if (this.isPointerLocked && warningCallCodes.includes(e.code)) {

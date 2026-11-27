@@ -67,7 +67,6 @@ export interface MenuGearProvider {
 }
 
 interface MenuItem {
-  num: number;
   order: SquadOrder | null;
   label: string;
   enabled: boolean;
@@ -101,8 +100,6 @@ const STYLE = `
 .cqb-cmd-row{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:4px;margin:2px 0}
 .cqb-cmd-row.active{background:#2d4a66;color:#fff}
 .cqb-cmd-row.disabled{opacity:.4}
-.cqb-cmd-num{font:bold 11px monospace;min-width:18px;text-align:center;color:#7ce2f0;
-  background:rgba(255,255,255,.08);border-radius:3px;padding:1px 3px}
 .cqb-cmd-foot{margin-top:6px;padding-top:5px;border-top:1px solid #243648;font-size:11px;color:#8ba4bc}
 `;
 
@@ -160,7 +157,9 @@ export function raycastGround(
 
 /**
  * 部隊指揮メニューUI・照準コンテキスト判定・3D床面戦術マーカー管理。
- * Tab / 中クリック保持で展開し、マウス上下・ホイールで項目選択、離す/左クリック/数字キーで決定。
+ * 右クリック保持で展開し、既定の選択は中央の「キャンセル」（動かさず離せば何も実行しない）。
+ * マウス上下・ホイールで上下の項目を選び、離す/左クリックで決定。
+ * 上: 準備・索敵（近い順に流れの最初）／下: 突入、その下に待機・追従。
  */
 export class CommandMenu {
   readonly root = new THREE.Group();
@@ -224,8 +223,8 @@ export class CommandMenu {
     this.ctxEl.className = 'cqb-cmd-ctx';
     this.footEl.className = 'cqb-cmd-foot';
     this.footEl.textContent = t(
-      '[1-9 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止',
-      '[1-9 / LMB / Release RMB] Execute   [T] Switch Team   [MMB] Cancel',
+      '[マウス上下/ホイール] 選択   [右離し / 左クリック] 実行   [T] チーム切替   [中クリック] 中止',
+      '[Mouse Up/Down/Wheel] Select   [Release RMB / LMB] Execute   [T] Switch Team   [MMB] Cancel',
     );
     this.menuEl.append(head, this.ctxEl, this.listEl, this.footEl);
     document.body.appendChild(this.menuEl);
@@ -623,11 +622,11 @@ export class CommandMenu {
   }
 
   private buildMenuItems(ctx: OrderContext): MenuItem[] {
-    const out: MenuItem[] = [];
-    let nextNum = 1;
-    const add = (order: SquadOrder | null, label: string, enabled = true) => {
-      // 数字キーは 1〜9 まで。それ以降の項目はスクロール/クリックで選ぶ（num = -1）
-      out.push({ num: order === null ? 0 : nextNum <= 9 ? nextNum++ : -1, order, label, enabled });
+    // 流れの順に追加し、区分で画面上の配置を決める
+    type Zone = 'prep' | 'entry' | 'general';
+    const flow: { item: MenuItem; zone: Zone }[] = [];
+    const add = (zone: Zone, order: SquadOrder, label: string, enabled = true) => {
+      flow.push({ item: { order, label, enabled }, zone });
     };
     const gear = this.gearProvider?.gear() ?? null;
     const flashOk = gear === null || gear.flash > 0;
@@ -635,73 +634,64 @@ export class CommandMenu {
     const flashLabel = (base: string): string =>
       gear ? `${base} ${t(`[残 ${gear.flash}]`, `[${gear.flash} left]`)}` : base;
     const gasLabel = (base: string): string => (gear ? `${base} ${t(`[残 ${gear.gas}]`, `[${gear.gas} left]`)}` : base);
+    const moveLabel = (g: { dist: number }): string =>
+      t(`指定位置へ移動・警戒 (${g.dist.toFixed(1)}m)`, `Move & Cover (${g.dist.toFixed(1)}m)`);
+    const overwatchLabel = t('現在位置から照準方向をロック', 'Cover Aimed Direction');
 
     if (ctx.restrainTarget) {
       add(
+        'prep',
         'restrain',
         t(`対象を確保（${ctx.restrainTarget.label}）`, `Secure Target (${ctx.restrainTarget.label})`),
         true,
       );
     } else if (ctx.door) {
-      add('stack', t('スタックアップ（扉脇で待機）', 'Stack Up (Hold by Door)'), true);
-      add('check', t('ドアチェック（施錠・トラップ確認）', 'Check Door (Lock & Trap)'), true);
+      add('prep', 'stack', t('スタックアップ（扉脇で待機）', 'Stack Up (Hold by Door)'), true);
+      add('prep', 'mirror', t('ミラー確認（ドア下を隊員が確認・約4秒）', 'Mirror Under Door (Ally Wand, ~4s)'), true);
+      add('prep', 'check', t('ドアチェック（施錠・トラップ確認）', 'Check Door (Lock & Trap)'), true);
       if (this.gearProvider?.trapKnown(ctx.door.id)) {
-        add('disarm', t('トラップ解除（確認済み・数秒）', 'Disarm Trap (Found, a few sec)'), true);
+        add('prep', 'disarm', t('トラップ解除（確認済み・数秒）', 'Disarm Trap (Found, a few sec)'), true);
       }
+      add('prep', 'pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
       add(
+        'entry',
         'clear',
         ctx.door.locked
           ? t('オープン＆クリア（蹴破り突入）', 'Open & Clear (Kick Breach)')
           : t('オープン＆クリア（2名突入制圧）', 'Open & Clear (2-Man Entry)'),
         true,
       );
-      add('flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
-      add('gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
-      add('c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
-      add('breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
-      add('pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
-      add('mirror', t('ミラー確認（ドア下を隊員が確認・約4秒）', 'Mirror Under Door (Ally Wand, ~4s)'), true);
+      add('entry', 'flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
+      add('entry', 'gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
+      add('entry', 'c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
+      add('entry', 'breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
     } else if (ctx.areaTarget) {
-      add('clear', t('突入＆クリア（2名突入制圧）', 'Breach & Clear (2-Man Entry)'), true);
-      add('flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
-      add('gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
-      add('stack', t('スタックアップ（入口脇で待機）', 'Stack Up (Hold by Entry)'), true);
-      if (ctx.groundPoint) {
-        add(
-          'move',
-          t(
-            `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`,
-            `Move & Cover (${ctx.groundPoint.dist.toFixed(1)}m)`,
-          ),
-          true,
-        );
-      }
-      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
+      add('prep', 'stack', t('スタックアップ（入口脇で待機）', 'Stack Up (Hold by Entry)'), true);
+      if (ctx.groundPoint) add('prep', 'move', moveLabel(ctx.groundPoint), true);
+      add('prep', 'overwatch', overwatchLabel, true);
+      add('entry', 'clear', t('突入＆クリア（2名突入制圧）', 'Breach & Clear (2-Man Entry)'), true);
+      add('entry', 'flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
+      add('entry', 'gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
     } else if (ctx.groundPoint) {
-      add(
-        'move',
-        t(
-          `指定位置へ移動・警戒 (${ctx.groundPoint.dist.toFixed(1)}m)`,
-          `Move & Cover (${ctx.groundPoint.dist.toFixed(1)}m)`,
-        ),
-        true,
-      );
-      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
+      add('prep', 'move', moveLabel(ctx.groundPoint), true);
+      add('prep', 'overwatch', overwatchLabel, true);
     } else {
-      add('overwatch', t('現在位置から照準方向をロック', 'Cover Aimed Direction'), true);
+      add('prep', 'overwatch', overwatchLabel, true);
     }
 
-    add('hold', t('現在位置で待機・周囲警戒', 'Hold Position & Cover'), true);
-    add('follow', t('追従・隊形復帰', 'Fall In / Follow'), true);
-    add(null, t('キャンセル', 'Cancel'), true);
-    return out;
+    add('general', 'hold', t('現在位置で待機・周囲警戒', 'Hold Position & Cover'), true);
+    add('general', 'follow', t('追従・隊形復帰', 'Fall In / Follow'), true);
+    const cancel: MenuItem = { order: null, label: t('キャンセル', 'Cancel'), enabled: true };
+    const of = (z: Zone): MenuItem[] => flow.filter((f) => f.zone === z).map((f) => f.item);
+    // 上: 準備（流れの最初がキャンセルのすぐ上 = 逆順）／キャンセル／下: 突入 → 待機・追従
+    return [...of('prep').reverse(), cancel, ...of('entry'), ...of('general')];
   }
 
   private refreshHeader(element: SquadElement, ctx: OrderContext): void {
     this.titleEl.textContent = t('部隊指揮', 'SQUAD COMMAND');
     this.footEl.textContent = t(
-      '[1-9 / 左クリック / 右離し] 実行   [T] チーム切替   [中クリック] 中止',
-      '[1-9 / LMB / Release RMB] Execute   [T] Switch Team   [MMB] Cancel',
+      '[マウス上下/ホイール] 選択   [右離し / 左クリック] 実行   [T] チーム切替   [中クリック] 中止',
+      '[Mouse Up/Down/Wheel] Select   [Release RMB / LMB] Execute   [T] Switch Team   [MMB] Cancel',
     );
     this.elBadge.textContent = `[T] ${tElementLabel(element, this.cfg.elementLabels[element])}`;
     this.elBadge.style.color = ELEMENT_CSS[element];
@@ -733,12 +723,9 @@ export class CommandMenu {
     this.items.forEach((item, i) => {
       const row = document.createElement('div');
       row.className = 'cqb-cmd-row' + (i === this.selectedIdx ? ' active' : '') + (item.enabled ? '' : ' disabled');
-      const num = document.createElement('span');
-      num.className = 'cqb-cmd-num';
-      num.textContent = item.order === null ? 'ESC' : item.num > 0 ? String(item.num) : '·';
       const lbl = document.createElement('span');
       lbl.textContent = item.label;
-      row.append(num, lbl);
+      row.append(lbl);
       this.listEl.appendChild(row);
     });
   }
@@ -756,8 +743,8 @@ export class CommandMenu {
       const ctx = this.resolveContext(element);
       this.openContext = ctx;
       this.items = this.buildMenuItems(ctx);
-      this.selectedIdx = 0;
-      this.offsetPx = 0;
+      this.selectedIdx = Math.max(0, this.items.findIndex((it) => it.order === null));
+      this.offsetPx = this.selectedIdx * 28;
       this.open = true;
       this.refreshHeader(element, ctx);
       this.renderRows();
@@ -770,14 +757,6 @@ export class CommandMenu {
 
     if (event === 'cancel') {
       this.close();
-      return;
-    }
-
-    if (event === 'select') {
-      const item = this.items.find((it) => it.num === value);
-      const ctx = { ...this.openContext, element };
-      this.close();
-      if (item && item.order && item.enabled) onExecute(item.order, ctx);
       return;
     }
 

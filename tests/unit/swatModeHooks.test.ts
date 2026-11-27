@@ -745,7 +745,30 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
       } as unknown as Door;
     }
 
-    it('renders and executes both gasClear and c2Clear in door context (locked & unlocked) with [1-9] footer hint', () => {
+    /** メニューの行を上から順に集め、ラベルに text を含む行までマウス移動で選んで confirm する（キャンセル行が初期選択）。 */
+    function pickByMouse(
+      menu: CommandMenu,
+      text: string,
+      onExecute: (order: SquadOrder) => void,
+    ): void {
+      const body = (globalThis as unknown as { document: { body: StubElement } }).document.body;
+      const collectRows = (el: StubElement): StubElement[] => {
+        const rows: StubElement[] = [];
+        if (el.className.split(' ').includes('cqb-cmd-row')) rows.push(el);
+        for (const ch of el.children) rows.push(...collectRows(ch));
+        return rows;
+      };
+      const labels = collectRows(body).map((r) => r.children[0]?.textContent ?? '');
+      const cancelIdx = labels.findIndex((l) => l.includes('キャンセル'));
+      const targetIdx = labels.findIndex((l) => l.includes(text));
+      expect(cancelIdx).toBeGreaterThanOrEqual(0);
+      expect(targetIdx).toBeGreaterThanOrEqual(0);
+      // 'open' 直後の選択はキャンセル行。offsetPx は 28px/行で、round(offsetPx / 28) が選択行になる
+      menu.handleMenuEvent('move', (targetIdx - cancelIdx) * 28, 'gold', onExecute);
+      menu.handleMenuEvent('confirm', 0, 'gold', onExecute);
+    }
+
+    it('renders and executes both gasClear and c2Clear in door context (locked & unlocked) with mouse-only footer hint', () => {
       const cfg = validateSquad(JSON.parse(fs.readFileSync(squadJsonPath, 'utf-8')));
       const rooms: RoomDef[] = [
         { id: 'hall', name: 'Hall', x: 0, z: 0, width: 6, depth: 4, floorY: 0 },
@@ -765,16 +788,16 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
         const body = (globalThis as unknown as { document: { body: StubElement } }).document.body;
         const texts = collectText(body);
 
-        expect(texts.some((t) => t.includes('[1-9'))).toBe(true);
+        expect(texts.some((t) => t.includes('マウス上下'))).toBe(true);
+        expect(texts.some((t) => t.includes('[1-9'))).toBe(false);
         expect(texts.some((t) => t.includes('ガス＆クリア'))).toBe(true);
         expect(texts.some((t) => t.includes('C2＆クリア'))).toBe(true);
 
-        // In door context: 1=stack, 2=check, 3=clear, 4=flashClear, 5=gasClear, 6=c2Clear
-        menu.handleMenuEvent('select', 5, 'gold', onExecute);
+        pickByMouse(menu, 'ガス＆クリア', onExecute);
         expect(executed).toEqual(['gasClear']);
 
         menu.handleMenuEvent('open', 0, 'gold', onExecute);
-        menu.handleMenuEvent('select', 6, 'gold', onExecute);
+        pickByMouse(menu, 'C2＆クリア', onExecute);
         expect(executed).toEqual(['gasClear', 'c2Clear']);
 
         menu.dispose();
@@ -802,14 +825,14 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
       expect(texts.some((t) => t.includes('ガス＆クリア') && t.includes('残 2'))).toBe(true);
       expect(texts.some((t) => t.includes('トラップ解除'))).toBe(true); // 発見済みトラップ → 解除項目が出る
 
-      // 1=stack 2=check 3=disarm(発見済み) 4=clear 5=flashClear(0 本) 6=gasClear
-      menu.handleMenuEvent('select', 5, 'gold', onExecute);
+      // flashClear は 0 本で無効 → 選んで confirm しても何も実行されない
+      pickByMouse(menu, 'フラッシュ＆クリア', onExecute);
       expect(executed).toEqual([]);
       menu.handleMenuEvent('open', 0, 'gold', onExecute);
-      menu.handleMenuEvent('select', 6, 'gold', onExecute);
+      pickByMouse(menu, 'ガス＆クリア', onExecute);
       expect(executed).toEqual(['gasClear']);
       menu.handleMenuEvent('open', 0, 'gold', onExecute);
-      menu.handleMenuEvent('select', 2, 'gold', onExecute);
+      pickByMouse(menu, 'ドアチェック', onExecute);
       expect(executed).toEqual(['gasClear', 'check']);
 
       menu.dispose();
@@ -837,14 +860,13 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
       expect(texts.some((t) => t.includes('ガス＆クリア'))).toBe(true);
       expect(texts.some((t) => t.includes('C2＆クリア'))).toBe(false);
 
-      // In area context: 1=clear, 2=flashClear, 3=gasClear
-      menu.handleMenuEvent('select', 3, 'gold', onExecute);
+      pickByMouse(menu, 'ガス＆クリア', onExecute);
       expect(executed).toEqual(['gasClear']);
 
       menu.dispose();
     });
 
-    it('keeps hotkeys strictly within 1..9 (never emitting 10) and preserves restrain & follow when restrainTarget and door are both active', () => {
+    it('lists both restrain & follow rows and executes them by mouse selection when restrainTarget and door are both active', () => {
       const cfg = validateSquad(JSON.parse(fs.readFileSync(squadJsonPath, 'utf-8')));
       const rooms: RoomDef[] = [
         { id: 'hall', name: 'Hall', x: 0, z: 0, width: 6, depth: 4, floorY: 0 },
@@ -881,32 +903,13 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
       menu.handleMenuEvent('open', 0, 'gold', onExecute);
 
       const body = (globalThis as unknown as { document: { body: StubElement } }).document.body;
-      const findRows = (el: StubElement): StubElement[] => {
-        const rows: StubElement[] = [];
-        if (el.className.split(' ').includes('cqb-cmd-row')) rows.push(el);
-        for (const ch of el.children) rows.push(...findRows(ch));
-        return rows;
-      };
-      const rows = findRows(body);
-      const numberedRows = rows
-        .map((r) => ({ numText: r.children[0]?.textContent ?? '', label: r.children[1]?.textContent ?? '' }))
-        .filter((r) => r.numText !== 'ESC');
+      const labelTexts = collectText(body);
+      expect(labelTexts.some((l) => l.includes('対象を確保'))).toBe(true);
+      expect(labelTexts.some((l) => l.includes('追従'))).toBe(true);
 
-      expect(numberedRows.length).toBeLessThanOrEqual(9);
-      const nums = numberedRows.map((r) => Number(r.numText));
-      expect(nums.every((n) => Number.isInteger(n) && n >= 1 && n <= 9)).toBe(true);
-      expect(new Set(nums).size).toBe(nums.length);
-      expect(numberedRows.some((r) => r.numText === '10')).toBe(false);
-
-      const restrainRow = numberedRows.find((r) => r.label.includes('対象を確保'));
-      const followRow = numberedRows.find((r) => r.label.includes('追従'));
-      expect(restrainRow).toBeDefined();
-      expect(followRow).toBeDefined();
-
-      // Verify both restrain and follow are selectable via their 1..9 hotkeys
-      menu.handleMenuEvent('select', Number(restrainRow!.numText), 'gold', onExecute);
+      pickByMouse(menu, '対象を確保', onExecute);
       menu.handleMenuEvent('open', 0, 'gold', onExecute);
-      menu.handleMenuEvent('select', Number(followRow!.numText), 'gold', onExecute);
+      pickByMouse(menu, '追従', onExecute);
       expect(executed).toEqual(['restrain', 'follow']);
 
       menu.dispose();
