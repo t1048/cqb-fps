@@ -34,6 +34,8 @@ import { StateMachine } from './StateMachine';
 
 const SUSPECT_COLOR = 0x937969;
 const ARRESTED_COLOR = 0x3060b0;
+/** 解放された味方の復帰時士気: 降伏しきい値 + この値（ほぼ折れる寸前で戦線に戻る） */
+const FREED_MORALE_MARGIN = 6;
 const DEFAULT_HP = 100;
 const MAX_DT = 0.05;
 
@@ -1140,6 +1142,49 @@ export class Suspect implements HitTarget {
   collectEvidence(): void {
     this.evidenceCollected = true;
     this.body.removeGun();
+  }
+
+  /** 偽装投降の確率（ai_profiles.json の fakeSurrenderChance）。容疑者モードの拘束判定が使う */
+  get fakeSurrenderChance(): number {
+    return this.combat?.fakeSurrenderChance ?? 0;
+  }
+
+  /** 拘束済み（手錠）か */
+  get isRestrained(): boolean {
+    return this.state === SuspectState.ARRESTED;
+  }
+
+  /**
+   * 容疑者モード専用: 偽装投降の反撃。拘束に来た隊員の至近で武器を拾い直し、不意に撃つ（投降状態のみ・1 度きり）。
+   * 続けて通常の交戦へ移る。
+   */
+  fakeSurrenderAttack(at: Vec3): boolean {
+    if (!this.friendly || this.state !== SuspectState.SURRENDER) return false;
+    this.fakeSurrenderChecked = true;
+    this.known = { x: at.x, y: at.y, z: at.z };
+    this.body.faceToward(at.x, at.z);
+    this.morale.shift(Math.max(15, this.profile.thresholds.hesitateBelow + 12 - this.morale.value));
+    this.prevMorale = this.morale.value;
+    this.setState(SuspectState.ENGAGE);
+    this.engage?.fireAt(null, this.known);
+    return true;
+  }
+
+  /**
+   * 容疑者モード専用: プレイヤーが拘束(ARRESTED)の味方を解放した。士気は降伏しきい値の少し上まで下がった状態で
+   * 戦線に復帰し、まず遮蔽へ退避してから戦う（偽装投降の再抽選はしない）。
+   */
+  freeFromRestraint(): boolean {
+    if (!this.friendly || this.state !== SuspectState.ARRESTED) return false;
+    this.body.setRestrained(false);
+    this.body.setTint(SUSPECT_COLOR);
+    this.fakeSurrenderChecked = true;
+    this.unwatchedSurrenderSec = 0;
+    const th = this.profile.thresholds;
+    this.morale.shift(th.surrenderBelow + FREED_MORALE_MARGIN - this.morale.value);
+    this.prevMorale = this.morale.value;
+    this.setState(SuspectState.ENGAGE);
+    return true;
   }
 
   /** 拘束完了（SURRENDER のみ受理）。戻り値: 受理したか */

@@ -61,6 +61,9 @@ import {
 } from './swat/swatHelpers';
 import { SwatHunter } from './swat/SwatHunter';
 import { SwatObstacles } from './swat/swatObstacles';
+import { SwatHotSpotCoordinator } from './swat/swatHotSpots';
+import { SwatRestraint } from './swat/swatRestraint';
+import { SwatRoutePlanner, type RoutePlan } from './swat/swatRoutePlanner';
 import { SwatTacticsCoordinator } from './swat/swatTacticsCoordinator';
 import {
   BARRICADE_SHOOT_RANGE,
@@ -181,6 +184,10 @@ export class SwatTeam implements SwatTeamHost {
   private readonly entry: SwatEntryCoordinator;
   private readonly obstacles: SwatObstacles;
   private readonly tactics: SwatTacticsCoordinator;
+  private readonly routePlanner: SwatRoutePlanner;
+  private readonly restraint: SwatRestraint;
+  private readonly hotSpots: SwatHotSpotCoordinator;
+  private readonly downListeners: ((pos: Vec3, byPlayer: boolean) => void)[] = [];
 
   constructor(private readonly d: SwatTeamDeps) {
     this.root.name = 'swatTeam';
@@ -203,6 +210,13 @@ export class SwatTeam implements SwatTeamHost {
       allies: d.suspects,
     };
     this.combatCtx = ctx;
+    this.routePlanner = new SwatRoutePlanner(d);
+    this.restraint = new SwatRestraint({
+      d,
+      hunters: this.hunters,
+      radio: (h, text, voice, force) => this.radio(h, text, voice, force),
+      queueRadio: (h, text, voice) => this.queueRadio(h, text, voice),
+    });
 
     const self = this;
     this.coverage = new SwatCoverage({
@@ -217,6 +231,7 @@ export class SwatTeam implements SwatTeamHost {
       },
       portals: () => this.entry.portals(),
       doorById: (id) => this.doorById(id),
+      planRoute: (from, goal, skip) => this.routePlanner.plan(from, goal, skip),
       radio: (h, text, voice, force) => this.radio(h, text, voice, force),
     });
 
@@ -308,6 +323,31 @@ export class SwatTeam implements SwatTeamHost {
       queueRadio: (h, text, voice) => this.queueRadio(h, text, voice),
     });
 
+    this.hotSpots = new SwatHotSpotCoordinator({
+      d: this.d,
+      rooms: this.rooms,
+      hunters: this.hunters,
+      get clock() {
+        return self.clock;
+      },
+      get currentPressure() {
+        return self.currentPressure;
+      },
+      get lastSightingAge() {
+        return self.lastSightingAge;
+      },
+      doorById: (id) => this.doorById(id),
+      portals: () => this.entry.portals(),
+      roomName: (pos) => this.coverage.roomName(pos),
+      flashAvailable: () => this.tactics.flashAvailable(),
+      gasAvailable: () => this.tactics.gasAvailable(),
+      throwFlashAtSpot: (by, target) => this.tactics.throwFlashAtSpot(by, target),
+      throwGasAtSpot: (by, target) => this.tactics.throwGasAtSpot(by, target),
+      suppress: (by, at) => this.tactics.suppress(by, at),
+      radio: (h, text, voice, force) => this.radio(h, text, voice, force),
+      queueRadio: (h, text, voice) => this.queueRadio(h, text, voice),
+    });
+
     const spawns = resolveSwatSpawns(d.spawns, d.count, d.colliders);
     for (let i = 0; i < spawns.length; i++) {
       const idNum = this.nextHunterId++;
@@ -339,10 +379,15 @@ export class SwatTeam implements SwatTeamHost {
         if (!h || !h.alive) return;
         const p = d.player.position;
         const from = { x: p.x, y: p.y, z: p.z };
-        if (h.takeHit(e.damage, from)) {
+        // 被弾者がまだ射手を見ていなかったか（のぞき撃ち・隙間撃ちの学習用。takeHit が状態を変える前に取る）
+        const victimSaw = h.sees || (h.state === 'engage' && h.lostSec < 0.8);
+        const downed = h.takeHit(e.damage, from);
+        this.hotSpots.onOfficerShot(h, from, downed, victimSaw);
+        if (downed) {
           d.weapons.removeTarget(h);
           this.kills++;
           this.tactics.onManDown(h);
+          this.notifyDown(h, true);
         } else {
           this.abortStacking();
           this.shareSighting(from);
@@ -387,6 +432,20 @@ export class SwatTeam implements SwatTeamHost {
         }
       }),
     );
+  }
+
+  /** 隊員がダウンした通知（味方容疑者の士気など）。戻り値は購読解除 */
+  onOfficerDown(cb: (pos: Vec3, byPlayer: boolean) => void): () => void {
+    this.downListeners.push(cb);
+    return () => {
+      const i = this.downListeners.indexOf(cb);
+      if (i >= 0) this.downListeners.splice(i, 1);
+    };
+  }
+
+  private notifyDown(h: SwatHunter, byPlayer: boolean): void {
+    const pos = { x: h.body.px, y: h.body.footY, z: h.body.pz };
+    for (const cb of [...this.downListeners]) cb(pos, byPlayer);
   }
 
   /** 隊員をツーマン／スリーマンセルに組み、組ごとにコールサインを振る */
@@ -456,6 +515,25 @@ export class SwatTeam implements SwatTeamHost {
     return this.hunters.length;
   }
 
+  /** ホットスポット学習の記憶と実施した対策の履歴（テスト・デバッグ用） */
+  get hotSpotMemory(): SwatHotSpotCoordinator['memory'] {
+    return this.hotSpots.memory;
+  }
+
+  get hotSpotTacticLog(): readonly string[] {
+    return this.hotSpots.tacticLog;
+  }
+
+  /** 投降した味方容疑者の拘束（統計・テスト用） */
+  get restraintStats(): { cuffed: number; betrayed: number; active: number } {
+    return { cuffed: this.restraint.cuffed, betrayed: this.restraint.betrayed, active: this.restraint.activeJobs };
+  }
+
+  /** 外壁入口（突入口になるドア）の id 一覧 */
+  portalIds(): string[] {
+    return this.entry.portals().map((p) => p.id);
+  }
+
   get hasStarted(): boolean {
     return this.started;
   }
@@ -478,6 +556,11 @@ export class SwatTeam implements SwatTeamHost {
 
   get clock(): number {
     return this.entry.clock;
+  }
+
+  /** 掃討の進捗（確認済みマス・クリア済み部屋・全マス）。 */
+  get sweepProgress(): { seen: number; cleared: number; total: number; rooms: number } {
+    return this.coverage.progress();
   }
 
   // ---------- 公開 Facade メソッド ----------
@@ -550,6 +633,7 @@ export class SwatTeam implements SwatTeamHost {
     this.radioCd = Math.max(0, this.radioCd - dt);
     this.radioSpeakGap = Math.max(0, this.radioSpeakGap - dt);
     this.tactics.tickTimers(dt);
+    this.routePlanner.tick(dt);
     this.coverage.tickTimers(dt);
     this.obstacles.tickTimers(dt);
     this.entry.tickClock(dt);
@@ -565,6 +649,8 @@ export class SwatTeam implements SwatTeamHost {
       this.entry.updateEntryCoordination(dt);
       this.entry.updateEntryGroups(dt);
       this.tactics.updateAntiCamping(dt);
+      this.restraint.update(dt);
+      this.hotSpots.update(dt);
     }
     for (const h of this.hunters) h.update(dt);
     this.tactics.updatePincerRefresh();
@@ -761,6 +847,11 @@ export class SwatTeam implements SwatTeamHost {
     return this.hunters.some((h) => h !== exclude && h.alive && h.state === 'breach' && h.breachDoorId === doorId);
   }
 
+  /** 目標が施錠ドアの向こうか（歩いて届くか）。届かなければ最初に破るべき施錠ドアを返す */
+  planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan {
+    return this.routePlanner.plan(from, goal, skip);
+  }
+
   findLockedDoor(h: SwatHunter, goal: Vec3, skip: ReadonlySet<string>): Door | null {
     let best: Door | null = null;
     let bestScore = Infinity;
@@ -875,6 +966,7 @@ export class SwatTeam implements SwatTeamHost {
     for (const u of this.unsubs) u();
     this.unsubs.length = 0;
     this.tactics.dispose();
+    this.hotSpots.dispose();
     this.radioQueue.length = 0;
     this.radioSpeakGap = 0;
     this.entry.dispose();

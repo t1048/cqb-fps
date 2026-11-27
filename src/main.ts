@@ -61,6 +61,7 @@ import {
   type GameMode,
   type ResultReport,
 } from './modes/SuspectMode';
+import { SuspectAllyDirector } from './modes/SuspectAllies';
 
 type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'paused' | 'ended';
 
@@ -163,6 +164,7 @@ class App {
   private readonly scoreHud: ScoreHud | null = null;
   private readonly swatTeam: SwatTeam | null = null;
   private readonly suspectMission: SuspectMission | null = null;
+  private readonly allyDirector: SuspectAllyDirector | null = null;
   private readonly mode: GameMode;
   private readonly resultScreen: ResultScreen;
   private readonly textures: TextureLibrary;
@@ -389,7 +391,8 @@ class App {
         subtitle: this.subtitle,
         civilians: () => this.entities.civilians.values(),
         textures: this.textures,
-        suspects: () => this.entities.livingSuspectTargets(),
+        suspects: () => this.entities.armedSuspectTargets(),
+        restrainables: () => this.entities.restrainTargets(),
         shieldActive: () => this.hostageGrab?.shieldEffective ?? true,
         onPepper: (target) => {
           if (target === 'hostage' && this.hostageGrab?.holding) this.hostageGrab.onHostagePeppered();
@@ -411,6 +414,16 @@ class App {
         (report, failed) => this.endMission(failed, report),
       );
       const sm = this.suspectMission;
+      this.allyDirector = new SuspectAllyDirector({
+        suspects: () => this.entities.suspects.values(),
+        player: this.player,
+        interaction: this.interaction,
+        subtitle: this.subtitle,
+        bus: this.bus,
+        team: this.swatTeam,
+        colliders: this.world.colliders,
+        showGauge: (label, ratio) => sm.showGauge(label, ratio),
+      });
       this.hostageGrab = new HostageGrab(
         this.player,
         this.entities,
@@ -768,6 +781,7 @@ class App {
     if (this.swatTeam) this.swatTeam.update(dt);
     else this.squad.update(dt);
     this.hostageGrab?.update(dt);
+    this.allyDirector?.update(dt);
     this.pepper?.update(dt);
     this.tearGasEffect?.update(dt);
     this.fortify?.update(dt);
@@ -942,6 +956,7 @@ class App {
     this.scoreHud?.dispose();
     this.mission?.dispose();
     this.suspectMission?.dispose();
+    this.allyDirector?.dispose();
     this.swatTeam?.dispose();
     this.roe.dispose();
     this.hostageGrab?.dispose();

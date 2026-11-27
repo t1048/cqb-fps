@@ -12,6 +12,7 @@ import {
 } from '../../ai/EngageBehavior';
 import { HumanoidBody } from '../../ai/HumanoidBody';
 import { shieldBlocks } from '../../ai/ShieldGuard';
+import type { RestrainTarget } from '../../ai/restrain';
 import { blockedAtFiltered } from '../../ai/SquadRoute';
 import {
   computeCornerLean,
@@ -81,6 +82,8 @@ import {
   GOAL_TIMEOUT_SEC,
   HEADING_MIN_SPEED,
   HEADING_TAU,
+  HOT_PREAIM_RADIUS,
+  HOT_PREAIM_REACT_SEC,
   HUNT_SPEED,
   LOOK_HOLD_SEC,
   NAV_SMOOTH,
@@ -89,6 +92,13 @@ import {
   PIE_STEP_HOLD_SEC,
   PIE_TIMEOUT_SEC,
   PORTAL_BLOCK_SEC,
+  RESTRAIN_COVER_DIST,
+  RESTRAIN_GIVEUP_SEC,
+  RESTRAIN_REACH,
+  RESTRAIN_REACT_PENALTY,
+  ROUTE_BREACH_WAIT_SEC,
+  ROUTE_CHECK_SEC,
+  SKIP_DOOR_TTL_SEC,
   SCAN_AMP,
   SCAN_IDLE_SEC,
   SCAN_RATE,
@@ -177,9 +187,20 @@ export class SwatHunter implements HitTarget {
   suppressCd = 0;
   readonly combat: CombatParams;
   disarmDoor: Door | null = null;
+  /** ホットスポット学習: 開口の手前で対策が効くまで止まる / 開口へ先行照準する（チーム時計の期限つき） */
+  hotHold: { until: number; aim: Vec3 } | null = null;
+  preAim: { pos: Vec3; until: number } | null = null;
+  /** 投降した味方容疑者の拘束: 対象と役割（cuff = 手錠をかける / cover = 見張り） */
+  restrainTarget: RestrainTarget | null = null;
+  restrainRole: 'cuff' | 'cover' = 'cuff';
   disarmSec = 0;
   readonly checkedTraps = new Set<string>();
   private readonly skipDoors = new Set<string>();
+  /** ブリーチに失敗した扉を再び候補に戻すまでの残り秒 */
+  private readonly skipDoorLeft = new Map<string, number>();
+  /** 経路計画（施錠ドア越しの目標）の再確認までの秒・他隊員のブリーチ待ちの累計秒 */
+  private routeCheckCd = Math.random() * ROUTE_CHECK_SEC;
+  private routeWaitSec = 0;
   /** 行き詰まった外壁入口 → 残り除外秒 */
   private readonly blockedPortals = new Map<string, number>();
   private blockedCount = 0;
@@ -468,6 +489,7 @@ export class SwatHunter implements HitTarget {
     this.blockedWindow = Math.max(0, this.blockedWindow - dt);
     if (this.blockedWindow <= 0) this.blockedCount = 0;
     this.tickBlockedPortals(dt);
+    this.tickSkipDoors(dt);
     if (this.state === 'staging') return;
     if (this.blindLeft > 0) {
       this.blindLeft = Math.max(0, this.blindLeft - dt);
@@ -489,6 +511,15 @@ export class SwatHunter implements HitTarget {
       this.state !== 'pie'
     ) {
       this.team.checkTraps(this);
+    }
+    // ホットスポット: 開口への対策（閃光・制圧・盾の先行）が効くまで、のぞく位置に出ずに開口を狙って待つ
+    if (this.hotHold && (this.state === 'sweep' || this.state === 'hunt')) {
+      if (this.team.clock >= this.hotHold.until) this.hotHold = null;
+      else {
+        this.body.faceToward(this.hotHold.aim.x, this.hotHold.aim.z, 5 * dt);
+        this.updateReadyPose();
+        return;
+      }
     }
     switch (this.state) {
       case 'stack':
@@ -515,9 +546,19 @@ export class SwatHunter implements HitTarget {
       case 'disarm':
         this.updateDisarm(dt);
         break;
+      case 'restrain':
+        this.updateRestrain(dt);
+        break;
       case 'sweep':
         this.updateSweep(dt);
         break;
+    }
+    // 先行照準（パイ切り）: 動きながらも開口の方へ視線を向け続ける
+    if (this.preAim && (this.state === 'sweep' || this.state === 'hunt')) {
+      if (this.team.clock >= this.preAim.until) this.preAim = null;
+      else if (Math.hypot(this.preAim.pos.x - this.body.px, this.preAim.pos.z - this.body.pz) < 10) {
+        this.body.faceToward(this.preAim.pos.x, this.preAim.pos.z, 3.2 * dt);
+      }
     }
     this.updateReadyPose();
     const moved = Math.hypot(this.body.px - this.lastStepX, this.body.pz - this.lastStepZ);
@@ -858,7 +899,19 @@ export class SwatHunter implements HitTarget {
       }
       this.acquiring = true;
       this.spotTimer += dt;
-      if (this.spotTimer < this.team.reactionSec) return;
+      // 手錠をかけている最中は対象に正対して注意が割かれ、気付くのが遅れる
+      let react = this.team.reactionSec + (this.state === 'restrain' && this.restrainRole === 'cuff' ? RESTRAIN_REACT_PENALTY : 0);
+      // 先行照準した開口に現れた相手には反応が速い（パイ切り・対策済みの接近）
+      const pa = this.preAim;
+      if (
+        pa &&
+        this.team.clock < pa.until &&
+        Math.hypot(threat.x - pa.pos.x, threat.z - pa.pos.z) < HOT_PREAIM_RADIUS &&
+        Math.abs(p.position.y - pa.pos.y) < 1.8
+      ) {
+        react = Math.min(react, HOT_PREAIM_REACT_SEC);
+      }
+      if (this.spotTimer < react) return;
       this.spotTimer = 0;
       this.known = { x: threat.x, y: p.position.y, z: threat.z };
       this.team.onContact(this, this.known);
@@ -1012,6 +1065,7 @@ export class SwatHunter implements HitTarget {
         this.entryRouteId = null;
         this.nav.reset();
       }
+      if (!this.sees && this.checkBlockedRoute(goal, dt) === true) return;
       const res = this.nav.step(goal, speed, dt, {
         canOpenDoors: true,
         canUseStairs: true,
@@ -1079,6 +1133,13 @@ export class SwatHunter implements HitTarget {
       this.nav.reset();
     }
     this.team.tryFlash(this, t);
+    const blockedRoute = this.checkBlockedRoute(t, dt);
+    if (blockedRoute === true) return;
+    if (blockedRoute === 'unreachable') {
+      this.huntTarget = null;
+      this.setState('sweep');
+      return;
+    }
     const res = this.nav.step(t, this.combat.moveSpeed * HUNT_SPEED, dt, {
       canOpenDoors: true,
       canUseStairs: true,
@@ -1165,6 +1226,137 @@ export class SwatHunter implements HitTarget {
       this.noteEntryBlocked(route.entryId);
       if (door) this.tryBeginBreach(route.dest, door.id);
     }
+  }
+
+  /** 投降した味方容疑者の拘束に就く（cuff = 手錠をかける / cover = 見張る） */
+  beginRestrain(target: RestrainTarget, role: 'cuff' | 'cover'): void {
+    this.restrainTarget = target;
+    this.restrainRole = role;
+    this.huntTarget = null;
+    this.setState('restrain');
+  }
+
+  endRestrain(): void {
+    this.restrainTarget = null;
+    this.body.setPose('stand');
+    if (this.state === 'restrain') this.setState('sweep');
+  }
+
+  /** 至近距離の脅威（偽装投降の反撃など）へ即座に交戦する */
+  engageFrom(pos: Vec3): void {
+    if (!this.alive) return;
+    this.known = { x: pos.x, y: pos.y, z: pos.z };
+    this.body.setPose('stand');
+    this.body.faceToward(pos.x, pos.z);
+    this.team.shareSighting(this.known);
+    this.setState('engage');
+  }
+
+  private updateRestrain(dt: number): void {
+    const t = this.restrainTarget;
+    if (!t || !t.alive || !t.surrendered || this.stateTime > RESTRAIN_GIVEUP_SEC) {
+      this.endRestrain();
+      return;
+    }
+    const dx = t.px - this.body.px;
+    const dz = t.pz - this.body.pz;
+    const dist = Math.hypot(dx, dz);
+    const goal = { x: t.px, y: t.footY, z: t.pz };
+    const want = this.restrainRole === 'cuff' ? RESTRAIN_REACH - 0.25 : RESTRAIN_COVER_DIST;
+    if (dist > want || Math.abs(t.footY - this.body.footY) > 0.75) {
+      if (this.checkBlockedRoute(goal, dt) === true) return;
+      const res = this.nav.step(goal, this.combat.moveSpeed * HUNT_SPEED, dt, {
+        canOpenDoors: true,
+        canUseStairs: true,
+        faceTravel: true,
+        arriveDist: want,
+        smooth: NAV_SMOOTH,
+      });
+      if (res === 'blocked') {
+        this.noteBlocked();
+        this.endRestrain();
+      }
+      return;
+    }
+    if (this.restrainRole === 'cuff') {
+      // 対象に正対してかがみ込み、手錠をかける（進行は SwatRestraint が数える）
+      this.body.faceToward(t.px, t.pz, 5 * dt);
+      this.body.setPose('crouch');
+    } else {
+      // 援護役: 対象から外側（部屋の入口側）を向いて見張る
+      const yaw = Math.atan2(dx, dz);
+      this.scanAround(dt, yaw);
+    }
+  }
+
+  /** 停滞時の再計画: 掃討目標・ブリーチ失敗扉・入口の除外・経路待ちをすべて引き直す */
+  resetPlanning(): void {
+    this.skipDoors.clear();
+    this.skipDoorLeft.clear();
+    this.blockedPortals.clear();
+    this.routeWaitSec = 0;
+    this.routeCheckCd = 0;
+    this.goalCell = null;
+    this.goalTime = 0;
+    this.entryPhase = null;
+    this.entryRouteId = null;
+    this.huntingFlank = false;
+    if (this.state === 'hunt') {
+      this.huntTarget = null;
+      this.setState('sweep');
+    } else if (!this.nav.onStair) this.nav.reset();
+  }
+
+  private skipDoor(id: string): void {
+    this.skipDoors.add(id);
+    this.skipDoorLeft.set(id, SKIP_DOOR_TTL_SEC);
+  }
+
+  private tickSkipDoors(dt: number): void {
+    if (this.skipDoorLeft.size === 0) return;
+    for (const [id, left] of this.skipDoorLeft) {
+      if (left - dt <= 0) {
+        this.skipDoorLeft.delete(id);
+        this.skipDoors.delete(id);
+      } else this.skipDoorLeft.set(id, left - dt);
+    }
+  }
+
+  /**
+   * 目標が施錠ドアの向こうで、歩いては届かないとき、経路上で最初の施錠ドアをブリーチしに行く。
+   * 戻り値 true = このフレームの移動は不要（ブリーチへ遷移した / 他隊員のブリーチ待ち）。
+   * 'unreachable' = 施錠ドアを開けても届かない（呼び出し側が目標を諦める）。
+   */
+  private checkBlockedRoute(goal: Vec3, dt: number): boolean | 'unreachable' {
+    this.routeCheckCd -= dt;
+    if (this.routeCheckCd > 0) return this.routeWaitSec > 0 && this.routeWaitSec < ROUTE_BREACH_WAIT_SEC ? this.waitingForBreach(dt) : false;
+    this.routeCheckCd = ROUTE_CHECK_SEC + Math.random() * 0.4;
+    const plan = this.team.planRoute({ x: this.body.px, y: this.body.footY, z: this.body.pz }, goal, this.skipDoors);
+    if (plan.reachable) {
+      this.routeWaitSec = 0;
+      return false;
+    }
+    if (!plan.door) return 'unreachable';
+    if (this.team.isDoorBeingBreached(plan.door.id, this)) {
+      // 別の隊員が蹴破っている最中: 近くで待つ（長すぎれば諦めて別の動きに戻る）
+      this.routeWaitSec = Math.max(this.routeWaitSec, 0.01);
+      return this.waitingForBreach(dt);
+    }
+    if (this.tryBeginBreach(goal, plan.door.id)) {
+      this.routeWaitSec = 0;
+      return true;
+    }
+    return false;
+  }
+
+  private waitingForBreach(dt: number): boolean {
+    this.routeWaitSec += dt;
+    if (this.routeWaitSec >= ROUTE_BREACH_WAIT_SEC) {
+      this.routeWaitSec = 0;
+      return false;
+    }
+    this.scanAround(dt, this.scanBaseYaw);
+    return true;
   }
 
   private tickBlockedPortals(dt: number): void {
@@ -1305,6 +1497,13 @@ export class SwatHunter implements HitTarget {
       this.entryPhase = null;
       this.entryRouteId = null;
       this.nav.reset();
+    }
+    const blockedRoute = this.checkBlockedRoute(goal, dt);
+    if (blockedRoute === true) return;
+    if (blockedRoute === 'unreachable') {
+      this.team.markBad(cell);
+      this.goalCell = null;
+      return;
     }
     const res = this.nav.step(goal, this.combat.moveSpeed * SWEEP_SPEED, dt, {
       canOpenDoors: true,
@@ -1490,7 +1689,7 @@ export class SwatHunter implements HitTarget {
         this.setState(this.huntTarget ? 'hunt' : 'sweep');
       }
     } else if (res === 'blocked' || this.stateTime > 20) {
-      this.skipDoors.add(door.id);
+      this.skipDoor(door.id);
       this.clearBreachState();
       this.setState('sweep');
     }
@@ -1525,7 +1724,7 @@ export class SwatHunter implements HitTarget {
         this.body.setPose('crouch');
         this.team.onC2PlantStart(this, door);
       } else if (res === 'blocked' || this.stateTime > 20) {
-        this.skipDoors.add(door.id);
+        this.skipDoor(door.id);
         this.clearBreachState();
         this.setState('sweep');
       }

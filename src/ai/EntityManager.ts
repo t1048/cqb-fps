@@ -16,6 +16,7 @@ import type { DoorSystem } from '../world/Door';
 import type { TextureLibrary } from '../world/Materials';
 import type { StairMark } from '../world/Walk';
 import { evaluateC2BlastCone } from './SwatTactics';
+import type { RestrainTarget } from './restrain';
 import { SWAT_C2_BLAST_HALF_ANGLE_DEG, SWAT_C2_BLAST_RADIUS, SWAT_C2_MAX_DAMAGE } from './SwatProfile';
 
 /** CS ガス濃度サンプリングの軽量構造型（TearGas が構造的に満たす） */
@@ -63,6 +64,9 @@ export class EntityManager {
   private readonly recentGasClouds: { pos: Vec3; radius: number; remainingSec: number }[] = [];
   private readonly suspectTargets = new Map<string, AllyTarget>();
   private readonly livingSuspectsBuf: AllyTarget[] = [];
+  private readonly armedSuspectsBuf: AllyTarget[] = [];
+  private readonly restrainTargetMap = new Map<string, RestrainTarget>();
+  private readonly restrainBuf: RestrainTarget[] = [];
   private readonly gasCache = new Map<string, { cd: number; origin: Vec3 | null; sample: GasSample }>();
 
   constructor(
@@ -303,6 +307,58 @@ export class EntityManager {
       if (t) this.livingSuspectsBuf.push(t);
     }
     return this.livingSuspectsBuf;
+  }
+
+  /** 容疑者モード: SWAT が射撃対象にする味方。投降・拘束済みは撃たない（拘束しに行く） */
+  armedSuspectTargets(): AllyTarget[] {
+    this.armedSuspectsBuf.length = 0;
+    for (const s of this.suspects.values()) {
+      if (!s.alive || s.state === SuspectState.SURRENDER || s.state === SuspectState.ARRESTED) continue;
+      const t = this.suspectTargets.get(s.id);
+      if (t) this.armedSuspectsBuf.push(t);
+    }
+    return this.armedSuspectsBuf;
+  }
+
+  /** 容疑者モード: SWAT が拘束する投降・拘束済みの味方（生存中のみ） */
+  restrainTargets(): readonly RestrainTarget[] {
+    this.restrainBuf.length = 0;
+    for (const s of this.suspects.values()) {
+      if (!s.alive || (s.state !== SuspectState.SURRENDER && s.state !== SuspectState.ARRESTED)) continue;
+      let rt = this.restrainTargetMap.get(s.id);
+      if (!rt) {
+        const b = s.body;
+        rt = {
+          id: s.id,
+          get px() {
+            return b.px;
+          },
+          get pz() {
+            return b.pz;
+          },
+          get footY() {
+            return b.footY;
+          },
+          get alive() {
+            return s.alive;
+          },
+          get surrendered() {
+            return s.state === SuspectState.SURRENDER;
+          },
+          get restrained() {
+            return s.state === SuspectState.ARRESTED;
+          },
+          get fakeChance() {
+            return s.fakeSurrenderChance;
+          },
+          cuff: () => s.arrest(),
+          betray: (at) => s.fakeSurrenderAttack(at),
+        };
+        this.restrainTargetMap.set(s.id, rt);
+      }
+      this.restrainBuf.push(rt);
+    }
+    return this.restrainBuf;
   }
 
   private resolveShooterPos(shooter: string, fallback: Vec3): Vec3 {

@@ -10,6 +10,7 @@ import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
 import type { AABB } from '../../world/WorldBuilder';
 import type { SwatHunter } from './SwatHunter';
+import type { RoutePlan } from './swatRoutePlanner';
 import {
   COVER_CELL,
   COVER_FOV_DEG,
@@ -20,6 +21,8 @@ import {
   ENTRY_LOOK_HALF_DEG,
   ENTRY_LOOK_RANGE,
   HOSTAGE_COVER_DEG,
+  STALL_BUSY_CAP_SEC,
+  STALL_LEVEL_SEC,
   type CoverCell,
   type SwatTeamDeps,
 } from './swatTypes';
@@ -32,6 +35,7 @@ export interface SwatCoverageHost {
   readonly lastSightingAge: number;
   portals(): EntryPortal[];
   doorById(id: string): Door | null;
+  planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan;
   radio(h: SwatHunter | undefined, text: string, voice: string, force?: boolean): void;
 }
 
@@ -89,6 +93,14 @@ export class SwatCoverage {
       }
     }
     this.scanBudget -= visited;
+  }
+
+  /** 掃討の進捗（確認済みマス数・クリア済み部屋数・全マス数）。テスト・停滞監視用 */
+  progress(): { seen: number; cleared: number; total: number; rooms: number } {
+    const cells = this.coverCells();
+    let seen = 0;
+    for (let i = 0; i < cells.length; i++) if (cells[i]!.seen) seen++;
+    return { seen, cleared: this.cleared.size, total: cells.length, rooms: this.sweptRooms.size };
   }
 
   flushPendingHunt(): void {
@@ -293,6 +305,7 @@ export class SwatCoverage {
           x.state === 'entry' ||
           x.state === 'stack' ||
           x.state === 'disarm' ||
+          x.state === 'restrain' ||
           x.state === 'staging' ||
           (x.leader && x.leader.alive)
         ) continue;
@@ -363,29 +376,96 @@ export class SwatCoverage {
     }
   }
 
+  /** 停滞監視の累計無進捗秒とエスカレーション段階（0=未発動） */
+  private stallLevel = 0;
+
+  /**
+   * 停滞監視（最後の安全網）。掃討の進捗（確認済みマス・クリア部屋・解錠ドア数）が止まり、誰も交戦/ブリーチ中でないなら
+   * 段階的に強めていく: ①目標の引き直し（再計画） ②未確認マスへの最寄り施錠ドアをブリーチ
+   * ③ドローン熱源探知 ④プレイヤー位置へ直接押し込み。進捗が出たら段階を戻す。
+   */
   private watchStall(dt: number): void {
     this.watchPursuit(dt);
     const cells = this.coverCells();
     let seen = 0;
     for (let i = 0; i < cells.length; i++) if (cells[i]!.seen) seen++;
-    const sig = seen + this.cleared.size * 1000;
+    let unlocked = 0;
+    for (const door of this.host.d.doors.doors) if (!door.locked) unlocked++;
+    const sig = seen + this.cleared.size * 1000 + unlocked * 100000;
     if (sig !== this.stallSig) {
       this.stallSig = sig;
       this.stallSec = 0;
+      this.stallLevel = 0;
       return;
     }
-    this.stallSec += dt;
-    if (this.stallSec < 8) return;
-    this.stallSec = 4; // 以後 4 秒ごとに再試行
     for (const x of this.host.hunters) {
       if (!x.alive) continue;
-      if (x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || x.state === 'disarm') return;
+      // 交戦・ブリーチ・突入手順の最中は進行中とみなす（それぞれ固有のタイムアウトを持つ）
+      if (x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || x.state === 'disarm' || x.state === 'restrain' || x.state === 'stack' || x.state === 'pie' || x.state === 'entry') {
+        this.stallSec = Math.min(this.stallSec, STALL_BUSY_CAP_SEC);
+        return;
+      }
     }
-    for (let i = 0; i < cells.length; i++) cells[i]!.bad = false;
-    for (const x of this.host.hunters) {
-      if (!x.alive || x.state !== 'sweep' || x.leader) continue;
-      x.goalCell = null;
-      x.goalTime = 0;
+    this.stallSec += dt;
+    const next = STALL_LEVEL_SEC[Math.min(this.stallLevel, STALL_LEVEL_SEC.length - 1)]!;
+    if (this.stallSec < next) return;
+    this.stallLevel = Math.min(this.stallLevel + 1, STALL_LEVEL_SEC.length);
+    if (this.stallLevel >= STALL_LEVEL_SEC.length) this.stallSec = STALL_LEVEL_SEC[STALL_LEVEL_SEC.length - 2]!; // 最終段階は繰り返す
+    this.escalateStall(this.stallLevel);
+  }
+
+  /** 無進捗が続いたときの段階的な打開策 */
+  escalateStall(level: number): void {
+    const hs = this.host.hunters.filter((x) => x.alive && x.state !== 'staging');
+    const free = hs.filter((x) => !x.leader && (x.state === 'sweep' || x.state === 'hunt'));
+    if (free.length === 0) return;
+    const cells = this.coverCells();
+    if (level === 1) {
+      for (let i = 0; i < cells.length; i++) cells[i]!.bad = false;
+      for (const x of hs) x.resetPlanning();
+      return;
+    }
+    if (level === 2) {
+      // 未確認マスのうち近いものへ、施錠ドアが塞いでいれば最初のドアをブリーチする
+      const pool = cells.filter((c) => !c.seen);
+      for (const x of free) {
+        const here = { x: x.body.px, y: x.body.footY, z: x.body.pz };
+        const ranked = pool
+          .map((c) => ({ c, d: Math.hypot(c.x - here.x, c.z - here.z) + Math.abs(c.y - here.y) * 6 }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, 8);
+        for (const { c } of ranked) {
+          const plan = this.host.planRoute(here, { x: c.x, y: c.y, z: c.z });
+          if (plan.reachable) {
+            x.goalCell = c;
+            x.goalTime = 0;
+            break;
+          }
+          if (plan.door && x.tryBeginBreach({ x: c.x, y: c.y, z: c.z }, plan.door.id)) return;
+        }
+      }
+      return;
+    }
+    const p = this.host.d.player.position;
+    if (level === 3) {
+      const [scanJa, scanEn] = pickRadio(RESCAN);
+      this.host.radio(free[0], scanJa, scanEn, true);
+      const a = Math.random() * Math.PI * 2;
+      const rr = Math.random() * 3;
+      const guess = { x: p.x + Math.cos(a) * rr, y: p.y, z: p.z + Math.sin(a) * rr };
+      for (const x of free) {
+        x.resetPlanning();
+        x.huntTarget = { ...guess };
+        x.setState('hunt');
+      }
+      return;
+    }
+    // level >= 4: 直接押し込み（真の位置へ向かう。施錠ドアが邪魔ならブリーチする）
+    for (const x of free) {
+      x.resetPlanning();
+      x.huntTarget = { x: p.x, y: p.y, z: p.z };
+      x.huntingFlank = false;
+      x.setState('hunt');
     }
   }
 
