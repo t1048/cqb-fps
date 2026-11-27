@@ -48,7 +48,7 @@ import { ScoutIntel } from './ai/ScoutIntel';
 import { SuspectAlert, type NegotiationAlertInfo } from './ai/SuspectAlert';
 import { HostageThreat } from './ai/HostageThreat';
 import { DoorTrapSystem, rigCount, type BlastVictim } from './world/DoorTraps';
-import { SquadSystem, type Cell } from './ai/Squad';
+import { SquadSystem, scaleInventory, type Cell } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
 import { applyMissionRoster } from './rules/MissionRoster';
 import { PauseMenu } from './ui/PauseMenu';
@@ -342,6 +342,12 @@ class App {
       { flashbang: this.flashbang, tearGas: this.tearGas, intel: this.scoutIntel, traps: this.doorTraps },
     );
     this.entities.attachSquad(this.squad, squadCfg.presenceBonusPerAlly);
+    {
+      // 隊員が増えた分、プレイヤーの携行数も比例して増やす（4 人編成が基準）
+      const pf = scaleInventory({ flashbang: this.flashbang.remaining, gas: 0 }, map.allies.length).flashbang;
+      this.flashbang.setCount(pf);
+      this.flashbang.setGasCount(scaleInventory({ flashbang: 0, gas: this.flashbang.remainingGas }, map.allies.length).gas);
+    }
     this.scene.add(this.squad.root);
     this.viewModel = new ViewModel(this.textures);
     this.viewModel.resize(this.camera.aspect);

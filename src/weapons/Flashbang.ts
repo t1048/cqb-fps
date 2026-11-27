@@ -146,6 +146,10 @@ export class Flashbang {
   get equipped(): boolean {
     return this.isEquipped;
   }
+  /** CS ガスの所持数 */
+  get remainingGas(): number {
+    return this.gasCount;
+  }
   get remaining(): number {
     return this.mode === 'gas' ? this.gasCount : this.count;
   }

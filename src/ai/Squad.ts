@@ -205,6 +205,8 @@ export class SquadSystem implements SquadContext {
   private intelTimer = 0;
 
   /** 分隊の閃光弾・CS ガスの残数（squad.json の inventory から。補充なし） */
+  /** 隊員数に応じて増やした初期携行数 */
+  readonly inventory: { flashbang: number; gas: number };
   flashesLeft = 0;
   gasLeft = 0;
   rushCd = 0;
@@ -254,8 +256,9 @@ export class SquadSystem implements SquadContext {
   ) {
     this.intel = gadgets?.intel ?? new ScoutIntel();
     this.traps = gadgets?.traps ?? null;
-    this.flashesLeft = cfg.inventory.flashbang;
-    this.gasLeft = cfg.inventory.gas;
+    this.inventory = scaleInventory(cfg.inventory, defs.length);
+    this.flashesLeft = this.inventory.flashbang;
+    this.gasLeft = this.inventory.gas;
     this.flashbang = gadgets?.flashbang;
     this.tearGas = gadgets?.tearGas;
     this.windows = gadgets?.windows ?? [];
@@ -599,9 +602,9 @@ export class SquadSystem implements SquadContext {
   getGear(): { flash: number; flashMax: number; gas: number; gasMax: number } {
     return {
       flash: this.flashesLeft,
-      flashMax: this.cfg.inventory.flashbang,
+      flashMax: this.inventory.flashbang,
       gas: this.gasLeft,
-      gasMax: this.cfg.inventory.gas,
+      gasMax: this.inventory.gas,
     };
   }
 
@@ -1047,4 +1050,14 @@ export class SquadSystem implements SquadContext {
     if (mat instanceof THREE.Material) mat.dispose();
     this.root.removeFromParent();
   }
+}
+
+/** squad.json の inventory は 4 人編成の基準数。人数が増えた分だけ比例して増やす（減らさない）。 */
+export const INVENTORY_BASE_MEMBERS = 4;
+export function scaleInventory(
+  inv: { flashbang: number; gas: number },
+  members: number,
+): { flashbang: number; gas: number } {
+  const k = Math.max(1, members / INVENTORY_BASE_MEMBERS);
+  return { flashbang: Math.ceil(inv.flashbang * k), gas: Math.ceil(inv.gas * k) };
 }

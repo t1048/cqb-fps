@@ -123,6 +123,7 @@ export class SwatTacticsCoordinator {
   private flashCd = 6;
   private flashesLeft = SWAT_FLASH_PER_TEAM;
   private flashRefill = 0;
+  private flashCarryMax = SWAT_FLASH_CARRY_MAX;
   /** 突入開始からの秒数と圧力(0〜1)。倒された隊員の数でも上がる */
   private assaultSec = 0;
   private downBonus = 0;
@@ -164,6 +165,10 @@ export class SwatTacticsCoordinator {
 
   constructor(private readonly host: SwatTacticsHost) {
     this.reinforcementsEnabled = Boolean(host.d.reinforcements);
+    const k = Math.max(1, (host.d.count ?? 0) / 4); // 4 人編成が基準。隊員が増えた分だけ携行数を増やす
+    this.flashesLeft = Math.ceil(SWAT_FLASH_PER_TEAM * k);
+    this.gasLeft = Math.ceil(SWAT_GAS_PER_TEAM * k);
+    this.flashCarryMax = Math.ceil(SWAT_FLASH_CARRY_MAX * k);
     this.c2BlastLight.visible = false;
     this.host.root.add(this.c2BlastLight);
   }
@@ -969,7 +974,7 @@ export class SwatTacticsCoordinator {
     this.flashRefill += dt;
     if (this.flashRefill >= FLASH_REFILL_SEC * lerp(1, 0.55, this.pressure)) {
       this.flashRefill = 0;
-      if (this.flashesLeft < SWAT_FLASH_CARRY_MAX) this.flashesLeft++;
+      if (this.flashesLeft < this.flashCarryMax) this.flashesLeft++;
     }
   }
 
