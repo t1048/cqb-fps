@@ -6,6 +6,7 @@ import { TearGasEffect } from '../../src/player/TearGasEffect';
 import { PepperEffect } from '../../src/player/PepperEffect';
 import { WeaponSystem } from '../../src/weapons/WeaponSystem';
 import { SwatTeam, updateRoomStay, type SwatTeamDeps } from '../../src/modes/SwatTeam';
+import { CAMP_FIREFIGHT_GRACE_SEC, campStayDt } from '../../src/modes/swat/swatHelpers';
 import type { Collider } from '../../src/world/WorldBuilder';
 import type { RoomDef, WeaponDef } from '../../src/core/types';
 import type { DoorSystem } from '../../src/world/Door';
@@ -260,6 +261,13 @@ describe('F10 — Tear Gas (CS Gas) & Anti-Camping', () => {
     weapons.dispose();
   });
 
+  it('campStayDt pauses the camp clock during and shortly after a firefight', () => {
+    expect(campStayDt(0.5, 0)).toBe(0);
+    expect(campStayDt(0.5, CAMP_FIREFIGHT_GRACE_SEC - 0.1)).toBe(0);
+    expect(campStayDt(0.5, CAMP_FIREFIGHT_GRACE_SEC)).toBe(0.5);
+    expect(campStayDt(0.5, Infinity)).toBe(0.5);
+  });
+
   it('updateRoomStay accumulates time in same room and resets on room change or outdoors', () => {
     let st = updateRoomStay(null, 0, 'living', 1.0);
     expect(st).toEqual({ roomId: 'living', staySec: 0 });
@@ -302,6 +310,12 @@ describe('F10 — Tear Gas (CS Gas) & Anti-Camping', () => {
     };
     const team = new SwatTeam(deps);
     team.beginAssault();
+    // 隊員は部屋の外（z=6）に留まりプレイヤーを視認しない（撃ち合いにならない＝純粋な籠り）
+    for (const h of team.hunters) {
+      (h as unknown as { update: () => void }).update = () => {
+        h.sees = false;
+      };
+    }
 
     // Keep hunter at z=6 facing away so direct camping triggers gas throw
     for (let i = 0; i < 450; i++) {
@@ -323,6 +337,92 @@ describe('F10 — Tear Gas (CS Gas) & Anti-Camping', () => {
     });
     expect(hunter.state).toBe('hunt');
 
+    team.dispose();
+  });
+
+  it('SwatTeam does not gas a player who is shooting it out from the room (camp clock pauses during a firefight)', () => {
+    const bus = createGameEventBus();
+    const playerPos = new THREE.Vector3(0, 0, 0);
+    const room: RoomDef = { id: 'living', name: 'リビング', x: 0, z: 0, width: 8, depth: 8, floorY: 0 };
+    const throwFrom = vi.fn();
+    const deps: SwatTeamDeps = {
+      spawns: [{ x: 0, y: 0, z: 6 }],
+      count: 2,
+      player: {
+        alive: true,
+        isCrouching: false,
+        yawRad: 0,
+        position: playerPos,
+        getEyePosition: (out = new THREE.Vector3()) => out.set(playerPos.x, playerPos.y + 1.6, playerPos.z),
+        takeDamage: () => 100,
+      },
+      colliders: [makeFloor(-20, -20, 20, 20, 0)],
+      bus,
+      weapons: { addTarget: vi.fn(), removeTarget: vi.fn() } as unknown as WeaponSystem,
+      doors: { doors: [] } as unknown as DoorSystem,
+      bounds: { width: 30, depth: 30 },
+      stairs: [],
+      rooms: [room],
+      windows: [],
+      flashbang: { gravity: 9.8, throwFrom: vi.fn() } as unknown as Flashbang,
+      tearGas: { gravity: 14, throwFrom },
+      subtitle: { show: vi.fn() } as unknown as Subtitle,
+      civilians: () => [],
+    };
+    const team = new SwatTeam(deps);
+    team.beginAssault();
+    // 隊員は部屋の外に留まりプレイヤーを視認しない（発砲音だけで撃ち合い中と判定されることを確かめる）
+    for (const h of team.hunters) {
+      (h as unknown as { update: () => void }).update = () => {
+        h.sees = false;
+      };
+    }
+
+    // プレイヤーが部屋から撃ち続けている間は籠り時間が進まない
+    for (let i = 0; i < 450; i++) {
+      if (i % 20 === 0) bus.emit('noise', { pos: { x: 0, y: 1.2, z: 0 }, radius: 30, kind: 'gunshot' });
+      team.update(0.05);
+    }
+    expect(throwFrom).not.toHaveBeenCalled();
+    team.dispose();
+  });
+
+  it('SwatTeam does not count camping while hunters can see the player', () => {
+    const bus = createGameEventBus();
+    const playerPos = new THREE.Vector3(0, 0, 0);
+    const room: RoomDef = { id: 'living', name: 'リビング', x: 0, z: 0, width: 8, depth: 8, floorY: 0 };
+    const throwFrom = vi.fn();
+    const deps: SwatTeamDeps = {
+      spawns: [{ x: 0, y: 0, z: 6 }],
+      count: 2,
+      player: {
+        alive: true,
+        isCrouching: false,
+        yawRad: 0,
+        position: playerPos,
+        getEyePosition: (out = new THREE.Vector3()) => out.set(playerPos.x, playerPos.y + 1.6, playerPos.z),
+        takeDamage: () => 100,
+      },
+      colliders: [makeFloor(-20, -20, 20, 20, 0)],
+      bus,
+      weapons: { addTarget: vi.fn(), removeTarget: vi.fn() } as unknown as WeaponSystem,
+      doors: { doors: [] } as unknown as DoorSystem,
+      bounds: { width: 30, depth: 30 },
+      stairs: [],
+      rooms: [room],
+      windows: [],
+      flashbang: { gravity: 9.8, throwFrom: vi.fn() } as unknown as Flashbang,
+      tearGas: { gravity: 14, throwFrom },
+      subtitle: { show: vi.fn() } as unknown as Subtitle,
+      civilians: () => [],
+    };
+    const team = new SwatTeam(deps);
+    team.beginAssault();
+    // 遮蔽の無い部屋: 隊員はプレイヤーを視認し続ける（交戦中）
+    for (let i = 0; i < 450; i++) {
+      team.update(0.05);
+    }
+    expect(throwFrom).not.toHaveBeenCalled();
     team.dispose();
   });
 });

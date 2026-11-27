@@ -131,7 +131,7 @@ describe('Tier 1 — M3 Pressure, Visuals, Audio & Reinforcements (F10–F13)', 
       );
       // Emit periodic player noise while remaining stationary (camping) in room_main
       for (let i = 0; i < 7; i++) {
-        h.bus.emit('noise', { pos: { x: 0, y: 0, z: -2.5 }, radius: 18, kind: 'gunshot', source: 'player' });
+        h.bus.emit('noise', { pos: { x: 0, y: 0, z: -2.5 }, radius: 18, kind: 'voice', source: 'player' });
         h.step(5.0, 0.05);
         if (h.recorder.count('gasDetonated') > 0) break;
       }

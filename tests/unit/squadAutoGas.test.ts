@@ -63,3 +63,10 @@ describe('autonomous CS gas decision', () => {
     expect(gasBlockReason(base({ flashCd: FLASH_TEAM_COOLDOWN - 1 }))).toBe('recentFlash');
   });
 });
+
+describe('gas is never thrown into the room the player is in', () => {
+  it('blocks when the player stands in the target room', () => {
+    expect(gasBlockReason(base({ playerPos: { x: 1, y: 0, z: 1 } }))).toBe('playerInRoom');
+    expect(gasBlockReason(base({ playerPos: { x: -8, y: 0, z: 0 } }))).toBeNull();
+  });
+});

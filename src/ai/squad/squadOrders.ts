@@ -320,6 +320,13 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
     return;
   }
 
+  // プレイヤーの指示が自律の CS ガス作戦より優先（構え・出口封鎖を打ち切る）
+  if (ctx.tactic.op) {
+    const thrower = ctx.allies.find((a) => a.id === ctx.tactic.op!.throwerId);
+    if (thrower && !thrower.down && thrower.blindLeft <= 0) thrower.body.setPose('stand');
+    ctx.tactic.op = null;
+  }
+
   const namesJa = targets.map((a) => a.name).join('・');
   const namesEn = targets.map((a) => a.name).join(', ');
   const label = orderLabelText(ctx.cfg, order);

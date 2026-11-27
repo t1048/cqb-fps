@@ -17,6 +17,7 @@ import type { HitTarget, WeaponSystem } from '../../weapons/WeaponSystem';
 import type { Flashbang } from '../../weapons/Flashbang';
 import type { TearGas } from '../../weapons/TearGas';
 import type { GasIntel } from './squadGas';
+import type { TeamTacticState } from './squadTactics';
 import type { Collider } from '../../world/WorldBuilder';
 import type { StairMark } from '../../world/Walk';
 import type { Door, DoorSystem } from '../../world/Door';
@@ -422,6 +423,8 @@ export interface SquadContext {
   gasRetryCd: number;
   /** チームの誰かが最後に交戦（視認・ペッパー・射線待ち）していた simTime */
   lastTeamContactT: number;
+  /** チーム戦術ディレクター（Utility AI）の状態 */
+  readonly tactic: TeamTacticState;
   rushCd: number;
   pincerCd: number;
   contactRadioCd: number;

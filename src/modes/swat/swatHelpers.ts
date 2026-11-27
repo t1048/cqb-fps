@@ -122,6 +122,17 @@ export function updateRoomStay(
   return { roomId: curRoomId, staySec: prevStaySec + Math.max(0, dt) };
 }
 
+/** 撃ち合いが途切れてから籠り時間の計測を再開するまでの秒数 */
+export const CAMP_FIREFIGHT_GRACE_SEC = 6;
+
+/**
+ * 籠り時間に加算する秒数。撃ち合い中（隊員がプレイヤーを視認している、またはプレイヤーが最近撃った）は
+ * 「籠っている」のではなく「交戦している」ので計測を止める（0 を返す。部屋の滞在記録自体は保持）。
+ */
+export function campStayDt(dt: number, sinceFirefightSec: number): number {
+  return sinceFirefightSec < CAMP_FIREFIGHT_GRACE_SEC ? 0 : dt;
+}
+
 /** 建物中心に対する入口の方角ラベル（日英）を返す */
 export function describePortalDirection(portalPos: Vec3, center: Vec3): { ja: string; en: string } {
   const dx = portalPos.x - center.x;

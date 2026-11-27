@@ -17,6 +17,7 @@ import type {
 import type { PlayerController } from '../player/PlayerController';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import { hasLineOfSight, type Flashbang } from '../weapons/Flashbang';
+import { createTeamTacticState, updateGasOperationUnit, updateTeamTactics, type TeamTacticState } from './squad/squadTactics';
 import type { TearGas } from '../weapons/TearGas';
 import type { BlastVictim, DoorTrapSystem } from '../world/DoorTraps';
 import type { AABB, Collider } from '../world/WorldBuilder';
@@ -90,7 +91,6 @@ import {
 } from './squad/squadMovement';
 import {
   holdAtPod,
-  tryAutonomousGas,
   updateC2Blasts,
   updateC2PlantPhase,
   updateC2StandoffPhase,
@@ -212,6 +212,7 @@ export class SquadSystem implements SquadContext {
   gasCd = 0;
   gasRetryCd = 0;
   lastTeamContactT = -Infinity;
+  readonly tactic: TeamTacticState = createTeamTacticState();
   rushCd = 0;
   pincerCd = 0;
   contactRadioCd = 0;
@@ -814,12 +815,15 @@ export class SquadSystem implements SquadContext {
     }
 
     checkWeaknessRush(this);
-    tryAutonomousGas(this);
+    updateTeamTactics(this, dt);
   }
 
   private updateAllyTactics(ally: AllyUnit, dt: number): void {
     const body = ally.body;
     body.setReadyPose(SWAT_READY_POSE);
+
+    // チームの CS ガス作戦（投擲者の構え・出入口の見張り）
+    if (updateGasOperationUnit(this, ally, dt)) return;
 
     // 弱点トリガーによる突撃（ラッシュ）中
     if (ally.rushTimer > 0 && !isOrderLockedForAutonomousMove(ally)) {

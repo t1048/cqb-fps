@@ -42,6 +42,7 @@ export type GasBlockReason =
   | 'notDugIn'
   | 'notInRoom'
   | 'sameRoom'
+  | 'playerInRoom'
   | 'gasPresent'
   | 'recentFlash';
 
@@ -54,6 +55,8 @@ export interface GasDecisionInput {
   suspectState: SuspectState | null;
   /** 投擲者の足元 */
   throwerPos: Vec3;
+  /** プレイヤーの足元（その部屋にいるならガスを撃ち込まない） */
+  playerPos?: Vec3;
   rooms: readonly RoomDef[];
   /** 目標地点の現在のガス濃度 0..1 */
   gasDensityAtTarget: number;
@@ -81,6 +84,8 @@ export function gasBlockReason(input: GasDecisionInput): GasBlockReason | null {
   const room = gasTargetRoom(intel.pos, input.rooms);
   if (!room) return 'notInRoom';
   if (isPointInRoom(input.throwerPos.x, input.throwerPos.z, input.throwerPos.y, room)) return 'sameRoom';
+  const pp = input.playerPos;
+  if (pp && isPointInRoom(pp.x, pp.z, pp.y, room)) return 'playerInRoom';
   if (input.gasDensityAtTarget >= GAS_EXISTING_DENSITY_SKIP) return 'gasPresent';
   if (input.flashCd > FLASH_TEAM_COOLDOWN - GAS_AFTER_FLASH_SEC) return 'recentFlash';
   return null;

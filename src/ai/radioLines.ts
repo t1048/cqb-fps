@@ -609,6 +609,30 @@ export const GAS_MASK: readonly RadioLine[] = [
   ['CS投入。マスクを着けて待て。', 'CS deployed. Mask up and wait.'],
 ];
 
+/** 自律 CS ガス: 投擲者が構えに入る（周囲に援護を求める） */
+export const GAS_COVER: readonly RadioLine[] = [
+  ['ガスを投げる、カバー！', 'Gas going in, cover me!'],
+  ['CSを入れる。出入口を見ていろ！', 'Prepping CS. Watch the doorway!'],
+];
+
+/** 自律 CS ガス: 構え中に接触があり中止 */
+export const GAS_ABORT: readonly RadioLine[] = [
+  ['ガス中止、接触！', 'Gas aborted, contact!'],
+  ['投擲中止！撃ち返せ！', 'Hold the gas! Engage!'],
+];
+
+/** 自律 CS ガス投擲後: 出口を押さえて燻り出された相手を待つ */
+export const GAS_CONTAIN: readonly RadioLine[] = [
+  ['出口を押さえろ。出てきたところを確保する。', 'Lock down the exits. We take them as they come out.'],
+  ['ガスで燻り出す。出口から目を離すな。', 'Smoking them out. Eyes on the exits.'],
+];
+
+/** 自律 CS ガス投擲後: マスクを着けて突入する */
+export const GAS_PUSH: readonly RadioLine[] = [
+  ['マスク装着、ガスが回ったら突入する！', 'Masks on, we push once the gas fills!'],
+  ['マスクを着けろ。このまま押し込むぞ！', 'Mask up. We are pushing in!'],
+];
+
 export const RESCAN = RESCAN_LINES;
 
 export {
