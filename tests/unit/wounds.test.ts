@@ -45,7 +45,7 @@ describe('wounds ヘルパ', () => {
     expect(isHeadHit(1.55, 1.6, 0.28)).toBe(true);
     expect(isHeadHit(1.2, 1.6, 0.28)).toBe(false);
     expect(isHeadHit(undefined, 1.6, 0.28)).toBe(false);
-    expect(applyHeadMultiplier(14, true, 2.5)).toBeCloseTo(35);
+    expect(applyHeadMultiplier(14, true, 3.6)).toBeCloseTo(50.4);
     expect(applyHeadMultiplier(14, false, 2.5)).toBe(14);
   });
 
@@ -60,22 +60,22 @@ describe('wounds ヘルパ', () => {
 });
 
 describe('プレイヤー: 頭部被弾倍率と負傷', () => {
-  it('頭部命中は wounds.headMultiplier（×2.5）、胴体は等倍', () => {
+  it('頭部命中は wounds.headMultiplier（×3.6）、胴体は等倍', () => {
     const { p } = makePlayer();
     const eyeY = p.getEyePosition().y;
-    expect(p.takeDamage(14, eyeY - 0.05)).toBeCloseTo(100 - 35);
+    expect(p.takeDamage(14, eyeY - 0.05)).toBeCloseTo(100 - 50.4);
     expect(p.lastHitHead).toBe(true);
     const { p: p2 } = makePlayer();
     expect(p2.takeDamage(14, 0.9)).toBeCloseTo(86);
     expect(p2.lastHitHead).toBe(false);
   });
 
-  it('頭部への連続被弾で短時間にダウンする（高威力弾なら 2 発）', () => {
+  it('最弱の容疑者弾(14)でも頭部 2 発でダウンする', () => {
     const { p } = makePlayer();
     const y = p.getEyePosition().y;
-    p.takeDamage(20, y);
+    p.takeDamage(14, y);
     expect(p.alive).toBe(true);
-    p.takeDamage(20, y);
+    p.takeDamage(14, y);
     expect(p.hp).toBeLessThanOrEqual(0);
     expect(p.alive).toBe(false);
   });
@@ -85,7 +85,7 @@ describe('プレイヤー: 頭部被弾倍率と負傷', () => {
     p.armor = 50;
     p.takeDamage(10, p.getEyePosition().y);
     expect(p.armor).toBe(50);
-    expect(p.hp).toBeCloseTo(75);
+    expect(p.hp).toBeCloseTo(100 - 10 * 3.6);
     p.takeDamage(10, 0.8);
     expect(p.armor).toBeLessThan(50);
   });
@@ -269,7 +269,7 @@ describe('データ検証: ambush / wounds / mirror', () => {
     const bad = read('player.json');
     bad.wounds.lv2Below = 0.9;
     expect(() => validatePlayerConfig(bad)).toThrow();
-    expect(playerCfg.wounds.headMultiplier).toBeCloseTo(2.5);
+    expect(playerCfg.wounds.headMultiplier).toBeCloseTo(3.6);
   });
 
   it('squad.json の orderLabels.mirror が必須', () => {

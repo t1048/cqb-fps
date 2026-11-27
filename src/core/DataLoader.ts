@@ -1343,7 +1343,7 @@ export function validateCrossReferences(map: MapData, profiles: AIProfile[]): vo
 }
 
 export const DEFAULT_WOUNDS: WoundsConfig = {
-  headMultiplier: 2.5,
+  headMultiplier: 3.6,
   headBand: 0.28,
   lv1Below: 0.5,
   lv2Below: 0.25,
