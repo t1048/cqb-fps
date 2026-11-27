@@ -496,7 +496,7 @@ describe('Tier 1 — SWAT-Mode ↔ Suspect-Mode Parity Feature Coverage (F1–F1
       expect(plan).not.toBeNull();
     });
 
-    it('F7.5: Friendly SWAT throws autonomous flashbang against barricaded/engaged hostile in room', () => {
+    it('F7.5: Friendly SWAT never throws a flashbang or CS gas on its own (only on player orders), even against a barricaded/engaged hostile', () => {
       const map = makeSingleRoomMap({ lockedDoor: false, includeCover: true });
       const allies: AllyDef[] = [
         { id: 'ally_1', name: 'Miller', x: -0.6, y: 0, z: 5.0, yaw: 0 },
@@ -520,9 +520,10 @@ describe('Tier 1 — SWAT-Mode ↔ Suspect-Mode Parity Feature Coverage (F1–F1
         dir: { x: 0, y: 0, z: 1 },
       });
 
-      h.step(6.0, 0.05);
-      const flashes = h.recorder.of('flashDetonated');
-      expect(flashes.length).toBeGreaterThanOrEqual(1);
+      // 膠着が続いても（旧仕様ではここで自律投擲していた）プレイヤーの指示なしでは投げない
+      h.step(30.0, 0.05);
+      expect(h.recorder.of('flashDetonated').length).toBe(0);
+      expect(h.recorder.count('gasDetonated')).toBe(0);
     });
   });
 

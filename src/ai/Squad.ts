@@ -17,7 +17,6 @@ import type {
 import type { PlayerController } from '../player/PlayerController';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import { hasLineOfSight, type Flashbang } from '../weapons/Flashbang';
-import { createTeamTacticState, updateGasOperationUnit, updateTeamTactics, type TeamTacticState } from './squad/squadTactics';
 import type { TearGas } from '../weapons/TearGas';
 import type { BlastVictim, DoorTrapSystem } from '../world/DoorTraps';
 import type { AABB, Collider } from '../world/WorldBuilder';
@@ -207,12 +206,7 @@ export class SquadSystem implements SquadContext {
 
   /** 分隊の閃光弾・CS ガスの残数（squad.json の inventory から。補充なし） */
   flashesLeft = 0;
-  flashCd = 0;
   gasLeft = 0;
-  gasCd = 0;
-  gasRetryCd = 0;
-  lastTeamContactT = -Infinity;
-  readonly tactic: TeamTacticState = createTeamTacticState();
   rushCd = 0;
   pincerCd = 0;
   contactRadioCd = 0;
@@ -410,7 +404,6 @@ export class SquadSystem implements SquadContext {
         sees: false,
         threat: null,
         lostSec: 0,
-        gasIntel: null,
         suppressCd: 0,
         pepperTarget: null,
         pepperCd: 0,
@@ -469,7 +462,6 @@ export class SquadSystem implements SquadContext {
         peekHold: 0,
         peekDone: false,
         stealthEntry: false,
-        flashRetryCd: 0,
         sweepRetryCd: 0,
         mirrorLeft: 0,
         mirrorStarted: false,
@@ -719,9 +711,6 @@ export class SquadSystem implements SquadContext {
     }
 
     this.ackLeft = Math.max(0, this.ackLeft - dt);
-    this.flashCd = Math.max(0, this.flashCd - dt);
-    this.gasCd = Math.max(0, this.gasCd - dt);
-    this.gasRetryCd = Math.max(0, this.gasRetryCd - dt);
     this.rushCd = Math.max(0, this.rushCd - dt);
     this.pincerCd = Math.max(0, this.pincerCd - dt);
     this.contactRadioCd = Math.max(0, this.contactRadioCd - dt);
@@ -753,7 +742,6 @@ export class SquadSystem implements SquadContext {
       ally.doorWait = Math.max(0, ally.doorWait - dt);
       ally.suppressCd = Math.max(0, ally.suppressCd - dt);
       ally.pepperCd = Math.max(0, ally.pepperCd - dt);
-      ally.flashRetryCd = Math.max(0, ally.flashRetryCd - dt);
       ally.sweepRetryCd = Math.max(0, ally.sweepRetryCd - dt);
       for (const [doorId, left] of ally.skippedDoors) {
         if (left - dt <= 0) ally.skippedDoors.delete(doorId);
@@ -815,15 +803,11 @@ export class SquadSystem implements SquadContext {
     }
 
     checkWeaknessRush(this);
-    updateTeamTactics(this, dt);
   }
 
   private updateAllyTactics(ally: AllyUnit, dt: number): void {
     const body = ally.body;
     body.setReadyPose(SWAT_READY_POSE);
-
-    // チームの CS ガス作戦（投擲者の構え・出入口の見張り）
-    if (updateGasOperationUnit(this, ally, dt)) return;
 
     // 弱点トリガーによる突撃（ラッシュ）中
     if (ally.rushTimer > 0 && !isOrderLockedForAutonomousMove(ally)) {
