@@ -769,16 +769,50 @@ describe('M2 SWAT-Mode Target Hooks & Schema', () => {
         expect(texts.some((t) => t.includes('ガス＆クリア'))).toBe(true);
         expect(texts.some((t) => t.includes('C2＆クリア'))).toBe(true);
 
-        // In door context: 1=stack, 2=clear, 3=flashClear, 4=gasClear, 5=c2Clear
-        menu.handleMenuEvent('select', 4, 'gold', onExecute);
+        // In door context: 1=stack, 2=check, 3=clear, 4=flashClear, 5=gasClear, 6=c2Clear
+        menu.handleMenuEvent('select', 5, 'gold', onExecute);
         expect(executed).toEqual(['gasClear']);
 
         menu.handleMenuEvent('open', 0, 'gold', onExecute);
-        menu.handleMenuEvent('select', 5, 'gold', onExecute);
+        menu.handleMenuEvent('select', 6, 'gold', onExecute);
         expect(executed).toEqual(['gasClear', 'c2Clear']);
 
         menu.dispose();
       }
+    });
+
+    it('shows remaining flash/gas counts and disables rows whose stock is 0 (limited inventory)', () => {
+      const cfg = validateSquad(JSON.parse(fs.readFileSync(squadJsonPath, 'utf-8')));
+      const rooms: RoomDef[] = [
+        { id: 'hall', name: 'Hall', x: 0, z: 0, width: 6, depth: 4, floorY: 0 },
+        { id: 'target', name: 'Target Room', x: 0, z: -5, width: 6, depth: 6, floorY: 0 },
+      ];
+      const door = makeMockDoor({ locked: false, angle: 0 });
+      const doors = { aimed: () => door, doors: [door] } as unknown as DoorSystem;
+      const emptyEntities = { suspects: new Map(), civilians: new Map() } as unknown as EntityManager;
+      const menu = new CommandMenu(cfg, makeMockPlayer(0, 0, 0), doors, [], emptyEntities, rooms);
+      menu.setGearProvider({ gear: () => ({ flash: 0, gas: 2 }), trapKnown: (id) => id === 'door_1' });
+      const executed: SquadOrder[] = [];
+      const onExecute = (order: SquadOrder) => executed.push(order);
+
+      menu.handleMenuEvent('open', 0, 'gold', onExecute);
+      const body = (globalThis as unknown as { document: { body: StubElement } }).document.body;
+      const texts = collectText(body);
+      expect(texts.some((t) => t.includes('フラッシュ＆クリア') && t.includes('残 0'))).toBe(true);
+      expect(texts.some((t) => t.includes('ガス＆クリア') && t.includes('残 2'))).toBe(true);
+      expect(texts.some((t) => t.includes('トラップ解除'))).toBe(true); // 発見済みトラップ → 解除項目が出る
+
+      // 1=stack 2=check 3=disarm(発見済み) 4=clear 5=flashClear(0 本) 6=gasClear
+      menu.handleMenuEvent('select', 5, 'gold', onExecute);
+      expect(executed).toEqual([]);
+      menu.handleMenuEvent('open', 0, 'gold', onExecute);
+      menu.handleMenuEvent('select', 6, 'gold', onExecute);
+      expect(executed).toEqual(['gasClear']);
+      menu.handleMenuEvent('open', 0, 'gold', onExecute);
+      menu.handleMenuEvent('select', 2, 'gold', onExecute);
+      expect(executed).toEqual(['gasClear', 'check']);
+
+      menu.dispose();
     });
 
     it('renders and executes gasClear (and omits door-only c2Clear) in area context', () => {
