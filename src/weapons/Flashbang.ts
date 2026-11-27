@@ -7,6 +7,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { FlashOverlay } from '../ui/FlashOverlay';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { WeaponSystem } from './WeaponSystem';
+import type { TearGas } from './TearGas';
 import { collidersNear, someColliderAlongSegment } from '../world/ColliderIndex';
 
 const DEG2RAD = Math.PI / 180;
@@ -107,6 +108,10 @@ export class Flashbang {
   private readonly mat: THREE.MeshStandardMaterial;
   private readonly burstGeo: THREE.SphereGeometry;
   private count: number;
+  private readonly gasDef: WeaponDef | null;
+  private gasCount: number;
+  /** 構え中の投擲物。flash=フラッシュバン / gas=CS ガス */
+  private mode: 'flash' | 'gas' = 'flash';
   private cooldown = 0;
   private isEquipped = false;
   private prevMouse = true; // 構え直後のクリック持ち越しで即投擲しない
@@ -123,12 +128,16 @@ export class Flashbang {
     private readonly weaponSystem: WeaponSystem,
     private readonly overlay: FlashOverlay,
     private readonly ceilingHeight: number,
+    private readonly tearGas?: TearGas,
   ) {
     const def = weapons.find((w) => w.category === 'throwable' && w.id === 'flashbang');
     if (!def || !def.throwable) throw new Error('[Flashbang] weapons.json に throwable な "flashbang" 定義がありません');
     this.def = def;
     this.cfg = def.throwable;
     this.count = def.magazineSize;
+    const gas = weapons.find((w) => w.category === 'throwable' && w.id === 'teargas');
+    this.gasDef = tearGas && gas?.throwable ? gas : null;
+    this.gasCount = this.gasDef ? this.gasDef.magazineSize : 0;
     this.geo = new THREE.CylinderGeometry(this.cfg.ballRadius, this.cfg.ballRadius, this.cfg.ballRadius * 3, 10);
     this.mat = new THREE.MeshStandardMaterial({ color: 0x2d3a52, roughness: 0.6 });
     this.burstGeo = new THREE.SphereGeometry(1, 12, 8);
@@ -138,16 +147,23 @@ export class Flashbang {
     return this.isEquipped;
   }
   get remaining(): number {
-    return this.count;
+    return this.mode === 'gas' ? this.gasCount : this.count;
   }
 
   /** 所持数を設定（容疑者モードでは 0 = 所持なし） */
   setCount(n: number): void {
     this.count = Math.max(0, Math.floor(n));
-    if (this.count === 0 && this.isEquipped) this.setEquipped(false);
+    if (this.count === 0 && this.gasCount === 0 && this.isEquipped) this.setEquipped(false);
   }
+
+  /** CS ガスの所持数を設定（容疑者モードでは 0 = 所持なし） */
+  setGasCount(n: number): void {
+    this.gasCount = this.gasDef ? Math.max(0, Math.floor(n)) : 0;
+    if (this.count === 0 && this.gasCount === 0 && this.isEquipped) this.setEquipped(false);
+  }
+  /** 構え中（または次に構える）投擲物の定義 */
   get weapon(): WeaponDef {
-    return this.def;
+    return this.mode === 'gas' && this.gasDef ? this.gasDef : this.def;
   }
 
   update(rawDt: number): void {
@@ -157,14 +173,14 @@ export class Flashbang {
 
     // 構え切替: 3 でトグル、1〜2 で通常武器へ戻る（指揮メニュー展開中は抑止）
     if (!this.input.isOrderMenuOpen) {
-      if (this.input.wasPressed('slot3')) this.setEquipped(!this.isEquipped && this.count > 0);
+      if (this.input.wasPressed('slot3')) this.cycleThrowable();
       else if (this.input.wasPressed('slot1') || this.input.wasPressed('slot2') || this.input.wasPressed('slot4') || this.input.wasMousePressed(1)) {
         this.setEquipped(false);
       }
     }
 
     const mouse = this.input.isPointerLocked && this.input.isMouseDown(0);
-    if (this.isEquipped && mouse && !this.prevMouse && this.cooldown <= 0 && this.count > 0) this.throwGrenade();
+    if (this.isEquipped && mouse && !this.prevMouse && this.cooldown <= 0 && this.remaining > 0) this.throwGrenade();
     this.prevMouse = mouse;
 
     for (let i = this.grenades.length - 1; i >= 0; i--) {
@@ -195,6 +211,27 @@ export class Flashbang {
     this.overlay.update(dt);
   }
 
+  /** 3 キー: 解除 → フラッシュバン → CS ガス → 解除。所持数 0 のものは飛ばす */
+  private cycleThrowable(): void {
+    const order: Array<'flash' | 'gas'> = [];
+    if (this.count > 0) order.push('flash');
+    if (this.gasCount > 0) order.push('gas');
+    if (!this.isEquipped) {
+      if (order.length === 0) return;
+      this.mode = order[0]!;
+      this.setEquipped(true);
+      return;
+    }
+    const i = order.indexOf(this.mode);
+    const next = order[i + 1];
+    if (next) {
+      this.mode = next;
+      this.prevMouse = true;
+    } else {
+      this.setEquipped(false);
+    }
+  }
+
   private setEquipped(on: boolean): void {
     this.isEquipped = on;
     this.weaponSystem.suppressFire = on;
@@ -202,9 +239,13 @@ export class Flashbang {
   }
 
   private throwGrenade(): void {
-    const c = this.cfg;
-    this.count--;
-    this.cooldown = 1 / this.def.fireRate;
+    const gas = this.mode === 'gas' && this.gasDef?.throwable && this.tearGas ? this.gasDef : null;
+    if (this.mode === 'gas' && !gas) return;
+    if (gas ? this.gasCount <= 0 : this.count <= 0) return;
+    const c = gas ? gas.throwable! : this.cfg;
+    if (gas) this.gasCount--;
+    else this.count--;
+    this.cooldown = 1 / (gas ?? this.def).fireRate;
 
     this.player.getEyePosition(this.eye);
     const pitch = this.player.pitchRad + c.upwardBiasDeg * DEG2RAD;
@@ -214,6 +255,12 @@ export class Flashbang {
     // 目の前が壁の場合は壁にめり込まないよう目線位置から開始
     const pos = this.eye.clone().addScaledVector(this.fwd, SPAWN_FORWARD);
     if (!hasLineOfSight(this.colliders, this.eye, pos)) pos.copy(this.eye);
+
+    if (gas) {
+      const v = this.fwd.clone().multiplyScalar(c.throwSpeed);
+      this.tearGas!.throwFrom({ x: pos.x, y: pos.y, z: pos.z }, { x: v.x, y: v.y, z: v.z }, 'player', c.fuseTime);
+      return;
+    }
 
     const mesh = new THREE.Mesh(this.geo, this.mat);
     mesh.position.copy(pos);

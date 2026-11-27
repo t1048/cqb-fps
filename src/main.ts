@@ -286,10 +286,10 @@ class App {
     this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.flashOverlay = new FlashOverlay(document.body);
-    this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight);
-    this.scene.add(this.flashbang.root);
     this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight);
     this.scene.add(this.tearGas.root);
+    this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight, this.tearGas);
+    this.scene.add(this.flashbang.root);
     this.entities = new EntityManager(
       map.entities,
       aiProfiles,
@@ -424,7 +424,8 @@ class App {
     const hostages = (): Civilian[] =>
       [...this.entities.civilians.values()].filter((c) => c.alive && !c.evacuated && !c.shieldedBy && c.state !== CivilianState.SECURED);
     if (suspect) {
-      this.flashbang.setCount(0); // 容疑者は閃光弾を持たない
+      this.flashbang.setCount(0); // 容疑者は閃光弾・CS ガスを持たない
+      this.flashbang.setGasCount(0);
       // 容疑者モード: 部隊指揮メニュー（Tab / 右クリック）を無効化
       this.input.orderMenuEnabled = false;
       this.input.onOrderMenu = undefined;

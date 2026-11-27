@@ -76,6 +76,7 @@ const WEAPON_EN: Record<string, string> = {
   taser: 'Taser',
   auto_pistol: 'Modded Auto Pistol',
   flashbang: 'Flashbang',
+  teargas: 'CS Gas Canister',
 };
 
 export function tWeaponName(id: string, fallback: string): string {
