@@ -53,7 +53,7 @@ import {
 } from '../../ai/SwatTactics';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
-import { lerp, resolveSwatSpawns, shouldTriggerReinforcements, updateRoomStay } from './swatHelpers';
+import { campStayDt, lerp, resolveSwatSpawns, shouldTriggerReinforcements, updateRoomStay } from './swatHelpers';
 import { SwatHunter } from './SwatHunter';
 import {
   BASE_REACTION_SEC,
@@ -145,6 +145,8 @@ export class SwatTacticsCoordinator {
   /** 催涙ガス・籠城監視（F10） */
   private playerRoomId: string | null = null;
   private playerRoomStaySec = 0;
+  /** 最後の撃ち合い（隊員がプレイヤーを視認 / プレイヤーの発砲）からの秒数 */
+  private sinceFirefightSec = Infinity;
   private gasCd = 8;
   private gasRetryCd = 0;
   private gasLeft = SWAT_GAS_PER_TEAM;
@@ -526,6 +528,8 @@ export class SwatTacticsCoordinator {
 
   onNoise(pos: Vec3, radius: number, kind: NoiseKind, source?: NoiseSource): void {
     if (!this.host.started || source === 'suspect' || source === 'ally' || kind === 'flash') return;
+    // 隊員・容疑者側の発砲は上で除外済み: 残る発砲音はプレイヤー（WeaponSystem は source を付けない）
+    if (kind === 'gunshot') this.sinceFirefightSec = 0;
     // 隊員自身のドア操作・ブリーチ音は無視する（プレイヤー由来の発砲・リロード・咳は近距離でも必ず拾う）
     const isPlayerReload = kind === 'reload' && source === 'player';
     const isPlayerNoise = source === 'player';
@@ -851,7 +855,20 @@ export class SwatTacticsCoordinator {
   updateAntiCamping(dt: number): void {
     const p = this.host.d.player.position;
     const room = this.host.roomAt(p.x, p.z, p.y);
-    const next = updateRoomStay(this.playerRoomId, this.playerRoomStaySec, room?.id ?? null, dt);
+    // 撃ち合い中は籠り時間を進めない（部屋から撃ち返しているだけでガスを投げ込まない）
+    this.sinceFirefightSec += dt;
+    for (const h of this.host.hunters) {
+      if (h.alive && h.sees) {
+        this.sinceFirefightSec = 0;
+        break;
+      }
+    }
+    const next = updateRoomStay(
+      this.playerRoomId,
+      this.playerRoomStaySec,
+      room?.id ?? null,
+      campStayDt(dt, this.sinceFirefightSec),
+    );
     this.playerRoomId = next.roomId;
     this.playerRoomStaySec = next.staySec;
 

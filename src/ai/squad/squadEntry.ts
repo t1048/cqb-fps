@@ -51,7 +51,6 @@ import {
   SWAT_FLASH_MAX_DIST,
   SWAT_FLASH_MIN_DIST,
   SWAT_GAS_MAX_DIST,
-  SWAT_GAS_MIN_DIST,
 } from '../SwatProfile';
 import {
   computeBallisticVelocity,
@@ -67,7 +66,6 @@ import {
   ENTRY_TIMEOUT_SEC,
   ENTRY_WP_ARRIVE,
   FLASH_TEAM_COOLDOWN,
-  GAS_TEAM_COOLDOWN,
   PIE_SPEED_MUL,
   PIE_STEP_HOLD_SEC,
   PIE_TIMEOUT_SEC,
@@ -618,6 +616,8 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
 
 export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos: Vec3): boolean {
   if (!ctx.flashbang || ctx.flashesLeft <= 0 || ctx.flashCd > 0 || ally.flashRetryCd > 0) return false;
+  // チーム戦術（squadTactics の Utility 採点）が閃光弾を選んでいるときだけ投げる
+  if (ctx.tactic.current !== 'flash') return false;
   for (const s of ctx.entities.suspects.values()) {
     if (
       s.alive &&
@@ -649,53 +649,6 @@ export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos:
   const [flashJa, flashEn] = pickRadio(FLASH);
   ctx.emitRadio(ally, flashJa, flashEn);
   return true;
-}
-
-/** 民間人（生存・未避難）が pos の近く（同じ階）にいるか */
-function civilianNear(ctx: SquadContext, pos: Vec3, dist: number): boolean {
-  for (const c of ctx.entities.civilians.values()) {
-    if (!c.alive || c.evacuated) continue;
-    if (Math.abs(c.body.footY - pos.y) > 1.5) continue;
-    if (Math.hypot(c.body.px - pos.x, c.body.pz - pos.z) <= dist) return true;
-  }
-  return false;
-}
-
-/** 自律ガス投擲を控える、民間人との距離(m) */
-const AUTONOMOUS_GAS_CIVILIAN_SAFE_DIST = 6;
-
-export function tryAutonomousGas(ctx: SquadContext): void {
-  if (!ctx.tearGas || ctx.gasLeft <= 0 || ctx.gasCd > 0 || ctx.gasRetryCd > 0) return;
-  let attempted = false;
-  for (const ally of ctx.allies) {
-    if (ally.down || ally.blindLeft > 0 || ally.sees) continue;
-    if (!ally.known || ally.lostSec < 2.2) continue;
-    // 民間人が近くにいる（ガスで行動不能・減点になる）なら、自律ではガスを撃ち込まない
-    if (civilianNear(ctx, ally.known, AUTONOMOUS_GAS_CIVILIAN_SAFE_DIST)) continue;
-    attempted = true;
-    const eye = ally.body.eye(throwEyeTmp);
-    const origin: Vec3 = { x: eye.x, y: eye.y, z: eye.z };
-    const plan = planFlashThrow(
-      origin,
-      ally.known,
-      ctx.doors.doors,
-      ctx.windows,
-      ctx.colliders,
-      ctx.tearGas.gravity,
-      SWAT_GAS_MIN_DIST,
-      SWAT_GAS_MAX_DIST,
-    );
-    if (!plan) continue;
-    ctx.tearGas.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
-    ctx.gasLeft--;
-    ctx.gasCd = GAS_TEAM_COOLDOWN;
-    const [flushJa, flushEn] = pickRadio(GAS);
-    ctx.emitRadio(ally, flushJa, flushEn);
-    return;
-  }
-  if (attempted) {
-    ctx.gasRetryCd = 0.5;
-  }
 }
 
 export function beginC2Sequence(ctx: SquadContext, lead: AllyUnit, portal: EntryPortal, door: Door): void {
