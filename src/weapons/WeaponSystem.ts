@@ -155,7 +155,7 @@ export class WeaponSystem {
   /** 現在の状態での拡散（度）。基本精度は旧ADS同等、移動中は moveSpreadPenalty が加算される。 */
   computeSpread(): number {
     const w = this.current;
-    return w.adsSpread + (this.player.isMoving ? w.moveSpreadPenalty : 0) + this.extraSpread;
+    return w.adsSpread + (this.player.isMoving ? w.moveSpreadPenalty : 0) + this.extraSpread + (this.player.woundSpreadAdd ?? 0);
   }
 
   update(rawDt: number): void {

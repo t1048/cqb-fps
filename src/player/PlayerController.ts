@@ -6,6 +6,7 @@ import type { MapData, MoveMode, PlayerConfig } from '../core/types';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import { collidersNear } from '../world/ColliderIndex';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT } from '../world/Walk';
+import { applyHeadMultiplier, isHeadHit, woundLevelOf, type WoundLevel } from '../rules/wounds';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
@@ -37,6 +38,19 @@ export class PlayerController {
   private readonly baseFov: number;
   /** 移動速度倍率（ADS 等で WeaponSystem が設定。1=等倍） */
   speedMultiplier = 1;
+  /** 外部要因（オプティワンド展開等）による移動速度倍率。0 で移動不可 */
+  externalMoveScale = 1;
+  /**
+   * 視点操作の横取り先。設定中はマウス移動量を yaw/pitch に反映せずここへ渡す
+   * （オプティワンドのドア下カメラ首振り用）。
+   */
+  lookSink: ((dx: number, dy: number) => void) | null = null;
+  /** 負傷モデル（HP 比率による速度低下・照準の乱れ）を有効にするか。SWAT モードのみ true */
+  woundsEnabled = false;
+  private woundLv: WoundLevel = 0;
+  private swayPhase = 0;
+  /** 直近の被弾が頭部だったか（HUD/テスト用） */
+  lastHitHead = false;
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -73,15 +87,55 @@ export class PlayerController {
   /** 防弾チョッキの耐久値（0 = 未装着）。被弾の 60% を耐久が尽きるまで肩代わりする */
   armor = 0;
 
-  takeDamage(amount: number): number {
+  /** 現在の負傷レベル（woundsEnabled=false の間は常に 0） */
+  get woundLevel(): WoundLevel {
+    return this.woundsEnabled ? this.woundLv : 0;
+  }
+
+  /** 負傷による移動速度倍率 */
+  get woundSpeedMul(): number {
+    const lv = this.woundLevel;
+    return lv === 0 ? 1 : this.config.wounds.speedMul[lv - 1]!;
+  }
+
+  /** 負傷による射撃拡散の加算（度） */
+  get woundSpreadAdd(): number {
+    const lv = this.woundLevel;
+    return lv === 0 ? 0 : this.config.wounds.spreadAddDeg[lv - 1]!;
+  }
+
+  /**
+   * 被弾。hitY（命中点の高さ）が目線付近なら頭部とみなし wounds.headMultiplier を掛ける（SWAT モードのみ）。
+   * 戻り値は残 HP。
+   */
+  takeDamage(amount: number, hitY?: number): number {
     if (this.disposed || this.hpValue <= 0 || amount <= 0) return this.hpValue;
+    const wcfg = this.config.wounds;
+    this.lastHitHead = false;
+    if (this.woundsEnabled && isHeadHit(hitY, this.position.y + this.eyeHeight, wcfg.headBand)) {
+      this.lastHitHead = true;
+      amount = applyHeadMultiplier(amount, true, wcfg.headMultiplier);
+    }
     if (this.armor > 0) {
-      const absorbed = Math.min(this.armor, amount * 0.6);
-      this.armor -= absorbed;
-      amount -= absorbed;
+      // 頭部は防弾チョッキの対象外
+      if (!this.lastHitHead) {
+        const absorbed = Math.min(this.armor, amount * 0.6);
+        this.armor -= absorbed;
+        amount -= absorbed;
+      }
     }
     this.hpValue = Math.max(0, this.hpValue - amount);
+    this.syncWoundLevel();
     return this.hpValue;
+  }
+
+  private syncWoundLevel(): void {
+    if (!this.woundsEnabled) return;
+    const next = woundLevelOf(this.hpValue, this.config.maxHp, this.config.wounds);
+    if (next > this.woundLv) {
+      this.woundLv = next;
+      if (next === 1 || next === 2) this.bus.emit('playerWound', { level: next });
+    }
   }
 
   setFovBlend(adsBlend: number): void {
@@ -133,9 +187,13 @@ export class PlayerController {
     const settings = getSettings();
     const sens = cfg.mouseSensitivity * settings.mouseSensitivity;
     const ySign = settings.invertY ? -1 : 1;
-    this.yaw -= md.x * sens;
-    const maxPitch = cfg.maxPitchDeg * DEG2RAD;
-    this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch - md.y * sens * ySign));
+    if (this.lookSink) {
+      this.lookSink(md.x * sens, md.y * sens * ySign);
+    } else {
+      this.yaw -= md.x * sens;
+      const maxPitch = cfg.maxPitchDeg * DEG2RAD;
+      this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch - md.y * sens * ySign));
+    }
 
     // しゃがみ（押している間）
     this.crouching = this.input.isDown('crouch');
@@ -148,7 +206,7 @@ export class PlayerController {
     const len = Math.hypot(fwd, right);
     this.moving = len > 0;
     if (this.moving) {
-      const speed = cfg.speeds[this.mode] * this.speedMultiplier;
+      const speed = cfg.speeds[this.mode] * this.speedMultiplier * this.externalMoveScale * this.woundSpeedMul;
       const sin = Math.sin(this.yaw);
       const cos = Math.cos(this.yaw);
       // forward = (-sin, -cos), right = (cos, -sin)
@@ -400,6 +458,16 @@ export class PlayerController {
   private applyCamera(): void {
     this.camera.position.copy(this.getEyePosition(this.eyeWorld));
     const roll = -this.leanAmount * this.config.lean.maxRollDeg * DEG2RAD; // 右リーンで右へ傾く
+    const lv = this.woundLevel;
+    if (lv > 0) {
+      // 負傷中は視点が呼吸・脈動でふらつく（視点そのものは変えず、カメラのみ揺らす）
+      const amp = this.config.wounds.swayDeg[lv - 1]! * DEG2RAD;
+      this.swayPhase += 0.016 * (lv === 2 ? 9 : 5);
+      const sx = Math.sin(this.swayPhase) * amp;
+      const sy = Math.sin(this.swayPhase * 0.73 + 1.3) * amp * 0.8;
+      this.camera.rotation.set(this.pitch + sx, this.yaw + sy, roll);
+      return;
+    }
     this.camera.rotation.set(this.pitch, this.yaw, roll);
   }
 

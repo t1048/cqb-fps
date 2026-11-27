@@ -235,6 +235,8 @@ class App {
     this.input = new InputManager(this.renderer.domElement);
     this.input.allowAutoPointerLock = false;
     this.player = new PlayerController(this.camera, this.input, this.world.colliders, playerCfg, this.bus, map);
+    // 負傷モデル（被弾で速度低下・照準乱れ）は SWAT モードのみ。容疑者モードの挙動は変えない
+    this.player.woundsEnabled = !suspect;
     this.audio = acquireSharedAudio();
     this.audio.stopAll();
     this.audio.setMasterVolume(initialSettings.masterVolume);

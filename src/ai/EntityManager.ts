@@ -29,9 +29,13 @@ export interface SquadCoordinator {
 }
 
 export interface PlayerCombatReceiver extends PerceptionTarget, CombatTarget {
-  takeDamage(amount: number): number;
+  takeDamage(amount: number, hitY?: number): number;
   getBodyBounds(): AABB;
   readonly alive: boolean;
+  /** 残 HP（ダメージ倍率適用後の実ダメージ算出用。無ければ未倍率のまま） */
+  readonly hp?: number;
+  /** 直近の被弾が頭部だったか */
+  readonly lastHitHead?: boolean;
 }
 
 /**
@@ -96,9 +100,11 @@ export class EntityManager {
                   friendlySuspects ? (this.hostileTargets?.() ?? []) : (this.squad?.getLivingAllies() ?? []),
                 ignorePlayer: friendlySuspects,
                 countCoveringAllies: (pt, maxD) => this.squad?.countAlliesCovering(pt, maxD) ?? 0,
-                playerDamage: (dmg, from, shooter) => {
-                  const hp = playerCtx.player.takeDamage(dmg);
-                  this.bus.emit('playerHit', { shooter, damage: dmg, from, hp });
+                playerDamage: (dmg, from, shooter, hitY) => {
+                  const before = playerCtx.player.hp;
+                  const hp = playerCtx.player.takeDamage(dmg, hitY);
+                  const dealt = before !== undefined && before > hp ? before - hp : dmg;
+                  this.bus.emit('playerHit', { shooter, damage: dealt, from, hp, head: playerCtx.player.lastHitHead === true });
                 },
                 doors: nav?.doors,
                 bounds: nav?.bounds,

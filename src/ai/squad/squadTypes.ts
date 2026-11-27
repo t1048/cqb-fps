@@ -203,6 +203,8 @@ export interface AllyUnit extends HitTarget {
   warnCd: number;
   hp: number;
   maxHp: number;
+  /** 負傷（HP 低下）により移動速度を落としたか */
+  wounded: boolean;
   down: boolean;
   engaging: boolean;
   engageActive: boolean;

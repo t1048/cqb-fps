@@ -840,6 +840,29 @@ export interface AIProfile {
   mobility?: MobilityParams;
   /** 民間人FSMの設定。type='civilian' では必須 */
   civilian?: CivilianParams;
+  /** 待ち伏せ（ファタルファネル）設定。type='suspect' で省略時は既定値が補われる */
+  ambush?: AmbushParams;
+}
+
+/**
+ * 待ち伏せ設定（ai_profiles.json の ambush）。BARRICADED/ALERT の容疑者が突入音を聞いたとき、
+ * 室内の入口が見渡せる隅/遮蔽へ移動して照準を置き、入ってきた者へ極短の反応時間で初弾を撃つ。
+ */
+export interface AmbushParams {
+  /** 待ち伏せ行動を選ぶ基礎確率 (0〜1)。実確率は aggression で補正される */
+  chance: number;
+  /** 照準済み（pre-aim）状態で入室者を視認してから撃ち始めるまでの反応時間（秒）。reactionTime の代わりに使う */
+  preAimReactionSec: number;
+  /** 最初のバースト（firstBurstShots 発）の拡散角に掛ける倍率（<1 で精度向上） */
+  firstBurstSpreadMul: number;
+  /** 待ち伏せ位置を探す・反応する最大距離(m) */
+  maxDist: number;
+  /** 待ち伏せを維持する最大秒数（音源が途絶えてからではなく ALERT 突入からの総時間） */
+  holdSec: number;
+  /** 初弾バーストの発数 */
+  firstBurstShots: number;
+  /** 照準方向（入口）を中心とした pre-aim 有効角（全角, 度） */
+  coneDeg: number;
 }
 
 /** 民間人FSM（IDLE→PANIC→COMPLY→SHIELDED→SECURED）パラメータ。type='civilian' で必須。距離 m・速度 m/s・時間 s。 */
@@ -925,6 +948,66 @@ export interface PlayerConfig {
     interval: Record<MoveMode, number>;
     radius: Record<MoveMode, number>;
   };
+  /** 負傷モデル（SWAT モードのみ有効） */
+  wounds: WoundsConfig;
+  /** オプティワンド（鏡/ファイバースコープ型カメラ） */
+  optiwand: OptiwandConfig;
+}
+
+/** 負傷モデル（player.json の wounds）。HP 比率・倍率・度は無次元/度。 */
+export interface WoundsConfig {
+  /** 頭部被弾の与ダメージ倍率 */
+  headMultiplier: number;
+  /** 目線からこの距離(m)以内の高さへの命中を頭部とみなす */
+  headBand: number;
+  /** 負傷 Lv1 になる HP 比率（これ未満） */
+  lv1Below: number;
+  /** 負傷 Lv2（重傷）になる HP 比率（これ未満） */
+  lv2Below: number;
+  /** 負傷レベル別（Lv1, Lv2）の移動速度倍率 */
+  speedMul: [number, number];
+  /** 負傷レベル別（Lv1, Lv2）の射撃拡散加算(度) */
+  spreadAddDeg: [number, number];
+  /** 負傷レベル別（Lv1, Lv2）の視点の揺れ振幅(度) */
+  swayDeg: [number, number];
+}
+
+/** オプティワンド（player.json の optiwand）。距離 m・角度 度・時間 s。 */
+export interface OptiwandConfig {
+  /** 展開にかかる時間 */
+  deploySec: number;
+  /** 通常時に目線から先端までの距離 */
+  reach: number;
+  /** 壁との最小クリアランス */
+  wallClearance: number;
+  /** ドアの下に差し込めるドア中心からプレイヤー目線までの距離 */
+  doorRange: number;
+  /** 床からのカメラ高 (min, max) */
+  doorCamHeight: [number, number];
+  /** ドア板の向こう側へ出す距離 */
+  doorCamPastPlane: number;
+  /** ドア下カメラの首振り範囲（±度） */
+  yawLimitDeg: number;
+  /** ドア下カメラのピッチ範囲 (min, max) 度 */
+  pitchLimitDeg: [number, number];
+  /** カメラ視野角（垂直, 度） */
+  fovDeg: number;
+  /** 視認できる最大距離 */
+  viewRange: number;
+  /** 「発見」と判定するまでの連続視認秒 */
+  spotSec: number;
+  /** 部屋を「確認済み」にするまでのカメラ滞在秒（人物が映らなくても） */
+  scoutDwellSec: number;
+  /** 容疑者がワンド先端に気付く距離 */
+  noticeRange: number;
+  /** 気付かれる確率（/秒、正面を向いている容疑者のみ） */
+  noticePerSec: number;
+  /** ドア下カメラ使用時の気付かれにくさ倍率 */
+  noticeUnderDoorMul: number;
+  /** 画面幅に対する PiP の幅比率 */
+  viewWidthRatio: number;
+  /** PiP のレンダ解像度 (幅, 高さ) */
+  renderSize: [number, number];
 }
 
 /** ドア共通パラメータ（public/data/doors.json）。角度 度・長さ m・速度 度/秒。 */
@@ -971,7 +1054,9 @@ export type ScoreKind =
   | 'fireOnSurrendered'
   | 'civilianHit'
   | 'nonlethalCivilianHit'
-  | 'friendlyFire';
+  | 'friendlyFire'
+  | 'allyDown'
+  | 'playerInjury';
 
 export interface RankRule {
   minScore: number;
@@ -1032,7 +1117,8 @@ export type SquadOrder =
   | 'c2Clear'
   | 'gasClear'
   | 'pieDoor'
-  | 'restrain';
+  | 'restrain'
+  | 'mirror';
 
 export type SquadElement = 'gold' | 'alpha' | 'bravo';
 
@@ -1078,8 +1164,36 @@ export interface SquadConfig {
   warnStates: string[];
   /** HUD に出す操作説明 */
   hint: string;
+  /** ミラー確認（隊員がドア下からオプティワンドで確認）の設定 */
+  mirror: MirrorConfig;
+  /** 隊員の負傷モデル */
+  wounds: AllyWoundsConfig;
   orderLabels: Record<SquadOrder, string>;
   elementLabels: Record<SquadElement, string>;
+}
+
+/** 隊員の負傷モデル（squad.json の wounds）。 */
+export interface AllyWoundsConfig {
+  /** 頭部被弾（身長の 82% 以上）のダメージ倍率 */
+  headMultiplier: number;
+  /** HP がこの比率未満で「負傷」扱い */
+  woundBelow: number;
+  /** 負傷時の移動速度倍率 */
+  speedMul: number;
+}
+
+/** 隊員のミラー確認（squad.json の mirror）。 */
+export interface MirrorConfig {
+  /** 確認にかかる秒数（隊員は静止） */
+  durationSec: number;
+  /** 視線中心線から離れた接触を見落とす確率 */
+  missChance: number;
+  /** 「視線中心線の近く」とみなす横距離(m) */
+  centerBandM: number;
+  /** ミラーの有効半視野角(度) */
+  halfFovDeg: number;
+  /** 確認できる最大距離(m) */
+  range: number;
 }
 
 export interface GameData {

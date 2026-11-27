@@ -378,6 +378,7 @@ export class SquadSystem implements SquadContext {
         warnCd: 0,
         hp: SWAT_HP,
         maxHp: SWAT_HP,
+        wounded: false,
         down: false,
         engaging: false,
         engageActive: false,
@@ -483,7 +484,7 @@ export class SquadSystem implements SquadContext {
     this.root.add(this.burstMesh);
 
     this.unsubs.push(
-      bus.on('entityHit', (e) => onHit(this, e.targetId, e.damage, e.nonlethal === true)),
+      bus.on('entityHit', (e) => onHit(this, e.targetId, e.damage, e.nonlethal === true, e.pos.y, e.shooter)),
       bus.on('suspectFired', (e) => {
         this.provoked.add(e.id);
         for (const ally of this.allies) {

@@ -68,7 +68,7 @@ export interface CombatContext {
   /** 生存中の味方隊員（容疑者の知覚・射撃対象） */
   allies?: () => readonly AllyTarget[];
   /** プレイヤーへの実弾命中コールバック */
-  playerDamage?: (amount: number, from: Vec3, shooter: string) => void;
+  playerDamage?: (amount: number, from: Vec3, shooter: string, hitY?: number) => void;
   /** 指定位置へ視線が通る周囲の隊員数（チーム威圧用） */
   countCoveringAllies?: (point: Vec3, maxDist: number) => number;
   /** ドアシステム（未施錠ドア自動開放・経路探索用） */
@@ -1252,7 +1252,8 @@ export class EngageBehavior {
       this.bus.emit('bulletImpact', { shooter: this.id, pos: { x: this.tmpHit.x, y: this.tmpHit.y, z: this.tmpHit.z }, damage: this.p.shotDamage });
     }
     if (hitKind === 'player') {
-      this.ctx.playerDamage?.(this.p.shotDamage, pos, this.id);
+      this.ray.at(bestT, this.tmpHit);
+      this.ctx.playerDamage?.(this.p.shotDamage, pos, this.id, this.tmpHit.y);
     } else if (hitKind === 'ally' && hitAllyId) {
       this.ray.at(bestT, this.tmpHit);
       this.bus.emit('entityHit', {

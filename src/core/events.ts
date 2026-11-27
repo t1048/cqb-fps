@@ -36,7 +36,9 @@ export type RoeViolationKind =
   | 'fireOnSurrendered'
   | 'civilianHit'
   | 'nonlethalCivilianHit'
-  | 'friendlyFire';
+  | 'friendlyFire'
+  | 'allyDown'
+  | 'playerInjury';
 
 export interface GameEvents {
   noise: { pos: Vec3; radius: number; kind: NoiseKind; source?: NoiseSource };
@@ -76,7 +78,13 @@ export interface GameEvents {
   arrest: { targetId: string; evidenceCollected: boolean };
   roeViolation: { kind: RoeViolationKind; targetId?: string; points: number };
   /** プレイヤー被弾（敵弾ヒット） */
-  playerHit: { shooter: ActorId; damage: number; from: Vec3; hp: number };
+  playerHit: { shooter: ActorId; damage: number; from: Vec3; hp: number; head?: boolean };
+  /** プレイヤーの負傷レベルが上がった（level 1=負傷, 2=重傷）。RoE のペナルティ・HUD 演出用 */
+  playerWound: { level: 1 | 2 };
+  /** 隊員が戦闘不能になった（SWAT モード）。RoE のペナルティ用 */
+  allyDown: { allyId: string };
+  /** オプティワンドで接触（容疑者・民間人）を確認した。バッチ単位 */
+  scoutReport: { roomId: string | null; suspects: number; armed: number; civilians: number; source: 'player' | 'ally' };
   /** プレイヤーがフラッシュバンで白飛びした（duration = 白飛び秒数、pos = プレイヤー足元座標） */
   playerBlinded: { duration: number; pos: Vec3 };
   /** 隊員の無線コール・状態報告 */

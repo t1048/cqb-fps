@@ -40,6 +40,7 @@ const ORDER_I18N_KEY: Record<SquadOrder, string> = {
   breachClear: 'breach_clear',
   pieDoor: 'open_hold',
   restrain: 'restrain',
+  mirror: 'mirror',
 };
 
 export function orderLabelText(cfg: SquadConfig, order: SquadOrder): string {
