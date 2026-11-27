@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { t, tElementLabel, tOrderLabel } from '../../core/i18n';
-import type { Door } from '../../world/Door';
 import type { RoomDef, SquadConfig, SquadElement, SquadOrder } from '../../core/types';
 import type { ActiveMarker, OrderContext } from '../../ui/CommandMenu';
 import type { EntryMode } from '../cqbEntry';
@@ -26,7 +25,7 @@ import {
 } from './squadTypes';
 import { approachSign, computeMoveSlots } from './squadMovement';
 import { assignPortalGroup, findRoomAcrossDoor } from './squadEntry';
-import { applyScoutPreAim, doorKnowledge, startMirror } from './squadScout';
+import { applyScoutPreAim, doorKnowledge, startCheck, startDisarm, startMirror } from './squadScout';
 import { findNearestActionableId } from './squadClearing';
 
 const ORDER_I18N_KEY: Record<SquadOrder, string> = {
@@ -43,6 +42,8 @@ const ORDER_I18N_KEY: Record<SquadOrder, string> = {
   pieDoor: 'open_hold',
   restrain: 'restrain',
   mirror: 'mirror',
+  check: 'check',
+  disarm: 'disarm',
 };
 
 export function orderLabelText(cfg: SquadConfig, order: SquadOrder): string {
@@ -102,87 +103,149 @@ export function handleShortcuts(ctx: SquadContext): void {
   if (ctx.input.wasPressed('quickOrder')) {
     const orderCtx = ctx.menu.resolveContext(ctx.selectedElement);
     const info = quickOrderInfo(ctx, orderCtx);
-    executeOrder(ctx, info.order, orderCtx, info.mirrorFirst);
+    if (info.busy) {
+      ctx.ack =
+        info.busy === 'check'
+          ? t('ドアチェック中…', 'Checking the door...')
+          : info.busy === 'disarm'
+            ? t('トラップ解除中…', 'Disarming the trap...')
+            : t('突入中', 'Entry in progress');
+      ctx.ackLeft = 1.2;
+      return;
+    }
+    executeOrder(ctx, info.order, orderCtx);
   }
 }
 
+/** Z（ドア文脈）の段階: スタック → チェック → オープン&クリア */
+export type ZStage = 'stack' | 'check' | 'entry';
+
+/** 偵察結果に基づく推奨の突入方法（あくまでヒント。自動では発令しない） */
+export type EntryRecommend = 'clear' | 'flashClear' | 'gasClear';
+
 export interface QuickOrderInfo {
   order: SquadOrder;
+  /** ドア文脈のときの段階（それ以外は null） */
+  stage: ZStage | null;
   /** ドア/エリア対象の向こう側を把握しているか（対象がドア/エリアでなければ null） */
   scouted: boolean | null;
-  /** 既知の脅威数 */
+  /** 既知の脅威（武装容疑者）数 */
   threats: number;
-  /** 未確認のドアなので、まずミラー確認をしてから結果に応じて自動突入する（order は 'mirror'） */
-  mirrorFirst: boolean;
-  /** すでにミラー確認中（もう一度 Z で確認を打ち切り、素の突入に移る） */
-  mirroring: boolean;
+  /** 既知の民間人数 */
+  civilians: number;
+  /** 確認済みのときの推奨（未確認は null） */
+  recommend: EntryRecommend | null;
+  /** 作業中（チェック/解除/突入シーケンス）。Z を押しても何も発令しない */
+  busy: 'check' | 'disarm' | 'entry' | null;
+  /** チェックまたは気付きでトラップ発見済み（未解除） */
+  trapKnown: boolean;
+  /** ドアチェック済み */
+  checked: boolean;
 }
 
-/** 突入系の指示を、偵察結果に基づいて選ぶ。 */
-function entryOrderFor(ctx: SquadContext, known: { scouted: boolean; threats: number }, locked: boolean): SquadOrder {
-  if (locked) return 'breachClear';
-  if (!known.scouted || known.threats === 0) return 'clear';
-  if (ctx.flashesLeft > 0) return 'flashClear';
-  if (ctx.gasLeft > 0) return 'gasClear';
+/** 既知の脅威・民間人から推奨を決める。容疑者のみ→ガス / 容疑者+民間人→閃光 / 空→プレーン。 */
+export function recommendEntry(threats: number, civilians: number): EntryRecommend {
+  if (threats > 0) return civilians > 0 ? 'flashClear' : 'gasClear';
   return 'clear';
 }
 
+const ENTRY_ORDERS: readonly SquadOrder[] = ['clear', 'flashClear', 'gasClear', 'c2Clear', 'breachClear', 'pieDoor'];
+const ENTRY_PHASES: readonly string[] = [
+  'door_prep',
+  'pieing',
+  'c2_plant',
+  'c2_standoff',
+  'flash_wait',
+  'gas_wait',
+  'entering',
+];
+
 /**
- * Z キーで発令される指示とその根拠を状況から決定する（実行と HUD 表示で共通）。Z は常に 1 回押すだけ。
- * - 未確認のドア: 隊員がミラー確認（約 4 秒静止）→ 結果に応じて閃光/ガス/静かな clear へ自動移行
- * - 確認済み（オプティワンド・ミラー・開口越しの視線）: 即突入。脅威ありなら閃光/ガス＋既知位置へ pre-aim、空なら静かな clear
- * - ミラー確認中にもう一度 Z: 確認を打ち切って素の clear（閃光なし・危険）
+ * Z キーで発令される指示とその根拠を状況から決定する（実行と HUD 表示で共通）。
+ * ドアに対する Z は 3 段階（押すたびに次へ）:
+ *  1. スタック: 扉脇に整列（突入しない）
+ *  2. チェック: 先頭の隊員がドア際でしゃがみ、施錠とブービートラップを確認（約 1.7 秒）
+ *  3. オープン&クリア: 閃光・ガスを使わない素の突入（施錠なら蹴破り）。確認済みのトラップは解除してから開ける
+ * 閃光/ガス/C2 は右クリックメニューで選ぶ。ミラー確認も右クリックメニューのみ。
+ * 偵察済み（オプティワンド・ミラー・開口越しの視線）なら推奨を返す（ヒント表示のみ）。
  */
 export function quickOrderInfo(ctx: SquadContext, orderCtx: OrderContext): QuickOrderInfo {
-  const none = { scouted: null, threats: 0, mirrorFirst: false, mirroring: false } as const;
+  const none: QuickOrderInfo = {
+    order: 'hold',
+    stage: null,
+    scouted: null,
+    threats: 0,
+    civilians: 0,
+    recommend: null,
+    busy: null,
+    trapKnown: false,
+    checked: false,
+  };
   if (orderCtx.restrainTarget) return { ...none, order: 'restrain' };
   if (orderCtx.door) {
     const door = orderCtx.door;
     const targets = activeTargets(ctx, orderCtx.element);
-    const mirroring = targets.some((a) => a.mirrorLeft > 0 && a.door === door);
     const k = doorKnowledge(ctx, door);
+    const contacts = k.room ? ctx.intel.contactsIn(k.room.id) : [];
+    const civilians = k.scouted ? contacts.filter((c) => c.kind === 'civilian').length : 0;
     const threats = k.threats.length;
-    if (mirroring) {
-      return { order: door.locked ? 'breachClear' : 'clear', scouted: false, threats: 0, mirrorFirst: false, mirroring: true };
+    const recommend = k.scouted ? recommendEntry(threats, civilians) : null;
+    const trapKnown = ctx.traps?.isDiscovered(door.id) === true;
+    const checked = ctx.doorChecks.has(door.id);
+    const base = { scouted: k.scouted, threats, civilians, recommend, trapKnown, checked };
+    const atDoor = targets.filter((a) => a.door === door || a.entryPortal?.door === door);
+    if (atDoor.some((a) => a.checkLeft > 0)) {
+      return { ...base, order: 'check', stage: 'check', busy: 'check' };
     }
-    if (k.scouted) {
-      return { order: entryOrderFor(ctx, { scouted: true, threats }, door.locked), scouted: true, threats, mirrorFirst: false, mirroring: false };
+    if (atDoor.some((a) => a.disarmLeft > 0 || a.disarmStarted)) {
+      return { ...base, order: 'disarm', stage: 'entry', busy: 'disarm' };
     }
-    return { order: 'mirror', scouted: false, threats: 0, mirrorFirst: true, mirroring: false };
+    if (atDoor.some((a) => ENTRY_ORDERS.includes(a.order) && ENTRY_PHASES.includes(a.phase))) {
+      return { ...base, order: 'clear', stage: 'entry', busy: 'entry' };
+    }
+    const entryOrder: SquadOrder = door.locked ? 'breachClear' : 'clear';
+    // すでに開いているドアは段階を飛ばして突入できる
+    if (door.angle >= ctx.cfg.doorOpenAngle) return { ...base, order: 'clear', stage: 'entry', busy: null };
+    const stacked = atDoor.some((a) => a.order === 'stack');
+    if (!stacked) return { ...base, order: 'stack', stage: 'stack', busy: null };
+    if (!checked) return { ...base, order: 'check', stage: 'check', busy: null };
+    return { ...base, order: entryOrder, stage: 'entry', busy: null };
   }
   if (orderCtx.areaTarget) {
     const room = orderCtx.areaTarget.room;
     const scouted = ctx.intel.isScouted(room.id);
     const threats = ctx.intel.threatsIn(room.id).length;
+    const civilians = scouted ? ctx.intel.contactsIn(room.id).filter((c) => c.kind === 'civilian').length : 0;
     return {
-      order: scouted && threats > 0 ? entryOrderFor(ctx, { scouted, threats }, false) : 'clear',
+      ...none,
+      order: 'clear',
       scouted,
       threats,
-      mirrorFirst: false,
-      mirroring: false,
+      civilians,
+      recommend: scouted ? recommendEntry(threats, civilians) : null,
     };
   }
   if (orderCtx.groundPoint) return { ...none, order: 'move' };
-  return { ...none, order: 'hold' };
-}
-
-/** ミラー確認が終わった後、結果（ScoutIntel）に応じた突入を自動で発令する。 */
-export function finishMirrorEntry(ctx: SquadContext, door: Door, element: SquadElement): void {
-  const k = doorKnowledge(ctx, door);
-  const order = entryOrderFor(ctx, { scouted: k.scouted, threats: k.threats.length }, door.locked);
-  executeOrder(ctx, order, {
-    element,
-    door,
-    areaTarget: null,
-    groundPoint: null,
-    restrainTarget: null,
-    aimDir: { x: -door.normalX, z: -door.normalZ },
-  });
+  return none;
 }
 
 /** Z キーで発令される指示（後方互換。根拠が要るときは quickOrderInfo）。 */
 export function pickQuickOrder(ctx: SquadContext, orderCtx: OrderContext): SquadOrder {
   return quickOrderInfo(ctx, orderCtx).order;
+}
+
+function recommendText(ctx: SquadContext, info: QuickOrderInfo): string {
+  if (!info.recommend) return '';
+  const label = orderLabelText(ctx.cfg, info.recommend === 'gasClear' ? 'gasClear' : info.recommend);
+  const out =
+    (info.recommend === 'gasClear' && ctx.gasLeft <= 0) || (info.recommend === 'flashClear' && ctx.flashesLeft <= 0);
+  const who =
+    info.threats > 0
+      ? info.civilians > 0
+        ? t(`敵${info.threats}・民間人${info.civilians}`, `${info.threats} hostile, ${info.civilians} civ`)
+        : t(`敵${info.threats}`, `${info.threats} hostile`)
+      : t('空', 'empty');
+  return `  ${t('推奨', 'Rec')}: ${label}（${who}${out ? t('・在庫なし', ' · out of stock') : ''}）`;
 }
 
 /** 画面下部に出す「Z : 〜〜」の文言。指示不可の状況では空文字。 */
@@ -194,13 +257,19 @@ export function quickOrderHint(ctx: SquadContext, dt: number): string {
     ctx.quickHintCache = '';
   } else {
     const info = quickOrderInfo(ctx, ctx.menu.resolveContext(ctx.selectedElement));
-    let note = '';
-    if (info.mirroring) note = t('（確認を打ち切り・危険）', ' (skip mirror, risky)');
-    else if (info.mirrorFirst) note = t('→確認後に突入', ' → then entry');
-    else if (info.scouted === true) {
-      note = info.threats > 0 ? t(`（確認済・敵${info.threats}）`, ` (scouted, ${info.threats} hostile)`) : t('（確認済・空）', ' (scouted, empty)');
+    let text: string;
+    if (info.busy === 'check') text = t('チェック中…', 'Checking door...');
+    else if (info.busy === 'disarm') text = t('トラップ解除中…', 'Disarming trap...');
+    else if (info.busy === 'entry') text = t('突入中', 'Entering');
+    else if (info.stage === 'stack') text = `Z : ${t('スタック', 'Stack Up')}${t('（次: チェック→オープン&クリア）', ' (next: check → open & clear)')}`;
+    else if (info.stage === 'check') text = `Z : ${t('ドアチェック（罠・施錠）', 'Check Door (Trap & Lock)')}`;
+    else if (info.stage === 'entry') {
+      const trap = info.trapKnown ? t('（罠発見: 解除してから開ける）', ' (trap found: disarm first)') : '';
+      text = `Z : ${orderLabelText(ctx.cfg, info.order)}${trap}`;
+    } else {
+      text = `Z : ${orderLabelText(ctx.cfg, info.order)}`;
     }
-    ctx.quickHintCache = `Z : ${orderLabelText(ctx.cfg, info.order)}${note}`;
+    ctx.quickHintCache = text + (info.busy ? '' : recommendText(ctx, info));
   }
   return ctx.quickHintCache;
 }
@@ -223,11 +292,22 @@ export function updateMarkers(ctx: SquadContext): void {
   ctx.menu.updateActiveMarkers(markers);
 }
 
-export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: OrderContext, mirrorThenEntry = false): void {
+export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: OrderContext): void {
   const targets = activeTargets(ctx, orderCtx.element);
   if (targets.length === 0) {
     ctx.ack = t('指示可能な生存隊員がいません', 'No living officers available');
     ctx.ackLeft = 1.4;
+    return;
+  }
+  // 閃光弾・CS ガスはミッション全体で有限（squad.json の inventory）
+  if (order === 'flashClear' && ctx.flashesLeft <= 0) {
+    ctx.ack = t('閃光弾が残っていません', 'Out of flashbangs');
+    ctx.ackLeft = 1.8;
+    return;
+  }
+  if (order === 'gasClear' && ctx.gasLeft <= 0) {
+    ctx.ack = t('CS ガスが残っていません', 'Out of CS gas');
+    ctx.ackLeft = 1.8;
     return;
   }
 
@@ -245,7 +325,9 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     order === 'c2Clear' ||
     order === 'gasClear' ||
     order === 'pieDoor' ||
-    order === 'mirror';
+    order === 'mirror' ||
+    order === 'check' ||
+    order === 'disarm';
   let portal: EntryPortal | null = null;
   let targetRoom: RoomDef | null = null;
   if (isDoorOrder) {
@@ -288,9 +370,32 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
       ctx.ackLeft = 1.4;
       return;
     }
-    // 全員がスタックし、先頭の 1 名が数秒静止してドア下をミラー確認する
+    // 全員がスタックし、先頭の 1 名が数秒静止してドア下をミラー確認する（右クリックメニューから選んだときだけ）
     const lead = assignPortalGroup(ctx, targets, portal, targetRoom, 'stack');
-    startMirror(ctx, lead, mirrorThenEntry ? { element: orderCtx.element } : null);
+    startMirror(ctx, lead);
+    return;
+  }
+
+  if (order === 'check' || order === 'disarm') {
+    if (!portal || !orderCtx.door) {
+      ctx.ack = t('ドアを見て実行します', 'Look at a door to do this');
+      ctx.ackLeft = 1.4;
+      return;
+    }
+    if (order === 'check' && orderCtx.door.angle >= ctx.cfg.doorOpenAngle) {
+      ctx.ack = t('ドアはすでに開いています', 'The door is already open');
+      ctx.ackLeft = 1.4;
+      return;
+    }
+    if (order === 'disarm' && ctx.traps?.isDiscovered(orderCtx.door.id) !== true) {
+      ctx.ack = t('解除できる確認済みのトラップがありません', 'No known trap to disarm');
+      ctx.ackLeft = 1.6;
+      return;
+    }
+    // 全員がスタックし、先頭の 1 名がドア際でしゃがんで作業する（突入はしない）
+    const lead = assignPortalGroup(ctx, targets, portal, targetRoom, 'stack');
+    if (order === 'check') startCheck(ctx, lead);
+    else startDisarm(ctx, lead);
     return;
   }
 
@@ -447,7 +552,10 @@ export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
   ally.sweepRetryCd = 0;
   ally.mirrorLeft = 0;
   ally.mirrorStarted = false;
-  ally.mirrorThen = null;
+  ally.checkLeft = 0;
+  ally.checkStarted = false;
+  ally.disarmLeft = 0;
+  ally.disarmStarted = false;
   ally.body.setPose('stand');
   ally.body.setLean(0);
 }

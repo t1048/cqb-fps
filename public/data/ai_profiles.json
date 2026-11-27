@@ -328,5 +328,63 @@
         "coneDeg": 70
       }
     }
-  ]
+  ],
+  "suspectAlert": {
+    "gains": {
+      "flashbang": 20,
+      "gunshotBurst": 5,
+      "breach": 10,
+      "c2": 5,
+      "gas": 3,
+      "suspectDown": 10,
+      "doorOpen": 1,
+      "trapBlast": 12
+    },
+    "gunshotBurstGapSec": 1.0,
+    "doorOpenGapSec": 2.0,
+    "decayPerSec": 1,
+    "decayDelaySec": 10,
+    "hearNearM": 12,
+    "hearFarM": 40,
+    "farFactor": 0.35,
+    "otherFloorFactor": 0.5,
+    "tiers": {
+      "patrol": 30,
+      "ambush": 50,
+      "shield": 70,
+      "execute": 90
+    },
+    "effects": {
+      "patrolIntervalMul": 0.5,
+      "patrolChanceAdd": 0.25,
+      "investigateAdd": 0.25,
+      "ambushChanceMul": 1.7,
+      "hideChance": 0.6,
+      "shieldRange": 4.5,
+      "hostageRoomChance": 0.5,
+      "complianceMul": {
+        "patrol": 0.9,
+        "ambush": 0.75,
+        "shield": 0.6,
+        "execute": 0.45
+      }
+    },
+    "baseline": {
+      "start": 0,
+      "tensionWeight": 0.45,
+      "ultimatum": 10,
+      "trustWeight": 0.15,
+      "brokenBonus": 20,
+      "max": 60
+    },
+    "execution": {
+      "sustainSec": 8,
+      "tensionMin": 60,
+      "repeatedFlashes": 3,
+      "countdownSec": 9,
+      "cooldownSec": 60,
+      "cancelBelow": 80,
+      "warnComplyChance": 0.4
+    }
+  }
 }

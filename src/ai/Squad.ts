@@ -18,6 +18,7 @@ import type { PlayerController } from '../player/PlayerController';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import { hasLineOfSight, type Flashbang } from '../weapons/Flashbang';
 import type { TearGas } from '../weapons/TearGas';
+import type { BlastVictim, DoorTrapSystem } from '../world/DoorTraps';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { StairMark } from '../world/Walk';
 import type { TextureLibrary } from '../world/Materials';
@@ -53,9 +54,6 @@ import {
   BASE_SHIELD_MOBILITY,
   BASE_SWAT_COMBAT,
   BASE_SWAT_MOBILITY,
-  SWAT_FLASH_CARRY_MAX,
-  SWAT_FLASH_PER_TEAM,
-  SWAT_GAS_PER_TEAM,
   SWAT_HP,
   SWAT_READY_POSE,
   SWAT_UNIFORM_COLOR,
@@ -66,7 +64,6 @@ import {
 import { TacticalOptics } from './TacticalOptics';
 import {
   ARRIVE_HYST,
-  FLASH_REFILL_SEC,
   FOLLOW_GOAL_TAU,
   FOLLOW_START_DIST,
   FOLLOW_STOP_DIST,
@@ -78,6 +75,7 @@ import {
   type AllyUnit,
   type C2BlastFx,
   type Cell,
+  type DoorCheckResult,
   type PortalGroup,
   type SquadContext,
   type SquadRosterEntry,
@@ -200,12 +198,16 @@ export class SquadSystem implements SquadContext {
   readonly tearGas?: TearGas;
   readonly windows: readonly WindowDef[];
   readonly intel: ScoutIntel;
+  readonly traps: DoorTrapSystem | null;
+  readonly doorChecks = new Map<string, DoorCheckResult>();
+  readonly trapSpotRolled = new Set<string>();
+  rand?: () => number;
   private intelTimer = 0;
 
-  flashesLeft = SWAT_FLASH_PER_TEAM;
+  /** 分隊の閃光弾・CS ガスの残数（squad.json の inventory から。補充なし） */
+  flashesLeft = 0;
   flashCd = 0;
-  flashRefill = 0;
-  gasLeft = SWAT_GAS_PER_TEAM;
+  gasLeft = 0;
   gasCd = 0;
   gasRetryCd = 0;
   rushCd = 0;
@@ -245,9 +247,18 @@ export class SquadSystem implements SquadContext {
     readonly flash: { range: number; blindSec: number },
     readonly rooms: readonly RoomDef[],
     readonly arrestCfg: ArrestConfig,
-    gadgets?: { flashbang?: Flashbang; tearGas?: TearGas; windows?: readonly WindowDef[]; intel?: ScoutIntel },
+    gadgets?: {
+      flashbang?: Flashbang;
+      tearGas?: TearGas;
+      windows?: readonly WindowDef[];
+      intel?: ScoutIntel;
+      traps?: DoorTrapSystem | null;
+    },
   ) {
     this.intel = gadgets?.intel ?? new ScoutIntel();
+    this.traps = gadgets?.traps ?? null;
+    this.flashesLeft = cfg.inventory.flashbang;
+    this.gasLeft = cfg.inventory.gas;
     this.flashbang = gadgets?.flashbang;
     this.tearGas = gadgets?.tearGas;
     this.windows = gadgets?.windows ?? [];
@@ -274,6 +285,10 @@ export class SquadSystem implements SquadContext {
     this.followHeading = { x: -Math.sin(yaw0), z: -Math.cos(yaw0) };
     this.lastPlayerPos = { x: player.position.x, z: player.position.z };
     this.menu = new CommandMenu(cfg, player, doors, colliders, entities, rooms);
+    this.menu.setGearProvider({
+      gear: () => ({ flash: this.flashesLeft, gas: this.gasLeft }),
+      trapKnown: (doorId) => this.traps?.isDiscovered(doorId) === true,
+    });
     this.root.add(this.menu.root);
 
     this.input.onOrderMenu = (event, value) => {
@@ -454,7 +469,10 @@ export class SquadSystem implements SquadContext {
         sweepRetryCd: 0,
         mirrorLeft: 0,
         mirrorStarted: false,
-        mirrorThen: null,
+        checkLeft: 0,
+        checkStarted: false,
+        disarmLeft: 0,
+        disarmStarted: false,
         targetWrapper,
         label,
         getAABB: () => body.getAABB(),
@@ -559,6 +577,35 @@ export class SquadSystem implements SquadContext {
     return getRosterImpl(this);
   }
 
+  /** HUD 用: 分隊の携行数（残り / 初期） */
+  getGear(): { flash: number; flashMax: number; gas: number; gasMax: number } {
+    return {
+      flash: this.flashesLeft,
+      flashMax: this.cfg.inventory.flashbang,
+      gas: this.gasLeft,
+      gasMax: this.cfg.inventory.gas,
+    };
+  }
+
+  /** ブービートラップの爆風を受ける隊員（生存中） */
+  trapVictims(): BlastVictim[] {
+    const out: BlastVictim[] = [];
+    for (const a of this.allies) {
+      if (a.down) continue;
+      out.push({
+        chest: () => {
+          const c = a.body.chestPos(this.labelChestTmp);
+          return { x: c.x, y: c.y, z: c.z };
+        },
+        hurt: (dmg) => {
+          onHit(this, a.id, dmg, false, undefined, 'trap');
+          a.blindLeft = Math.max(a.blindLeft, 0.8);
+        },
+      });
+    }
+    return out;
+  }
+
   getMinimapAllies(): FloorPlanAllyState[] {
     return this.allies.map((a) => ({
       name: a.name,
@@ -654,13 +701,6 @@ export class SquadSystem implements SquadContext {
     this.contactRadioCd = Math.max(0, this.contactRadioCd - dt);
     this.pepperRadioCd = Math.max(0, this.pepperRadioCd - dt);
     this.coverRadioCd = Math.max(0, this.coverRadioCd - dt);
-    if (this.flashesLeft < SWAT_FLASH_CARRY_MAX) {
-      this.flashRefill += dt;
-      if (this.flashRefill >= FLASH_REFILL_SEC) {
-        this.flashRefill = 0;
-        this.flashesLeft++;
-      }
-    }
     for (const [id, left] of this.recentlyPeppered) {
       if (left - dt <= 0) this.recentlyPeppered.delete(id);
       else this.recentlyPeppered.set(id, left - dt);

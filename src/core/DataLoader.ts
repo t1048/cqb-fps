@@ -1,5 +1,9 @@
 import type {
   AllyWoundsConfig,
+  DoorCheckConfig,
+  DoorTrapConfig,
+  SquadInventoryConfig,
+  SuspectAlertConfig,
   AmbushParams,
   MirrorConfig,
   OptiwandConfig,
@@ -1531,12 +1535,14 @@ const SCORE_KINDS: readonly ScoreKind[] = [
   'friendlyFire',
   'allyDown',
   'playerInjury',
+  'civilianGassed',
 ];
 
 /** roe.json に新項目が無い旧データでも読めるようにする既定値（careless play ペナルティ） */
 const OPTIONAL_SCORE_DEFAULTS: Partial<Record<ScoreKind, { points: number; label: string }>> = {
   allyDown: { points: -40, label: '隊員が負傷・戦闘不能' },
   playerInjury: { points: -15, label: '被弾（負傷）' },
+  civilianGassed: { points: -10, label: '民間人にCSガスを浴びせた（不適切なガス使用）' },
 };
 
 export function validatePerception(raw: unknown, source = 'perception'): PerceptionConfig {
@@ -1618,7 +1624,15 @@ export const SQUAD_ORDERS: readonly SquadOrder[] = [
   'pieDoor',
   'restrain',
   'mirror',
+  'check',
+  'disarm',
 ] as const;
+
+/** squad.json に新しい指示のラベルが無い旧データでも読めるようにする既定値 */
+const OPTIONAL_ORDER_LABELS: Partial<Record<SquadOrder, string>> = {
+  check: 'ドアチェック',
+  disarm: 'トラップ解除',
+};
 
 export const DEFAULT_MIRROR: MirrorConfig = {
   durationSec: 4,
@@ -1638,6 +1652,61 @@ function readAllyWounds(r: Reader, o: Record<string, unknown>): AllyWoundsConfig
     headMultiplier: r.numOr(w, 'headMultiplier', 'wounds', d.headMultiplier, 1, 20),
     woundBelow: r.numOr(w, 'woundBelow', 'wounds', d.woundBelow, 0, 1),
     speedMul: r.numOr(w, 'speedMul', 'wounds', d.speedMul, 0.1, 1),
+  };
+}
+
+export const DEFAULT_INVENTORY: SquadInventoryConfig = { flashbang: 4, gas: 3 };
+export const DEFAULT_DOOR_CHECK: DoorCheckConfig = { durationSec: 1.7, detectChance: 0.9, spotChance: 0.35 };
+export const DEFAULT_DOOR_TRAP: DoorTrapConfig = {
+  maxCount: 2,
+  baseChance: 0.55,
+  alertBonusAt: 40,
+  alertBonus: 1,
+  minStartDist: 7,
+  disarmSec: 5,
+  failChance: 0.12,
+  blastRadius: 4.2,
+  blastDamage: 85,
+  triggerDist: 3,
+};
+
+function readInventory(r: Reader, o: Record<string, unknown>): SquadInventoryConfig {
+  if (o.inventory === undefined) return { ...DEFAULT_INVENTORY };
+  const v = r.obj(o.inventory, 'inventory');
+  const d = DEFAULT_INVENTORY;
+  return {
+    flashbang: Math.round(r.numOr(v, 'flashbang', 'inventory', d.flashbang, 0, 20)),
+    gas: Math.round(r.numOr(v, 'gas', 'inventory', d.gas, 0, 20)),
+  };
+}
+
+function readDoorCheck(r: Reader, o: Record<string, unknown>): DoorCheckConfig {
+  if (o.doorCheck === undefined) return { ...DEFAULT_DOOR_CHECK };
+  const v = r.obj(o.doorCheck, 'doorCheck');
+  const d = DEFAULT_DOOR_CHECK;
+  return {
+    durationSec: r.numOr(v, 'durationSec', 'doorCheck', d.durationSec, 0.3, 15),
+    detectChance: r.numOr(v, 'detectChance', 'doorCheck', d.detectChance, 0, 1),
+    spotChance: r.numOr(v, 'spotChance', 'doorCheck', d.spotChance, 0, 1),
+  };
+}
+
+function readDoorTrap(r: Reader, o: Record<string, unknown>): DoorTrapConfig {
+  if (o.doorTrap === undefined) return { ...DEFAULT_DOOR_TRAP };
+  const v = r.obj(o.doorTrap, 'doorTrap');
+  const d = DEFAULT_DOOR_TRAP;
+  const p = 'doorTrap';
+  return {
+    maxCount: Math.round(r.numOr(v, 'maxCount', p, d.maxCount, 0, 10)),
+    baseChance: r.numOr(v, 'baseChance', p, d.baseChance, 0, 1),
+    alertBonusAt: r.numOr(v, 'alertBonusAt', p, d.alertBonusAt, 0, 100),
+    alertBonus: Math.round(r.numOr(v, 'alertBonus', p, d.alertBonus, 0, 10)),
+    minStartDist: r.numOr(v, 'minStartDist', p, d.minStartDist, 0, 100),
+    disarmSec: r.numOr(v, 'disarmSec', p, d.disarmSec, 0.5, 60),
+    failChance: r.numOr(v, 'failChance', p, d.failChance, 0, 1),
+    blastRadius: r.numOr(v, 'blastRadius', p, d.blastRadius, 0.5, 20),
+    blastDamage: r.numOr(v, 'blastDamage', p, d.blastDamage, 0, 500),
+    triggerDist: r.numOr(v, 'triggerDist', p, d.triggerDist, 0.5, 20),
   };
 }
 
@@ -1662,7 +1731,8 @@ export function validateSquad(raw: unknown, source = 'squad'): SquadConfig {
   const labelsRaw = r.obj(o.orderLabels, 'orderLabels');
   const orderLabels = {} as SquadConfig['orderLabels'];
   for (const key of SQUAD_ORDERS) {
-    orderLabels[key] = r.str(labelsRaw, key, 'orderLabels');
+    const dflt = OPTIONAL_ORDER_LABELS[key];
+    orderLabels[key] = dflt !== undefined && labelsRaw[key] === undefined ? dflt : r.str(labelsRaw, key, 'orderLabels');
   }
   const elementsRaw = r.obj(o.elementLabels, 'elementLabels');
   const elementLabels = {} as SquadConfig['elementLabels'];
@@ -1715,9 +1785,124 @@ export function validateSquad(raw: unknown, source = 'squad'): SquadConfig {
     hint: r.str(o, 'hint', ''),
     mirror: readMirror(r, o),
     wounds: readAllyWounds(r, o),
+    inventory: readInventory(r, o),
+    gasWaitSec: r.numOr(o, 'gasWaitSec', '', 4.5, 0.5, 30),
+    doorCheck: readDoorCheck(r, o),
+    doorTrap: readDoorTrap(r, o),
     orderLabels,
     elementLabels,
   };
+}
+
+export const DEFAULT_SUSPECT_ALERT: SuspectAlertConfig = {
+  gains: { flashbang: 20, gunshotBurst: 5, breach: 10, c2: 5, gas: 3, suspectDown: 10, doorOpen: 1, trapBlast: 12 },
+  gunshotBurstGapSec: 1.0,
+  doorOpenGapSec: 2.0,
+  decayPerSec: 1,
+  decayDelaySec: 10,
+  hearNearM: 12,
+  hearFarM: 40,
+  farFactor: 0.35,
+  otherFloorFactor: 0.5,
+  tiers: { patrol: 30, ambush: 50, shield: 70, execute: 90 },
+  effects: {
+    patrolIntervalMul: 0.5,
+    patrolChanceAdd: 0.25,
+    investigateAdd: 0.25,
+    ambushChanceMul: 1.7,
+    hideChance: 0.6,
+    shieldRange: 4.5,
+    hostageRoomChance: 0.5,
+    complianceMul: { patrol: 0.9, ambush: 0.75, shield: 0.6, execute: 0.45 },
+  },
+  baseline: { start: 0, tensionWeight: 0.45, ultimatum: 10, trustWeight: 0.15, brokenBonus: 20, max: 60 },
+  execution: { sustainSec: 8, tensionMin: 60, repeatedFlashes: 3, countdownSec: 9, cooldownSec: 60, cancelBelow: 80, warnComplyChance: 0.4 },
+};
+
+/** ai_profiles.json の suspectAlert セクション（無ければ既定値）。 */
+export function validateSuspectAlert(raw: unknown, source = 'ai_profiles'): SuspectAlertConfig {
+  const d = DEFAULT_SUSPECT_ALERT;
+  const root = new Reader(source).obj(raw, '');
+  if (root.suspectAlert === undefined) return structuredClone(d);
+  const r = new Reader(source);
+  const o = r.obj(root.suspectAlert, 'suspectAlert');
+  const sub = (key: string): Record<string, unknown> =>
+    o[key] === undefined ? {} : r.obj(o[key], `suspectAlert.${key}`);
+  const g = sub('gains');
+  const tr = sub('tiers');
+  const e = sub('effects');
+  const cm = e.complianceMul === undefined ? {} : r.obj(e.complianceMul, 'suspectAlert.effects.complianceMul');
+  const b = sub('baseline');
+  const x = sub('execution');
+  const gp = 'suspectAlert.gains';
+  const tp = 'suspectAlert.tiers';
+  const ep = 'suspectAlert.effects';
+  const cp = 'suspectAlert.effects.complianceMul';
+  const bp = 'suspectAlert.baseline';
+  const xp = 'suspectAlert.execution';
+  const cfg: SuspectAlertConfig = {
+    gains: {
+      flashbang: r.numOr(g, 'flashbang', gp, d.gains.flashbang, 0, 100),
+      gunshotBurst: r.numOr(g, 'gunshotBurst', gp, d.gains.gunshotBurst, 0, 100),
+      breach: r.numOr(g, 'breach', gp, d.gains.breach, 0, 100),
+      c2: r.numOr(g, 'c2', gp, d.gains.c2, 0, 100),
+      gas: r.numOr(g, 'gas', gp, d.gains.gas, 0, 100),
+      suspectDown: r.numOr(g, 'suspectDown', gp, d.gains.suspectDown, 0, 100),
+      doorOpen: r.numOr(g, 'doorOpen', gp, d.gains.doorOpen, 0, 100),
+      trapBlast: r.numOr(g, 'trapBlast', gp, d.gains.trapBlast, 0, 100),
+    },
+    gunshotBurstGapSec: r.numOr(o, 'gunshotBurstGapSec', 'suspectAlert', d.gunshotBurstGapSec, 0.1, 30),
+    doorOpenGapSec: r.numOr(o, 'doorOpenGapSec', 'suspectAlert', d.doorOpenGapSec, 0.1, 60),
+    decayPerSec: r.numOr(o, 'decayPerSec', 'suspectAlert', d.decayPerSec, 0, 50),
+    decayDelaySec: r.numOr(o, 'decayDelaySec', 'suspectAlert', d.decayDelaySec, 0, 300),
+    hearNearM: r.numOr(o, 'hearNearM', 'suspectAlert', d.hearNearM, 0, 200),
+    hearFarM: r.numOr(o, 'hearFarM', 'suspectAlert', d.hearFarM, 1, 400),
+    farFactor: r.numOr(o, 'farFactor', 'suspectAlert', d.farFactor, 0, 1),
+    otherFloorFactor: r.numOr(o, 'otherFloorFactor', 'suspectAlert', d.otherFloorFactor, 0, 1),
+    tiers: {
+      patrol: r.numOr(tr, 'patrol', tp, d.tiers.patrol, 0, 100),
+      ambush: r.numOr(tr, 'ambush', tp, d.tiers.ambush, 0, 100),
+      shield: r.numOr(tr, 'shield', tp, d.tiers.shield, 0, 100),
+      execute: r.numOr(tr, 'execute', tp, d.tiers.execute, 0, 100),
+    },
+    effects: {
+      patrolIntervalMul: r.numOr(e, 'patrolIntervalMul', ep, d.effects.patrolIntervalMul, 0.1, 2),
+      patrolChanceAdd: r.numOr(e, 'patrolChanceAdd', ep, d.effects.patrolChanceAdd, 0, 1),
+      investigateAdd: r.numOr(e, 'investigateAdd', ep, d.effects.investigateAdd, 0, 1),
+      ambushChanceMul: r.numOr(e, 'ambushChanceMul', ep, d.effects.ambushChanceMul, 0, 5),
+      hideChance: r.numOr(e, 'hideChance', ep, d.effects.hideChance, 0, 1),
+      shieldRange: r.numOr(e, 'shieldRange', ep, d.effects.shieldRange, 0.5, 20),
+      hostageRoomChance: r.numOr(e, 'hostageRoomChance', ep, d.effects.hostageRoomChance, 0, 1),
+      complianceMul: {
+        patrol: r.numOr(cm, 'patrol', cp, d.effects.complianceMul.patrol, 0.05, 2),
+        ambush: r.numOr(cm, 'ambush', cp, d.effects.complianceMul.ambush, 0.05, 2),
+        shield: r.numOr(cm, 'shield', cp, d.effects.complianceMul.shield, 0.05, 2),
+        execute: r.numOr(cm, 'execute', cp, d.effects.complianceMul.execute, 0.05, 2),
+      },
+    },
+    baseline: {
+      start: r.numOr(b, 'start', bp, d.baseline.start, 0, 100),
+      tensionWeight: r.numOr(b, 'tensionWeight', bp, d.baseline.tensionWeight, 0, 2),
+      ultimatum: r.numOr(b, 'ultimatum', bp, d.baseline.ultimatum, 0, 100),
+      trustWeight: r.numOr(b, 'trustWeight', bp, d.baseline.trustWeight, 0, 2),
+      brokenBonus: r.numOr(b, 'brokenBonus', bp, d.baseline.brokenBonus, 0, 100),
+      max: r.numOr(b, 'max', bp, d.baseline.max, 0, 100),
+    },
+    execution: {
+      sustainSec: r.numOr(x, 'sustainSec', xp, d.execution.sustainSec, 0, 120),
+      tensionMin: r.numOr(x, 'tensionMin', xp, d.execution.tensionMin, 0, 100),
+      repeatedFlashes: Math.round(r.numOr(x, 'repeatedFlashes', xp, d.execution.repeatedFlashes, 1, 50)),
+      countdownSec: r.numOr(x, 'countdownSec', xp, d.execution.countdownSec, 1, 120),
+      cooldownSec: r.numOr(x, 'cooldownSec', xp, d.execution.cooldownSec, 0, 600),
+      cancelBelow: r.numOr(x, 'cancelBelow', xp, d.execution.cancelBelow, 0, 100),
+      warnComplyChance: r.numOr(x, 'warnComplyChance', xp, d.execution.warnComplyChance, 0, 1),
+    },
+  };
+  const ti = cfg.tiers;
+  if (!(ti.patrol <= ti.ambush && ti.ambush <= ti.shield && ti.shield <= ti.execute)) {
+    r.fail('suspectAlert.tiers', 'patrol <= ambush <= shield <= execute の順で指定してください');
+  }
+  return cfg;
 }
 
 const jsonCache = new Map<string, Promise<unknown>>();
@@ -1777,6 +1962,9 @@ export const DataLoader = {
   loadAIProfiles(): Promise<AIProfile[]> {
     return loadCachedStatic('ai_profiles.json', validateAIProfiles);
   },
+  loadSuspectAlert(): Promise<SuspectAlertConfig> {
+    return loadCachedStatic('ai_profiles.json', validateSuspectAlert);
+  },
   loadPlayerConfig(): Promise<PlayerConfig> {
     return loadCachedStatic('player.json', validatePlayerConfig);
   },
@@ -1832,7 +2020,7 @@ export const DataLoader = {
   },
   /** 共通JSONを並列ロードし検証、続いてステージのマップを読み込み/生成。不正なら DataError を throw。 */
   async loadAll(stage: StageEntry, seed?: number): Promise<GameData> {
-    const [player, doors, weapons, aiProfiles, roe, perception, squad] = await Promise.all([
+    const [player, doors, weapons, aiProfiles, roe, perception, squad, suspectAlert] = await Promise.all([
       DataLoader.loadPlayerConfig(),
       DataLoader.loadDoorConfig(),
       DataLoader.loadWeapons(),
@@ -1840,9 +2028,10 @@ export const DataLoader = {
       DataLoader.loadRoe(),
       DataLoader.loadPerception(),
       DataLoader.loadSquad(),
+      DataLoader.loadSuspectAlert(),
     ]);
     const map = await DataLoader.loadStageMap(stage, seed, aiProfiles, doors);
     validateCrossReferences(map, aiProfiles);
-    return { player, doors, map, weapons, aiProfiles, roe, perception, squad };
+    return { player, doors, map, weapons, aiProfiles, roe, perception, squad, suspectAlert };
   },
 };

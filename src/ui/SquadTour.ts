@@ -22,21 +22,21 @@ const STEP_COUNT = 3;
 function getStep(index: number): { title: string; body: string; sub?: string } {
   const steps: { title: string; body: string; sub?: string }[] = [
     {
-      title: t('仲間への指示は <kbd>Z</kbd>（まず確認が大事）', 'Command your squad with <kbd>Z</kbd> (recon first)'),
+      title: t('仲間への指示は <kbd>Z</kbd>（段階を踏んで進める）', 'Command your squad with <kbd>Z</kbd> (step by step)'),
       body: t(
-        '見ている場所に合わせて、下の「Z : ○○」の指示を仲間が実行します。ドアに近づいて、ドアを見ながら <kbd>Z</kbd> を押してみよう。未確認のドアでは仲間がミラーで確認してから突入します。',
-        'Your squad executes the context action shown at the bottom ("Z : ..."). Walk up to a door, look at it, and press <kbd>Z</kbd>. On unscouted doors your squad mirrors under the door first, then enters.',
+        'ドアに近づいて、ドアを見ながら <kbd>Z</kbd> を押すと、まず仲間が扉脇に<b>スタック</b>します（まだ入りません）。続けて <kbd>Z</kbd> で<b>ドアチェック</b>（施錠・ブービートラップの確認）、もう一度で<b>オープン&クリア</b>です。',
+        'Look at a door and press <kbd>Z</kbd>: your squad <b>stacks</b> on it (no entry yet). Press <kbd>Z</kbd> again to <b>check the door</b> (lock & booby trap), then once more to <b>open & clear</b>.',
       ),
       sub: t(
-        '<kbd>4</kbd>／中クリックのオプティワンド（左クリック長押しで映像）で自分で確認すると、ミラーを省いて閃光突入などにすぐ移れます（ミラーは見落とすことも）',
-        'Scout yourself with the <kbd>4</kbd>/MMB Optiwand (hold LMB for the view) to skip the mirror and go straight to flash entry (the mirror can miss contacts)',
+        '確認せずに開けると未発見のトラップが爆発することも。<kbd>4</kbd>／中クリックのオプティワンド（左クリック長押しで映像） / 右クリックの「ミラー確認」で部屋の中を先に見ておくと、画面下に「推奨」が出ます',
+        'Opening without a check can set off an undiscovered trap. Scout with the <kbd>4</kbd>/MMB Optiwand (hold LMB for the view) or the right-click "Mirror" to get a recommendation at the bottom of the screen',
       ),
     },
     {
-      title: t('いいね！ 続けて <kbd>Z</kbd> で次の行動', 'Nice! Press <kbd>Z</kbd> again for the next step'),
+      title: t('いいね！ 閃光・ガスは<b>右クリックメニュー</b>から', 'Nice! Flash & gas come from the <b>right-click menu</b>'),
       body: t(
-        '確認中にもう一度 <kbd>Z</kbd> を押すと打ち切って素のクリアで突入しますが、待ち伏せされると大きな被害が出ます。',
-        'Pressing <kbd>Z</kbd> again mid-mirror skips it for a plain, unflashed entry, and ambushes hurt.',
+        '容疑者だけの部屋は <b>ガス突入</b>（CS を満たしてから入る）、人質・民間人がいる部屋は <b>閃光クリア</b>。空の部屋は素のオープン&クリアで十分です。数に限りがあり、閃光は容疑者全員の<b>警戒度</b>を大きく上げます。',
+        "Suspects only: <b>Gas & Clear</b> (let the CS fill the room first). Hostages or civilians inside: <b>Flash & Clear</b>. Empty room: plain Open & Clear. Supplies are limited, and flashbangs sharply raise every suspect's <b>alert level</b>.",
       ),
     },
     {

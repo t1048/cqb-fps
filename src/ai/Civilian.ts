@@ -30,6 +30,8 @@ export class Civilian implements HitTarget {
   hp: number;
   /** 盾にしている容疑者の id（state=SHIELDED の間のみ非 null） */
   shieldedBy: string | null = null;
+  /** CS ガスを浴びて行動不能になったか（咳き込んで動けない。保護自体は可能） */
+  gassed = false;
   private fleeFrom: { x: number; z: number } | null = null;
   private fleeTimer = 0;
   private readonly unsubs: (() => void)[] = [];
@@ -82,6 +84,22 @@ export class Civilian implements HitTarget {
 
   get alive(): boolean {
     return this.hp > 0;
+  }
+
+  /** CS ガスで行動不能になる（一度だけ）。civilianGassed を発行して RoE の減点対象にする。 */
+  onGassed(): boolean {
+    if (!this.alive || this.gassed) return false;
+    this.gassed = true;
+    this.fleeFrom = null;
+    this.fleeTimer = 0;
+    if (this.state === CivilianState.IDLE || this.state === CivilianState.PANIC) {
+      this.body.setPose('down');
+      this.setState(CivilianState.COMPLY);
+    } else if (this.state === CivilianState.COMPLY) {
+      this.body.setPose('down');
+    }
+    this.bus.emit('civilianGassed', { id: this.id });
+    return true;
   }
 
   /** PANIC に入れるのは IDLE のみ（COMPLY 以降は伏せ済み/保持中/保護済み）。 */

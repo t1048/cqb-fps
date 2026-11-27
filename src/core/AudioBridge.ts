@@ -108,6 +108,14 @@ export class AudioBridge {
     );
 
     this.unsubs.push(
+      bus.on('hostageThreat', ({ phase, pos }) => {
+        // 脅迫の怒号は屋内全体に届く（処刑の銃声は noise 'gunshot' として別に鳴る）
+        if (this.disposed || phase !== 'start') return;
+        this.audio.playWarningCall(pos);
+      }),
+    );
+
+    this.unsubs.push(
       bus.on('flashDetonated', ({ pos, radius, blindSec }) => {
         if (this.disposed) return;
         if (!Number.isFinite(radius) || radius <= 0) return;

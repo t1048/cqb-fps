@@ -55,6 +55,8 @@ export class RoE {
       // 不用意な突入の代償: 隊員の戦闘不能・プレイヤーの負傷レベル上昇ごとに減点（各 1 回）
       bus.on('allyDown', (e) => this.violate('allyDown', e.allyId)),
       bus.on('playerWound', (e) => this.violate('playerInjury', `lv${e.level}`)),
+      // 民間人に CS ガスを浴びせた（人質のいる部屋へのガス投入）: 各 1 回減点
+      bus.on('civilianGassed', (e) => this.violate('civilianGassed', e.id)),
       bus.on('arrest', (e) => this.award('arrest', e.targetId)),
       bus.on('evidence', (e) => this.award('evidence', e.targetId)),
       bus.on('civilianStateChanged', (e) => {
