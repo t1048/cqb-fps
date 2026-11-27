@@ -150,6 +150,7 @@ export class ViewModel {
     this.parent = this.gun;
     if (style === 'radio') this.buildRadio();
     else if (style === 'flashbang') this.buildFlash();
+    else if (style === 'teargas') this.buildGas();
     else if (style === 'taser') this.buildTaser();
     else if (style === 'pepperball') this.buildPepper();
     else if (style === 'smg') this.buildGun(0.28, 0.16);
@@ -266,6 +267,15 @@ export class ViewModel {
   private buildFlash(): void {
     this.add(new THREE.CylinderGeometry(0.043, 0.043, 0.13, 12), this.metal(0x6882a6), 0, -0.02, -0.16);
     this.add(new THREE.BoxGeometry(0.045, 0.024, 0.045), this.metal(0xb0b8c0), 0, 0.05, -0.16);
+    this.buildHand(0.036, -0.075, -0.135);
+  }
+
+  /** CS ガス弾: フラッシュバンより細長いオリーブ色の缶に黄色い帯とピン */
+  private buildGas(): void {
+    this.add(new THREE.CylinderGeometry(0.034, 0.034, 0.17, 12), this.metal(0x56653f), 0, -0.02, -0.16);
+    this.add(new THREE.CylinderGeometry(0.0355, 0.0355, 0.022, 12), this.metal(0xd9b72b), 0, 0.01, -0.16);
+    this.add(new THREE.CylinderGeometry(0.02, 0.026, 0.03, 10), this.metal(0x2c3328), 0, 0.078, -0.16);
+    this.add(new THREE.TorusGeometry(0.016, 0.003, 6, 12).rotateX(Math.PI / 2), this.metal(0xc4c8cc), 0.03, 0.09, -0.16);
     this.buildHand(0.036, -0.075, -0.135);
   }
 

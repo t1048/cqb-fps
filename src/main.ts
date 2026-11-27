@@ -857,7 +857,7 @@ class App {
     this.pepper?.update(dt);
     this.tearGasEffect?.update(dt);
     this.fortify?.update(dt);
-    const viewStyle = this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
+    const viewStyle = this.flashbang.equipped ? this.flashbang.weapon.id : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
     this.viewModel.root.visible = !this.optiwand?.equipped;
     const reloadP = this.flashbang.equipped ? null : this.weapons.reloadProgress;
