@@ -170,6 +170,7 @@ export function createHeadlessInput(): InputManager {
     isPointerLocked: false,
     isOrderMenuOpen: false,
     wasPressed: (k: string) => pressed.has(k),
+    wasMousePressed: () => false,
     isDown: (k: string) => down.has(k),
     isMouseDown: () => false,
     consumeWheel: () => 0,

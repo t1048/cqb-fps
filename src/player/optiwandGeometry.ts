@@ -306,3 +306,53 @@ export function contactCalloutText(
   const [ja, en] = contactCallout(armed, unarmed, civilians);
   return t(ja, en);
 }
+
+/**
+ * 左クリック長押しで展開したときのカメラ種別。
+ * しゃがみ姿勢で、狙っているドアが隙間として使える（距離・開度）ときだけドア下、それ以外は前方（角越し）。
+ */
+export function chooseWandViewMode(
+  crouching: boolean,
+  aimedDoor: WandDoor | null,
+  eye: { x: number; z: number },
+  cfg: OptiwandConfig,
+): 'door' | 'free' {
+  return crouching && aimedDoor !== null && doorEligible(aimedDoor, eye, cfg) ? 'door' : 'free';
+}
+
+/** 前方（角越し）カメラの首振り: 展開開始時の向きを基準に、マウス移動量で相対的に振る。 */
+export class FreeLook {
+  private baseYaw = 0;
+  private basePitch = 0;
+  private yawOff = 0;
+  private pitchOff = 0;
+
+  constructor(
+    private readonly yawLimitRad: number,
+    private readonly pitchMinRad: number,
+    private readonly pitchMaxRad: number,
+  ) {}
+
+  /** 展開開始時のプレイヤーの向きを記録して首振りを 0 に戻す */
+  start(yaw: number, pitch: number): void {
+    this.baseYaw = yaw;
+    this.basePitch = pitch;
+    this.yawOff = 0;
+    this.pitchOff = 0;
+  }
+
+  /** dx/dy はマウス移動量（rad 換算済み・右/下が正）。 */
+  pan(dx: number, dy: number): void {
+    this.yawOff = Math.max(-this.yawLimitRad, Math.min(this.yawLimitRad, this.yawOff - dx));
+    const pitch = Math.max(this.pitchMinRad, Math.min(this.pitchMaxRad, this.basePitch + this.pitchOff - dy));
+    this.pitchOff = pitch - this.basePitch;
+  }
+
+  get yaw(): number {
+    return this.baseYaw + this.yawOff;
+  }
+
+  get pitch(): number {
+    return Math.max(this.pitchMinRad, Math.min(this.pitchMaxRad, this.basePitch + this.pitchOff));
+  }
+}

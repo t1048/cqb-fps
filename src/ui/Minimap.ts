@@ -107,6 +107,14 @@ export interface FloorPlanContact {
   kind: 'threat' | 'civilian' | 'unarmed';
 }
 
+/** 人質処刑の脅迫中に人質の位置で脈打つ警告（progress 0〜1 でカウントダウン） */
+export interface FloorPlanPulse {
+  x: number;
+  y: number;
+  z: number;
+  progress: number;
+}
+
 export interface DrawFloorPlanOptions {
   coverage?: readonly Cell[];
   /** 論理描画幅(px)。省略時は canvas.width */
@@ -129,6 +137,9 @@ export interface DrawFloorPlanOptions {
   waypoints?: readonly FloorPlanWaypoint[];
   /** スカウト（オプティワンド/ミラー）で確認した接触マーカー */
   contacts?: readonly FloorPlanContact[];
+  /** 警告パルス（人質処刑の脅迫）。time は点滅用の秒 */
+  pulses?: readonly FloorPlanPulse[];
+  time?: number;
   /** ドア ID → リアルタイム開閉状態（省略時は静的定義から closed/locked を描画） */
   doors?: ReadonlyMap<string, FloorPlanDoorState>;
   /** コンパクト表示（ミニマップ用） */
@@ -620,6 +631,30 @@ function drawDynamicFloorPlan(
     }
   }
 
+  // 人質処刑の脅迫: 人質の部屋で赤い輪が脈打つ（カウントダウンが進むほど速く）
+  if (options.pulses) {
+    const time = options.time ?? 0;
+    for (const p of options.pulses) {
+      if (options.floorY !== undefined && Math.abs(p.y - options.floorY) > 1.4) continue;
+      const px = toX(p.x);
+      const py = toY(p.z);
+      const speed = 1.4 + p.progress * 3.2;
+      const k = (time * speed) % 1;
+      const r0 = compact ? 5 : 7;
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,60,60,${(1 - k) * 0.95})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(px, py, r0 + k * (compact ? 14 : 22), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#ff3b3b';
+      ctx.beginPath();
+      ctx.arc(px, py, compact ? 3 : 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   // 隊員マーカー
   if (options.allies) {
     for (const ally of options.allies) {
@@ -765,6 +800,7 @@ export class Minimap {
     private readonly getAllies?: () => readonly FloorPlanAllyState[],
     private readonly getWaypoints?: () => readonly FloorPlanWaypoint[],
     private readonly getContacts?: () => readonly FloorPlanContact[],
+    private readonly getPulses?: () => readonly FloorPlanPulse[],
   ) {
     this.floorLevels = collectFloorLevels(map);
 
@@ -951,6 +987,8 @@ export class Minimap {
       allies: this.getAllies?.(),
       waypoints: this.getWaypoints?.(),
       contacts: this.getContacts?.(),
+      pulses: this.getPulses?.(),
+      time: performance.now() / 1000,
       player: this.playerState,
     });
     ctx.restore();

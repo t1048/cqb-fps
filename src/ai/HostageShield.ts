@@ -101,10 +101,10 @@ export class HostageShieldBehavior {
   }
 
   /** 盾にできる最寄りの民間人（生存・未保持・未保護・近距離・直進路あり）。 */
-  findCandidate(): ShieldHostage | null {
+  findCandidate(range: number = this.p.civilianRange): ShieldHostage | null {
     if (!this.ctx.civilians) return null;
     let best: ShieldHostage | null = null;
-    let bestD = this.p.civilianRange;
+    let bestD = range;
     for (const c of this.ctx.civilians()) {
       if (!c.canBeShielded) continue;
       const d = Math.hypot(c.body.px - this.body.px, c.body.pz - this.body.pz);

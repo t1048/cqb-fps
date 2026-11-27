@@ -172,6 +172,8 @@ const ORDER_EN: Record<string, string> = {
   open_hold: 'Open & Hold',
   restrain: 'Restrain / Secure',
   mirror: 'Mirror Under Door',
+  check: 'Check Door',
+  disarm: 'Disarm Trap',
 };
 
 export function tOrderLabel(order: string, fallback: string): string {
@@ -200,6 +202,7 @@ const ROE_EN: Record<string, string> = {
   friendlyFire: 'Friendly Fire',
   allyDown: 'Officer Down',
   playerInjury: 'Player Wounded',
+  civilianGassed: 'Civilian Gassed',
 };
 
 export function tRoeLabel(key: string, fallback: string): string {

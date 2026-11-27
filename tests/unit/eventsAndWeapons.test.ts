@@ -85,6 +85,7 @@ function makeMockInput() {
       mouseDown = v;
     },
     isMouseDown: () => mouseDown,
+    wasMousePressed: () => false,
     wasPressed: (action: string) => {
       if (pressed.has(action)) {
         pressed.delete(action);

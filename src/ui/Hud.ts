@@ -56,6 +56,12 @@ const STYLE = `
 .cqb-hud .interact{left:50%;top:66%;transform:translateX(-50%);font-size:14px;background:rgba(0,0,0,.62);display:none}
 .cqb-hud .mission-hint{left:50%;top:16px;transform:translateX(-50%);font-size:14px;font-weight:bold;padding:8px 16px;display:none;max-width:calc(100vw - 580px);text-align:center}
 .cqb-hud .lean{position:absolute;top:50%;font-size:22px;opacity:.9}
+.cqb-hud .squad-gear{font-size:11px;color:#c9d6e3;margin-top:4px;border-top:1px solid rgba(110,145,180,.2);padding-top:4px;letter-spacing:.02em}
+.cqb-hud .squad-gear b{color:#f2c14e}
+.cqb-hud .squad-gear .out{color:#ff7b7b}
+.cqb-hud .alert-wrap{margin-top:4px;font-size:10px;color:#9fb3c8}
+.cqb-hud .alert-track{height:4px;margin-top:2px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
+.cqb-hud .alert-fill{height:100%;width:0;border-radius:2px;transition:width .25s,background .25s}
 .cqb-hud .squad-hint{font-size:11px;color:#93adc8;margin-top:4px;border-top:1px solid rgba(110,145,180,.2);padding-top:4px}
 .cqb-hud .top-right{position:absolute;top:12px;right:16px;display:flex;flex-direction:column;align-items:flex-end;gap:8px;width:276px;pointer-events:none}
 .cqb-hud .obj-panel{width:100%;box-sizing:border-box;padding:9px 11px;background:rgba(10,16,24,.84);border:1px solid rgba(110,145,180,.42);border-radius:6px;display:none}
@@ -218,6 +224,14 @@ export class Hud {
   private woundClock = 0;
   /** 手持ち装備の名前を差し替える外部ソース（オプティワンド展開中は name を返す） */
   toolLabel: (() => string | null) | null = null;
+  /** 容疑者の警戒度（SWAT モードのみ）。value 0〜100、tier 0〜4、threat=人質処刑の脅迫中 */
+  alertProvider: (() => { value: number; tier: number; threat: boolean } | null) | null = null;
+  private readonly gearEl = document.createElement('div');
+  private readonly alertWrapEl = document.createElement('div');
+  private readonly alertLabelEl = document.createElement('div');
+  private readonly alertFillEl = document.createElement('div');
+  private lastGearKey = '';
+  private lastAlertKey = '';
   private readonly hpTextEl = document.createElement('span');
   private readonly hpFillEl = document.createElement('div');
   private readonly stanceEl = document.createElement('span');
@@ -319,7 +333,16 @@ export class Hud {
     rHead.append(this.rosterTitleEl, rBadges);
     this.rosterLookEl.className = 'squad-hint';
     this.rosterLookEl.style.display = 'none';
-    this.rosterEl.append(rHead, this.rosterListEl, this.rosterLookEl);
+    this.gearEl.className = 'squad-gear';
+    this.gearEl.style.display = 'none';
+    this.alertWrapEl.className = 'alert-wrap';
+    this.alertWrapEl.style.display = 'none';
+    const alertTrack = document.createElement('div');
+    alertTrack.className = 'alert-track';
+    this.alertFillEl.className = 'alert-fill';
+    alertTrack.appendChild(this.alertFillEl);
+    this.alertWrapEl.append(this.alertLabelEl, alertTrack);
+    this.rosterEl.append(rHead, this.rosterListEl, this.rosterLookEl, this.gearEl, this.alertWrapEl);
 
     const playerBar = document.createElement('div');
     playerBar.className = 'player-bar';
@@ -418,13 +441,13 @@ export class Hud {
 
   private applyStaticLabels(): void {
     this.rosterTitleEl.textContent = t(
-      'SQUAD [右クリック指示 / Z簡易 / X集合 / 4ワンド]',
-      'SQUAD [RMB Order / Z Quick / X Fall In / 4 Wand]',
+      'SQUAD [右クリック指示 / Z簡易 / X集合 / 中クリック・4ワンド]',
+      'SQUAD [RMB Order / Z Quick / X Fall In / MMB·4 Wand]',
     );
     this.objTitleEl.textContent = t('作戦目標 / OBJECTIVES', 'OBJECTIVES');
     this.promptEl.textContent = t(
-      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4装備 / ESCポーズ',
-      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-4 Gear / ESC Pause',
+      'クリックで開始 — WASD移動 / Shift静音 / C屈み(切替) / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4・中クリック装備 / ESCポーズ',
+      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch (Toggle) / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-4 / MMB Gear / ESC Pause',
     );
     if (this.motifChipEl && this.motifInfo) {
       const m = this.motifInfo;
@@ -488,6 +511,38 @@ export class Hud {
     return ref;
   }
 
+  /** 分隊の閃光弾・ガスの残数と、容疑者の警戒度（SWAT モード）を更新する。 */
+  private updateGearAndAlert(): void {
+    const gear = this.squad?.getGear();
+    if (gear) {
+      const key = `${getLocale()}|${gear.flash}|${gear.gas}`;
+      if (key !== this.lastGearKey) {
+        this.lastGearKey = key;
+        const part = (label: string, n: number, max: number): string =>
+          `${label} <b class="${n <= 0 ? 'out' : ''}">${n}</b>/${max}`;
+        this.gearEl.innerHTML = `${part(t('閃光', 'Flash'), gear.flash, gear.flashMax)}　${part(t('ガス', 'Gas'), gear.gas, gear.gasMax)}`;
+        this.gearEl.style.display = 'block';
+      }
+    }
+    const al = this.alertProvider?.() ?? null;
+    if (!al) {
+      if (this.lastAlertKey !== '') {
+        this.lastAlertKey = '';
+        this.alertWrapEl.style.display = 'none';
+      }
+      return;
+    }
+    const pct = Math.round(al.value);
+    const key = `${getLocale()}|${pct}|${al.tier}|${al.threat ? 1 : 0}`;
+    if (key === this.lastAlertKey) return;
+    this.lastAlertKey = key;
+    const tierLabel = ['', t('警戒', 'Wary'), t('臨戦', 'Ready'), t('危険', 'Danger'), t('極限', 'Critical')][al.tier] ?? '';
+    this.alertLabelEl.textContent = `${t('容疑者の警戒', 'Suspect Alert')} ${pct}${tierLabel ? ` · ${tierLabel}` : ''}${al.threat ? ` · ${t('人質が危険', 'HOSTAGE AT RISK')}` : ''}`;
+    this.alertFillEl.style.width = `${pct}%`;
+    this.alertFillEl.style.background = al.tier >= 4 ? '#ff4d4d' : al.tier >= 3 ? '#ff8a45' : al.tier >= 2 ? '#f2c14e' : al.tier >= 1 ? '#c8d76a' : '#5cd67d';
+    this.alertWrapEl.style.display = 'block';
+  }
+
   update(rawDt: number): void {
     if (this.disposed) return;
     const dt = Math.min(rawDt, MAX_DT);
@@ -548,7 +603,7 @@ export class Hud {
       this.hpFillEl.style.width = `${pct}%`;
       this.hpFillEl.style.background = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
     }
-    const stance = this.player.isCrouching ? 'CROUCH' : 'STAND';
+    const stance = this.player.isCrouching ? 'CROUCH [C]' : 'STAND [C]';
     const mode = this.player.moveMode === 'quiet' ? 'QUIET' : this.player.moveMode === 'run' ? 'RUN' : 'CROUCH-WALK';
     const statusText = `${stance} / ${mode}`;
     if (statusText !== this.lastStatusText) {
@@ -608,6 +663,7 @@ export class Hud {
             ref.stat.textContent = statText;
           }
         }
+        this.updateGearAndAlert();
         const lookText = this.squad.hudText();
         if (lookText !== this.lastLookText) {
           if ((lookText.length > 0) !== (this.lastLookText.length > 0)) {

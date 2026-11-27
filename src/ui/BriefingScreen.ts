@@ -328,7 +328,7 @@ export class BriefingScreen {
       'display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font:14px/1.5 sans-serif;color:#c7d6e6';
     const controls: [string, string][] = suspectMode
       ? [
-          ['WASD / Shift / C', t('移動 / 静音（足音小） / しゃがみ（発見されにくい）', 'Move / Silent Walk / Crouch (Harder to spot)')],
+          ['WASD / Shift / C', t('移動 / 静音（足音小） / しゃがみ切替（発見されにくい）', 'Move / Silent Walk / Toggle Crouch (Harder to spot)')],
           ['Q / E', t('左右リーン', 'Lean Left / Right')],
           [t('左クリック / R', 'LMB / R'), t('射撃（改造フルオート拳銃） / リロード（予備弾は有限）', 'Fire (Auto Pistol) / Reload (Limited mags)')],
           [t('F / F 長押し', 'F / Hold F'), t('ドア開閉 / 閉じたドアを施錠・解錠', 'Open/Close Door / Lock or Unlock Closed Door')],
@@ -338,7 +338,7 @@ export class BriefingScreen {
           ['M / ESC', t('マップ切替 / ポーズ・設定', 'Toggle Map / Pause & Settings')],
         ]
       : [
-          ['WASD / Shift / C', t('移動 / 静音 / しゃがみ（Ctrl は不使用）', 'Move / Silent Walk / Crouch (No Ctrl)')],
+          ['WASD / Shift / C', t('移動 / 静音 / しゃがみ切替（Ctrl は不使用）', 'Move / Silent Walk / Toggle Crouch (No Ctrl)')],
           ['Q / E', t('左右リーン', 'Lean Left / Right')],
           [t('左 / 右クリック', 'LMB / RMB'), t('射撃（高精度） / 部隊指揮メニュー（保持）', 'Fire / Squad Command Menu (Hold)')],
           ['Z / X / T', t('クイック指示 / 隊員集合 / 指揮対象切替', 'Quick Order / Fall In / Switch Element')],
@@ -346,6 +346,7 @@ export class BriefingScreen {
           ['Space', t('警告コール（投降勧告）', 'Compliance Shout (Warning Call)')],
           [t('F / ホイール / G', 'F / Wheel / G'), t('開閉・拘束 / 段階開閉 / ブリーチ', 'Interact & Arrest / Peek Door / Breach')],
           ['1 / 2 / 3', t('主武器 / 非致死 / フラッシュ', 'Primary / Less-Lethal / Flashbang')],
+          [t('中クリック / 4', 'MMB / 4'), t('オプティワンド構え⇔武器（左クリック長押しでカメラ、しゃがみ+ドア前でドア下）', 'Optiwand ⇔ Weapon (Hold LMB: camera / Crouch at door: under-door)')],
           ['M / ESC', t('マップ切替 / ポーズ・設定', 'Toggle Map / Pause & Settings')],
         ];
     for (const [k, desc] of controls) {

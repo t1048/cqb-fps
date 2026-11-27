@@ -585,6 +585,40 @@ export const MIRROR_START: readonly RadioLine[] = [
   ['ドアの下から中を見る。', 'Checking under the door.'],
 ];
 
+/** ドアチェック（施錠・トラップ確認）の開始 */
+export const CHECK_START: readonly RadioLine[] = [
+  ['ドアを確認する。ワイヤーと鍵だ。', 'Checking the door. Wire and lock.'],
+  ['ノブとドア枠を見る。少し待て。', 'Checking the knob and frame. Hold.'],
+  ['ドア際で確認する。罠がないか見る。', 'Going to the door edge. Checking for traps.'],
+];
+
+/** ドアチェックの結果（施錠 × トラップ）。{lock}/{trap} は日本語 / lockEn/trapEn は英語 */
+export const CHECK_RESULT: readonly RadioLine[] = [
+  ['{lock}。{trap}。', '{lockEn}. {trapEn}.'],
+  ['確認した。{lock}、{trap}。', 'Checked. {lockEn}, {trapEn}.'],
+];
+
+export function checkResultLine(locked: boolean, trapFound: boolean): RadioLine {
+  return pickRadio(CHECK_RESULT, {
+    lock: locked ? '施錠' : '未施錠',
+    lockEn: locked ? 'Door is locked' : 'Door is unlocked',
+    trap: trapFound ? 'トラップ有り' : 'トラップ無し',
+    trapEn: trapFound ? 'Trap detected' : 'No trap',
+  });
+}
+
+/** トラップ解除の開始（確認済み） */
+export const DISARM_START: readonly RadioLine[] = [
+  ['トラップを解除する。全員離れていろ。', 'Disarming the trap. Everyone back.'],
+  ['ワイヤーを外す。静かに。', 'Pulling the wire. Quiet.'],
+];
+
+/** CS ガス投入後、全員がマスクを着けて待つ */
+export const GAS_MASK: readonly RadioLine[] = [
+  ['ガスを入れた。マスク装着、室内に満ちるのを待つ。', 'Gas is in. Masks on, letting it fill.'],
+  ['CS投入。マスクを着けて待て。', 'CS deployed. Mask up and wait.'],
+];
+
 export const RESCAN = DRONE_RESCAN;
 
 export {

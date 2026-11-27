@@ -12,12 +12,17 @@ import { Suspect, type GasSample } from './Suspect';
 import { Perception, type PerceptionTarget } from './Perception';
 import { MoraleSystem } from './Morale';
 import { AIDebugLabel } from '../ui/AIDebugLabel';
+import type { AlertView } from './SuspectAlert';
 import type { DoorSystem } from '../world/Door';
 import type { TextureLibrary } from '../world/Materials';
 import type { StairMark } from '../world/Walk';
 import { evaluateC2BlastCone } from './SwatTactics';
 import type { RestrainTarget } from './restrain';
 import { SWAT_C2_BLAST_HALF_ANGLE_DEG, SWAT_C2_BLAST_RADIUS, SWAT_C2_MAX_DAMAGE } from './SwatProfile';
+
+/** 民間人が「ガスを浴びた」とみなす濃度と累積秒 */
+const CIVILIAN_GAS_DENSITY = 0.2;
+const CIVILIAN_GAS_SEC = 1.0;
 
 /** CS ガス濃度サンプリングの軽量構造型（TearGas が構造的に満たす） */
 export interface GasField {
@@ -59,6 +64,10 @@ export class EntityManager {
   /** 容疑者モード: 残した容疑者 NPC はプレイヤーの味方で、SWAT を撃つ */
   private readonly friendlySuspects: boolean;
   private tearGas: GasField | null = null;
+  /** 容疑者側の警戒度（SWAT モードのみ。attachAlert で接続） */
+  private alert: AlertView | null = null;
+  /** 民間人ごとの CS ガス曝露の累積（秒）。一定を超えると行動不能 + 減点 */
+  private readonly civilianGasSec = new Map<string, number>();
   private readonly gasProbe = new THREE.Vector3();
   private readonly chestTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly recentGasClouds: { pos: Vec3; radius: number; remainingSec: number }[] = [];
@@ -114,6 +123,7 @@ export class EntityManager {
                 bounds: nav?.bounds,
                 stairs: nav?.stairs,
                 rooms,
+                alert: () => this.alert,
               }
             : null,
           textures,
@@ -202,6 +212,11 @@ export class EntityManager {
         this.recentGasClouds.push({ pos: { x: e.pos.x, y: e.pos.y, z: e.pos.z }, radius: e.radius, remainingSec: 18 });
       }),
     );
+  }
+
+  /** 容疑者側の警戒度を接続する（SWAT モード）。容疑者 AI が巡回・待ち伏せ・人質盾などに反映する。 */
+  attachAlert(alert: AlertView | null): void {
+    this.alert = alert;
   }
 
   /** CS 催涙ガスシステムを接続する（null で解除） */
@@ -440,7 +455,10 @@ export class EntityManager {
       if (c.remainingSec <= 0) this.recentGasClouds.splice(i, 1);
     }
     this.perception?.update(dt);
-    for (const c of this.civilians.values()) c.update(dt);
+    for (const c of this.civilians.values()) {
+      c.update(dt);
+      if (this.tearGas && !this.friendlySuspects && c.alive && !c.evacuated && !c.gassed) this.sampleCivilianGas(c, dt);
+    }
     const hasGas = this.tearGas !== null;
     for (const s of this.suspects.values()) {
       const gas =
@@ -454,6 +472,19 @@ export class EntityManager {
       label.sprite.position.set(s.body.px, s.body.footY + s.body.height + 0.35, s.body.pz);
       label.set(`${s.debugState} M:${Math.round(s.morale.value)}`, s.alive ? '#ffffff' : '#999999');
     }
+  }
+
+  /** 民間人の CS ガス曝露。濃い雲の中に一定時間いると行動不能になり、civilianGassed を発行する（RoE 減点）。 */
+  private sampleCivilianGas(c: Civilian, dt: number): void {
+    const density = this.tearGas!.exposureAt(this.gasProbe.set(c.body.px, c.body.footY + 1.1, c.body.pz));
+    const prev = this.civilianGasSec.get(c.id) ?? 0;
+    if (density < CIVILIAN_GAS_DENSITY) {
+      if (prev > 0) this.civilianGasSec.set(c.id, Math.max(0, prev - dt * 0.5));
+      return;
+    }
+    const next = prev + dt;
+    this.civilianGasSec.set(c.id, next);
+    if (next >= CIVILIAN_GAS_SEC) c.onGassed();
   }
 
   private applyWarning(pos: Vec3, dir: Vec3): void {

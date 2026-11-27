@@ -588,6 +588,7 @@ describe('Tier 1 — M2 Tactical Overhaul (F6–F9)', () => {
       const holdInput = {
         isPointerLocked: true,
         isOrderMenuOpen: false,
+        wasMousePressed: () => false,
         wasPressed: (k: string) => {
           if (k === 'interact' && firstPress) {
             firstPress = false;

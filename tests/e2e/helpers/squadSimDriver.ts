@@ -40,6 +40,7 @@ import { EntityManager } from '../../../src/ai/EntityManager';
 import { SquadSystem } from '../../../src/ai/Squad';
 import { RoE } from '../../../src/rules/RoE';
 import { Door, type DoorSystem } from '../../../src/world/Door';
+import { DoorTrapSystem } from '../../../src/world/DoorTraps';
 import { WorldBuilder, type Collider } from '../../../src/world/WorldBuilder';
 import type { SwatSpawn } from '../../../src/modes/SwatTeam';
 import { installDomShim, restoreDomShim, type DomShimHandle, type FakeElement } from './domShim';
@@ -287,6 +288,11 @@ export class AimableDoorSystem {
     return this.doors.find((d) => d.id === id);
   }
 
+  /** DoorSystem 互換（DoorTrapSystem が参照） */
+  getDoor(id: string): Door | undefined {
+    return this.findById(id);
+  }
+
   update(dt: number, playerX = 999, playerZ = 999, playerRadius = 0.35, playerY = 0): void {
     for (const d of this.doors) d.update(dt, playerX, playerZ, playerRadius, playerY);
   }
@@ -366,6 +372,7 @@ export function createSquadHeadlessInput(): SquadHeadlessInput {
     isOrderMenuOpen: false,
     suppressSquadShortcuts: false,
     onOrderMenu: undefined as ((event: OrderMenuEvent, value: number) => void) | undefined,
+    wasMousePressed: () => false,
     wasPressed(k: string) {
       return pressed.has(k);
     },
@@ -501,6 +508,8 @@ export interface SquadHarnessOptions {
   playerYawRad?: number;
   squadCfgOverrides?: Partial<SquadConfig>;
   urlSearch?: string;
+  /** SWAT モードのドア・ブービートラップを仕掛けるドア ID */
+  trapDoorIds?: readonly string[];
 }
 
 export interface SquadHarness {
@@ -523,6 +532,8 @@ export interface SquadHarness {
   flashbang: Flashbang;
   tearGas: TearGas;
   squad: SquadSystemWithParity;
+  /** ドアのブービートラップ（trapDoorIds 指定時のみ） */
+  traps: DoorTrapSystem | null;
   selectElement(el: SquadElement): void;
   issueOrder(
     order: ParitySquadOrder,
@@ -652,10 +663,31 @@ export function createSquadHarness(opts: SquadHarnessOptions): SquadHarness {
       flashbang?: Flashbang;
       tearGas?: TearGas;
       windows?: readonly WindowDef[];
+      traps?: DoorTrapSystem | null;
     },
   ) => SquadSystemWithParity;
 
   const SquadCtor = SquadSystem as unknown as SquadCtorWithParity;
+  let squadRef: SquadSystemWithParity | null = null;
+  const traps =
+    opts.trapDoorIds && opts.trapDoorIds.length > 0
+      ? new DoorTrapSystem({
+          doors: doors as unknown as DoorSystem,
+          bus,
+          colliders,
+          cfg: squadCfg.doorTrap,
+          swatPositions: () => [
+            { x: player.position.x, z: player.position.z, footY: player.position.y },
+            ...(squadRef?.allies ?? []).filter((a) => !a.down).map((a) => ({ x: a.body.px, z: a.body.pz, footY: a.body.footY })),
+          ],
+          suspectPositions: () => [],
+          victims: () => [],
+        })
+      : null;
+  for (const id of opts.trapDoorIds ?? []) {
+    const d = doors.getDoor(id);
+    if (d) traps?.place(d);
+  }
   const allyDefs = opts.allies ?? (map.allies && map.allies.length > 0 ? map.allies : defaultAllies(4));
 
   const squad = new SquadCtor(
@@ -678,8 +710,10 @@ export function createSquadHarness(opts: SquadHarnessOptions): SquadHarness {
       flashbang,
       tearGas,
       windows: map.windows,
+      traps,
     },
   );
+  squadRef = squad;
 
   entities.attachSquad(squad, squadCfg.presenceBonusPerAlly);
 
@@ -763,6 +797,7 @@ export function createSquadHarness(opts: SquadHarnessOptions): SquadHarness {
     flashbang,
     tearGas,
     squad,
+    traps,
     selectElement,
     issueOrder,
     step(totalSec: number, dt = 0.05) {
@@ -774,6 +809,7 @@ export function createSquadHarness(opts: SquadHarnessOptions): SquadHarness {
           flashbang.update(stepDt);
           tearGas.update(stepDt);
           entities.update(stepDt);
+          traps?.update(stepDt);
           squad.update(stepDt);
           roe.update(stepDt);
           subtitle.update(stepDt);
@@ -784,6 +820,7 @@ export function createSquadHarness(opts: SquadHarnessOptions): SquadHarness {
     },
     dispose() {
       squad.dispose();
+      traps?.dispose();
       entities.dispose();
       roe.dispose();
       audioBridge.dispose();

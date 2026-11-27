@@ -148,6 +148,10 @@ const DEFAULT_SQUAD_CFG: SquadConfig = {
   warnStates: [SuspectState.BARRICADED, SuspectState.ALERT, SuspectState.CONFRONTATION, SuspectState.HESITATE],
   hostileStates: [SuspectState.ENGAGE, SuspectState.HOSTAGE_SHIELD],
   elementLabels: { gold: 'GOLD', alpha: 'ALPHA', bravo: 'BRAVO' },
+  inventory: { flashbang: 4, gas: 3 },
+  gasWaitSec: 1.65,
+  doorCheck: { durationSec: 1.7, detectChance: 0.9, spotChance: 0.35 },
+  doorTrap: { maxCount: 2, baseChance: 0.55, alertBonusAt: 40, alertBonus: 1, minStartDist: 7, disarmSec: 5, failChance: 0.12, blastRadius: 4.2, blastDamage: 85, triggerDist: 3 },
   orderLabels: {
     follow: '追従',
     hold: '待機',
@@ -300,6 +304,7 @@ function makeStubInput(): InputManager {
     isOrderMenuOpen: false,
     onOrderMenu: undefined,
     wasPressed: () => false,
+    wasMousePressed: () => false,
     isDown: () => false,
   } as unknown as InputManager;
 }

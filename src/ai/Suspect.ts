@@ -16,6 +16,7 @@ import {
   type XZ,
 } from './EngageBehavior';
 import { blockedAtFiltered } from './SquadRoute';
+import { complianceMulOf, type AlertTier } from './SuspectAlert';
 import {
   AMBUSH_TRIGGER_KINDS,
   ambushProbability,
@@ -119,6 +120,16 @@ export class Suspect implements HitTarget {
   private ambushReady = false;
   private ambushElapsed = 0;
   private ambushRollCd = 0;
+  /** 警告コールを受けた回数（人質処刑の脅迫が「警告で従ったか」を判定する） */
+  warnCount = 0;
+  /** 警戒度による遮蔽への退避（crouch で隠れる）: 目標 / 次の判定までの秒 / 到着済みか */
+  private hideCover: XZ | null = null;
+  private hideCd = 3;
+  private hiding = false;
+  /** 警戒度で自発的に人質を掴んだか（脅威が見えないまま続いたら解放して ALERT へ戻る） */
+  private proactiveShield = false;
+  private proactiveIdle = 0;
+  private alertShieldCd = 0;
 
   constructor(
     def: EntityDef,
@@ -162,6 +173,9 @@ export class Suspect implements HitTarget {
             this.patrolTarget = null;
             this.patrolElapsed = 0;
             this.nav?.reset();
+            this.hideCover = null;
+            this.hiding = false;
+            if (this.blindLeft <= 0) this.body.setPose('stand');
             if (this.mobility) this.patrolTimer = this.nextPatrolInterval();
           },
           update: (dt) => this.updateBarricaded(dt),
@@ -169,6 +183,8 @@ export class Suspect implements HitTarget {
             this.patrolTarget = null;
             this.patrolElapsed = 0;
             this.nav?.reset();
+            this.hideCover = null;
+            this.hiding = false;
           },
         },
         [SuspectState.ALERT]: {
@@ -530,7 +546,11 @@ export class Suspect implements HitTarget {
     if (this.alive) this.warned = true;
     if (!this.managed || this.warningLeft > 0) return;
     this.warningLeft = this.warningCooldown;
-    this.morale.apply('warningCall', pressureScale);
+    this.warnCount++;
+    // 警戒度が高いほど警告に従いにくい（士気低下が小さくなる）
+    const av = this.ctx?.alert?.() ?? null;
+    const alertMul = av ? complianceMulOf(av.cfg, av.tier) : 1;
+    this.morale.apply('warningCall', pressureScale * alertMul);
     this.known = { x: pos.x, y: resolveFloorY(pos, this.ctx?.rooms, 'voice'), z: pos.z };
     this.body.faceToward(pos.x, pos.z);
     if (this.state === SuspectState.BARRICADED || this.state === SuspectState.ALERT) {
@@ -558,7 +578,109 @@ export class Suspect implements HitTarget {
   private nextPatrolInterval(): number {
     const m = this.mobility;
     if (!m) return 15;
-    return m.patrolIntervalMin + Math.random() * Math.max(0, m.patrolIntervalMax - m.patrolIntervalMin);
+    const base = m.patrolIntervalMin + Math.random() * Math.max(0, m.patrolIntervalMax - m.patrolIntervalMin);
+    return this.alertTier() >= 1 ? base * (this.ctx?.alert?.()?.cfg.effects.patrolIntervalMul ?? 1) : base;
+  }
+
+  /** 現在の警戒度段階（SWAT モード以外・未接続は 0） */
+  private alertTier(): AlertTier {
+    return this.ctx?.alert?.()?.tier ?? 0;
+  }
+
+  /** 警戒度が ambush 段階以上のとき、遮蔽の陰へ退避して crouch で隠れる（待ち伏せをしていない容疑者）。処理したら true。 */
+  private updateAlertHide(dt: number): boolean {
+    const av = this.ctx?.alert?.() ?? null;
+    if (!av || !this.ctx || !this.combat || !this.managed) return false;
+    const tier = av.tier;
+    if (tier < 2 || this.state !== SuspectState.BARRICADED || this.blindLeft > 0) {
+      if (this.hiding || this.hideCover) this.stopHiding();
+      return false;
+    }
+    if (this.hideCover) {
+      const d = Math.hypot(this.hideCover.x - this.body.px, this.hideCover.z - this.body.pz);
+      if (d > 0.14) {
+        stepToward(this.body, this.ctx.colliders, this.hideCover.x, this.hideCover.z, this.combat.moveSpeed * 0.75 * dt);
+        this.body.faceToward(this.hideCover.x, this.hideCover.z);
+        return true;
+      }
+      if (!this.hiding) {
+        this.hiding = true;
+        this.body.setPose('crouch');
+        this.body.setReadyPose('high');
+      }
+      return true;
+    }
+    this.hideCd -= dt;
+    if (this.hideCd > 0) return false;
+    this.hideCd = 8 + Math.random() * 6;
+    if (this.ambushSpot || Math.random() >= av.cfg.effects.hideChance) return false;
+    // 入口（ドア）の方向を脅威とみなし、その視線を切れる遮蔽の陰を探す
+    const doors = this.ctx.doors?.doors;
+    const room = this.currentRoom();
+    if (!doors || !room) return false;
+    let door: { x: number; z: number } | null = null;
+    let bd = Infinity;
+    for (const dr of doors) {
+      if (Math.abs(dr.sillY - this.body.footY) > 0.75) continue;
+      const dd = Math.hypot(dr.centerX - this.body.px, dr.centerZ - this.body.pz);
+      if (dd < bd && dd < 14) {
+        bd = dd;
+        door = { x: dr.centerX, z: dr.centerZ };
+      }
+    }
+    if (!door) return false;
+    const cover = findAlertCover(this.ctx.colliders, this.body.px, this.body.pz, this.body.footY, door, 6.5);
+    if (!cover) return false;
+    this.hideCover = cover;
+    this.hiding = false;
+    this.nav?.reset();
+    return true;
+  }
+
+  private stopHiding(): void {
+    this.hideCover = null;
+    this.hiding = false;
+    if (this.managed && this.state !== SuspectState.HESITATE && this.blindLeft <= 0 && !this.ambushSpot) this.body.setPose('stand');
+  }
+
+  /** 警戒度が shield 段階以上のとき、近くの民間人を自発的に人質（盾）にする。成功したら true。 */
+  private tryAlertShield(dt: number): boolean {
+    const av = this.ctx?.alert?.() ?? null;
+    if (!av || !this.shield || !this.combat || !this.ctx) return false;
+    this.alertShieldCd = Math.max(0, this.alertShieldCd - dt);
+    if (av.tier < 3 || this.alertShieldCd > 0 || this.blindLeft > 0) return false;
+    if (this.state !== SuspectState.BARRICADED && this.state !== SuspectState.ALERT) return false;
+    if (this.morale.value < this.profile.thresholds.surrenderBelow) return false;
+    this.alertShieldCd = 2.5;
+    const civ = this.shield.findCandidate(av.cfg.effects.shieldRange);
+    if (!civ) return false;
+    this.stopHiding();
+    this.clearAmbush();
+    this.shield.begin(civ);
+    this.proactiveShield = true;
+    this.proactiveIdle = 0;
+    this.setState(SuspectState.HOSTAGE_SHIELD);
+    return true;
+  }
+
+  /** 警戒度が shield 段階以上のとき、人質のいる部屋へ向かう巡回目標（民間人の位置）を返す。 */
+  private pickHostageRoomPoint(): Vec3 | null {
+    const ctx = this.ctx;
+    if (!ctx?.civilians) return null;
+    const cur = this.currentRoom();
+    let best: Vec3 | null = null;
+    let bd = Infinity;
+    for (const c of ctx.civilians()) {
+      if (!c.canBeShielded) continue;
+      if (!this.mobility?.canUseStairs && Math.abs(c.body.footY - this.body.footY) > 0.65) continue;
+      if (cur && Math.abs((cur.floorY ?? 0) - c.body.footY) <= 0.65 && Math.abs(c.body.px - cur.x) <= cur.width / 2 && Math.abs(c.body.pz - cur.z) <= cur.depth / 2) continue;
+      const d = Math.hypot(c.body.px - this.body.px, c.body.pz - this.body.pz);
+      if (d < bd) {
+        bd = d;
+        best = { x: c.body.px, y: c.body.footY, z: c.body.pz };
+      }
+    }
+    return best;
   }
 
   private clearMobilityMovement(): void {
@@ -640,6 +762,11 @@ export class Suspect implements HitTarget {
   private updateBarricaded(dt: number): void {
     const mob = this.mobility;
     if (!mob || !this.combat || !this.nav || this.blindLeft > 0) return;
+    if (this.tryAlertShield(dt)) return;
+    if (this.updateAlertHide(dt)) {
+      this.patrolTarget = null;
+      return;
+    }
     if (mob.guardHostageRoom && this.hasUnsecuredCivilianInSameRoom()) {
       this.patrolTarget = null;
       return;
@@ -648,8 +775,14 @@ export class Suspect implements HitTarget {
       this.patrolTimer -= dt;
       if (this.patrolTimer > 0) return;
       this.patrolTimer = this.nextPatrolInterval();
-      if (Math.random() > mob.patrolChance) return;
-      const pt = this.pickPatrolPoint();
+      const av = this.ctx?.alert?.() ?? null;
+      const tier = av?.tier ?? 0;
+      const chance = Math.min(1, mob.patrolChance + (tier >= 1 && av ? av.cfg.effects.patrolChanceAdd : 0));
+      if (Math.random() > chance) return;
+      // 警戒度が高いと、人質のいる部屋へ向かう容疑者が出る
+      const hostagePt =
+        tier >= 3 && av && Math.random() < av.cfg.effects.hostageRoomChance ? this.pickHostageRoomPoint() : null;
+      const pt = hostagePt ?? this.pickPatrolPoint();
       if (!pt) return;
       this.patrolTarget = pt;
       this.patrolElapsed = 0;
@@ -727,7 +860,9 @@ export class Suspect implements HitTarget {
     if (dist > params.maxDist * 1.6) return false;
     // 乱数は 1 つの物音エピソードにつき一度だけ（足音ごとの再抽選で確率が上振れしない）
     this.ambushRollCd = 8;
-    if (Math.random() >= ambushProbability(params, this.profile.aggression)) return false;
+    const av = this.ctx.alert?.() ?? null;
+    const ambushMul = av && av.tier >= 2 ? av.cfg.effects.ambushChanceMul : 1;
+    if (Math.random() >= Math.min(1, ambushProbability(params, this.profile.aggression) * ambushMul)) return false;
 
     const cand: Doorway[] = doorwaysOfRoom(
       doors.map((d) => ({
@@ -797,6 +932,7 @@ export class Suspect implements HitTarget {
 
   private updateAlert(dt: number): void {
     if (this.ambushSpot && this.updateAmbush(dt)) return;
+    if (this.tryAlertShield(dt)) return;
     if (this.alertMoveTarget && this.combat && this.mobility && this.nav && this.blindLeft <= 0) {
       this.alertMoveElapsed += dt;
       const speedScale =
@@ -825,6 +961,8 @@ export class Suspect implements HitTarget {
         stepToward(this.body, this.ctx.colliders, this.alertCover.x, this.alertCover.z, this.combat.moveSpeed * 0.75 * dt);
       } else {
         this.alertCover = null;
+        // 警戒度が高いと、遮蔽の陰にしゃがんで隠れる
+        if (this.alertTier() >= 2) this.body.setPose('crouch');
       }
     }
     if (this.heardAt) {
@@ -967,6 +1105,17 @@ export class Suspect implements HitTarget {
   /** HOSTAGE_SHIELD 中。保持不能（民間人死亡/掴み失敗）なら ENGAGE（敵対）へ。 */
   private updateShield(dt: number): void {
     if (!this.shield || !this.combat) return;
+    if (this.proactiveShield) {
+      // 警戒度で自発的に掴んだ人質: 脅威が見えないまま警戒度が下がったら解放して警戒へ戻る
+      this.proactiveIdle = this.sees ? 0 : this.proactiveIdle + dt;
+      if (this.proactiveIdle > 12 && this.alertTier() < 3) {
+        this.proactiveShield = false;
+        this.shieldCd = this.profile.shield?.retrySec ?? 0;
+        this.setState(SuspectState.ALERT);
+        return;
+      }
+      if (this.sees) this.proactiveShield = false;
+    }
     if (this.shield.update(dt, this.known, this.combat.moveSpeed)) return;
     this.shieldCd = this.profile.shield?.retrySec ?? 0;
     this.setState(SuspectState.ENGAGE);
@@ -1091,7 +1240,11 @@ export class Suspect implements HitTarget {
         this.alertMoveElapsed = 0;
         this.alertCover = null;
         this.nav.reset();
-      } else if (dist <= mob.investigateMaxDist && Math.random() < mob.investigateChance) {
+      } else if (
+        dist <= mob.investigateMaxDist * (this.alertTier() >= 1 ? 1.3 : 1) &&
+        Math.random() <
+          Math.min(1, mob.investigateChance + (this.alertTier() >= 1 ? (this.ctx?.alert?.()?.cfg.effects.investigateAdd ?? 0) : 0))
+      ) {
         this.alertMoveTarget = target;
         this.alertMoveMode = 'investigate';
         this.alertMoveElapsed = 0;
