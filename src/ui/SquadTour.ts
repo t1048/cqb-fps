@@ -22,21 +22,21 @@ const STEP_COUNT = 3;
 function getStep(index: number): { title: string; body: string; sub?: string } {
   const steps: { title: string; body: string; sub?: string }[] = [
     {
-      title: t('仲間への指示は <kbd>Z</kbd> だけで OK', 'Just press <kbd>Z</kbd> to command your squad'),
+      title: t('仲間への指示は <kbd>Z</kbd>（まず確認が大事）', 'Command your squad with <kbd>Z</kbd> (recon first)'),
       body: t(
-        '見ている場所に合わせて、下の「Z : ○○」の指示を仲間が実行します。ドアに近づいて、ドアを見ながら <kbd>Z</kbd> を押してみよう。',
-        'Your squad executes the context action shown at the bottom ("Z : ..."). Walk up to a door, look at it, and press <kbd>Z</kbd>.',
+        '見ている場所に合わせて、下の「Z : ○○」の指示を仲間が実行します。ドアに近づいて、ドアを見ながら <kbd>Z</kbd> を押してみよう。未確認のドアでは仲間がミラーで確認してから突入します。',
+        'Your squad executes the context action shown at the bottom ("Z : ..."). Walk up to a door, look at it, and press <kbd>Z</kbd>. On unscouted doors your squad mirrors under the door first, then enters.',
       ),
       sub: t(
-        'ドアを見る → 整列・突入 ／ 床を見る → 移動 ／ 投降した容疑者を見る → 拘束',
-        'Look at door → Stack / Breach · Floor → Move · Surrendered suspect → Restrain',
+        '<kbd>4</kbd> オプティワンドで自分で確認すると、ミラーを省いて閃光突入などにすぐ移れます（ミラーは見落とすことも）',
+        'Scout yourself with the <kbd>4</kbd> Optiwand to skip the mirror and go straight to flash entry (the mirror can miss contacts)',
       ),
     },
     {
       title: t('いいね！ 続けて <kbd>Z</kbd> で次の行動', 'Nice! Press <kbd>Z</kbd> again for the next step'),
       body: t(
-        'ドアの前で整列したら、もう一度 <kbd>Z</kbd> で突入・クリアリング。迷ったら画面下の表示を見て <kbd>Z</kbd>。',
-        'Once stacked up at the door, press <kbd>Z</kbd> again to breach and clear. Check the bottom prompt whenever you are unsure.',
+        '確認中にもう一度 <kbd>Z</kbd> を押すと打ち切って素のクリアで突入しますが、待ち伏せされると大きな被害が出ます。',
+        'Pressing <kbd>Z</kbd> again mid-mirror skips it for a plain, unflashed entry, and ambushes hurt.',
       ),
     },
     {

@@ -23,6 +23,7 @@ const STYLE = `
 .cqb-hud .dot{position:absolute;left:50%;top:50%;width:2px;height:2px;margin:-1px;background:#7CFF7C}
 .cqb-hud .hit{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px;opacity:0;
   background:linear-gradient(45deg,transparent 45%,#fff 45%,#fff 55%,transparent 55%),linear-gradient(-45deg,transparent 45%,#fff 45%,#fff 55%,transparent 55%)}
+.cqb-hud .wound-vig{position:fixed;inset:0;pointer-events:none;opacity:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 38%,rgba(140,10,10,.55) 100%)}
 .cqb-hud .dmg-vig{position:fixed;inset:0;pointer-events:none;opacity:0;box-shadow:inset 0 0 90px rgba(220,25,25,0.85)}
 .cqb-hud .dmg-dir{position:absolute;left:50%;top:50%;width:140px;height:140px;margin:-70px 0 0 -70px;pointer-events:none;opacity:0}
 .cqb-hud .dmg-dir::before{content:'';position:absolute;left:50%;top:0;width:36px;height:8px;margin-left:-18px;background:#ff3b3b;border-radius:4px;box-shadow:0 0 8px #f00}
@@ -213,6 +214,10 @@ export class Hud {
   private readonly objSuspectRow: ObjectiveRowRefs;
   private readonly objCivilianRow: ObjectiveRowRefs;
   private readonly objEvidenceRow: ObjectiveRowRefs;
+  private readonly woundVigEl = document.createElement('div');
+  private woundClock = 0;
+  /** 手持ち装備の名前を差し替える外部ソース（オプティワンド展開中は name を返す） */
+  toolLabel: (() => string | null) | null = null;
   private readonly hpTextEl = document.createElement('span');
   private readonly hpFillEl = document.createElement('div');
   private readonly stanceEl = document.createElement('span');
@@ -293,6 +298,7 @@ export class Hud {
     dot.className = 'dot';
     this.hitEl.className = 'hit';
     this.dmgVigEl.className = 'dmg-vig';
+    this.woundVigEl.className = 'wound-vig';
     this.dmgDirEl.className = 'dmg-dir';
     this.ammoEl.className = 'panel ammo';
     this.ammoEl.append(this.ammoValEl, this.ammoNameEl);
@@ -368,6 +374,7 @@ export class Hud {
     this.applyStaticLabels();
 
     this.root.append(
+      this.woundVigEl,
       this.dmgVigEl,
       this.dmgDirEl,
       dot,
@@ -411,13 +418,13 @@ export class Hud {
 
   private applyStaticLabels(): void {
     this.rosterTitleEl.textContent = t(
-      'SQUAD [右クリック指示 / Z簡易 / X集合]',
-      'SQUAD [RMB Order / Z Quick / X Fall In]',
+      'SQUAD [右クリック指示 / Z簡易 / X集合 / 4ワンド]',
+      'SQUAD [RMB Order / Z Quick / X Fall In / 4 Wand]',
     );
     this.objTitleEl.textContent = t('作戦目標 / OBJECTIVES', 'OBJECTIVES');
     this.promptEl.textContent = t(
-      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-3装備 / ESCポーズ',
-      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-3 Gear / ESC Pause',
+      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4装備 / ESCポーズ',
+      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-4 Gear / ESC Pause',
     );
     if (this.motifChipEl && this.motifInfo) {
       const m = this.motifInfo;
@@ -511,10 +518,13 @@ export class Hud {
     // 弾数・武器・装備
     const fb = this.flashbang;
     const reserve = w.reserveAmmo;
+    const tool = this.toolLabel?.() ?? null;
     const wName = fb?.equipped
       ? tWeaponName(fb.weapon.id, fb.weapon.name)
       : tWeaponName(w.weapon.id, w.weapon.name);
-    const ammoText = fb?.equipped
+    const ammoText = tool
+      ? `${tool}|—`
+      : fb?.equipped
       ? `${wName}|${fb.remaining}/${fb.weapon.magazineSize}`
       : w.isReloading
         ? `${wName}|RELOADING`
@@ -644,6 +654,16 @@ export class Hud {
         this.lastHitOpacity = hitOp;
         this.hitEl.style.opacity = String(hitOp);
       }
+    }
+
+    // 負傷ビネット（HP 低下で赤い周辺、重傷では心拍に合わせて脈動）
+    const wl = this.player.woundLevel;
+    if (wl > 0) {
+      this.woundClock += dt * (wl === 2 ? 7.5 : 3.2);
+      const beat = wl === 2 ? Math.max(0, Math.sin(this.woundClock)) ** 3 : 0.5 + 0.5 * Math.sin(this.woundClock);
+      this.woundVigEl.style.opacity = String(wl === 2 ? 0.55 + 0.45 * beat : 0.25 + 0.15 * beat);
+    } else if (this.woundVigEl.style.opacity !== '0') {
+      this.woundVigEl.style.opacity = '0';
     }
 
     // 被弾ビネット＆方向インジケーター

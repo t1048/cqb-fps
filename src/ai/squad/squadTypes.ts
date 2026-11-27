@@ -34,6 +34,7 @@ import type { HumanoidBody } from '../HumanoidBody';
 import type { EntityManager } from '../EntityManager';
 import type { TacticalOptics } from '../TacticalOptics';
 import type { FlankDoorSample, FlashDoorSample } from '../SwatTactics';
+import type { ScoutIntel } from '../ScoutIntel';
 
 export const MAX_DT = 0.05;
 /** 追従隊列の列間隔（m） */
@@ -203,6 +204,8 @@ export interface AllyUnit extends HitTarget {
   warnCd: number;
   hp: number;
   maxHp: number;
+  /** 負傷（HP 低下）により移動速度を落としたか */
+  wounded: boolean;
   down: boolean;
   engaging: boolean;
   engageActive: boolean;
@@ -278,6 +281,11 @@ export interface AllyUnit extends HitTarget {
   stealthEntry: boolean;
   flashRetryCd: number;
   sweepRetryCd: number;
+  /** ミラー確認の残り秒（>0 の間、スタック位置で静止してドア下を確認する） */
+  mirrorLeft: number;
+  mirrorStarted: boolean;
+  /** Z 由来のミラー確認: 終了後に結果に応じた突入へ自動で移る（対象チーム）。null=確認だけ */
+  mirrorThen: { element: SquadElement } | null;
   readonly targetWrapper: AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean };
   label: AIDebugLabel;
 }
@@ -355,6 +363,8 @@ export interface SquadContext {
   readonly flashbang?: Flashbang;
   readonly tearGas?: TearGas;
   readonly windows: readonly WindowDef[];
+  /** 偵察情報（オプティワンド/ミラーで確認した部屋・接触） */
+  readonly intel: ScoutIntel;
 
   readonly root: THREE.Group;
   readonly coverage: Cell[];

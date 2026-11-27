@@ -1,3 +1,4 @@
+import { DEFAULT_ALLY_WOUNDS } from '../../core/DataLoader';
 import * as THREE from 'three';
 import type { GameEventBus } from '../../core/events';
 import { SuspectState } from '../../core/events';
@@ -956,7 +957,12 @@ export function updateAllyFootstep(ctx: SquadContext, ally: AllyUnit): void {
   }
 }
 
-export function onHit(ctx: SquadContext, id: string, damage: number, nonlethal: boolean): void {
+/** 隊員が頭部へ被弾したか（命中点が身長の 82% 以上）。 */
+export function isAllyHeadHit(ally: AllyUnit, hitY: number | undefined): boolean {
+  return hitY !== undefined && hitY >= ally.body.footY + ally.body.height * 0.82;
+}
+
+export function onHit(ctx: SquadContext, id: string, damage: number, nonlethal: boolean, hitY?: number, shooter?: string): void {
   const ally = ctx.allies.find((a) => a.id === id);
   if (!ally || ally.down) return;
   if (nonlethal) {
@@ -964,9 +970,21 @@ export function onHit(ctx: SquadContext, id: string, damage: number, nonlethal: 
     ally.body.setFlash(true);
     return;
   }
+  const wc = ctx.cfg.wounds ?? DEFAULT_ALLY_WOUNDS;
+  // 隊員同士・自傷では頭部倍率を掛けない（容疑者の弾のみ）。盾持ちは頭部が盾で守られるため対象外
+  const fromHostile = shooter === undefined || !shooter.startsWith('ally_');
+  if (fromHostile && !ally.shielded && isAllyHeadHit(ally, hitY)) {
+    damage *= wc.headMultiplier;
+  }
   ally.hp = Math.max(0, ally.hp - damage);
+  // 負傷（HP が閾値未満）で移動速度低下。一度だけ適用（combat は隊員ごとの写し）
+  if (!ally.wounded && ally.hp > 0 && ally.hp < ally.maxHp * wc.woundBelow) {
+    ally.wounded = true;
+    ally.combat.moveSpeed *= wc.speedMul;
+  }
   if (ally.hp <= 0) {
     ally.down = true;
+    ctx.bus.emit('allyDown', { allyId: ally.id });
     if (ally.engageActive) {
       ally.engage.exit();
       ally.engageActive = false;

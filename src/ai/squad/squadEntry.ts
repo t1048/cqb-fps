@@ -1,3 +1,4 @@
+import { tickMirror } from './squadScout';
 import * as THREE from 'three';
 import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
@@ -840,6 +841,8 @@ export function updateStackingPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
     );
     ally.body.aimAt(stackLook.x, stackLook.y, stackLook.z, dt, Math.PI * 2 * dt);
   }
+  // ミラー確認中の隊員はスタック位置で静止してドア下を確認する（終わるまで他の動作をしない）
+  if (ally.mirrorLeft > 0 && tickMirror(ctx, ally, dt)) return;
   // door_prep への遷移はグループ単位（updatePortalGroups）。個人のタイムアウトで先走らない
   const g = ctx.portalGroups.get(portal.id);
   ally.stackWaitTimer = g?.waitT ?? 0;

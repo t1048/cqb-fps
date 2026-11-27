@@ -1,4 +1,9 @@
 import type {
+  AllyWoundsConfig,
+  AmbushParams,
+  MirrorConfig,
+  OptiwandConfig,
+  WoundsConfig,
   ModularWindowConfigDef,
   CivilianParams,
   AIProfile,
@@ -92,6 +97,25 @@ class Reader {
 
   optNum(o: Record<string, unknown>, key: string, path: string, min = -Infinity, max = Infinity): number | undefined {
     return o[key] === undefined ? undefined : this.num(o, key, path, min, max);
+  }
+
+  /** 省略可能な数値（省略時は fallback を返す。指定時は範囲検証する） */
+  numOr(o: Record<string, unknown>, key: string, path: string, fallback: number, min = -Infinity, max = Infinity): number {
+    return o[key] === undefined ? fallback : this.num(o, key, path, min, max);
+  }
+
+  /** 長さ n の数値タプル（省略時は fallback） */
+  tupleOr<N extends number[]>(o: Record<string, unknown>, key: string, path: string, fallback: N, min: number, max: number): N {
+    const v = o[key];
+    if (v === undefined) return [...fallback] as N;
+    const a = this.arr(v, `${path}.${key}`);
+    if (a.length !== fallback.length) this.fail(`${path}.${key}`, `要素数 ${fallback.length} の配列が必要です`);
+    return a.map((x, i) => {
+      if (typeof x !== 'number' || !Number.isFinite(x) || x < min || x > max) {
+        this.fail(`${path}.${key}[${i}]`, `範囲 ${min}〜${max} の有限数値が必要です`);
+      }
+      return x as number;
+    }) as N;
   }
 
   bool(o: Record<string, unknown>, key: string, path: string): boolean {
@@ -1238,6 +1262,32 @@ function readCivilian(r: Reader, e: Record<string, unknown>, p: string, required
   };
 }
 
+export const DEFAULT_AMBUSH: AmbushParams = {
+  chance: 0.5,
+  preAimReactionSec: 0.16,
+  firstBurstSpreadMul: 0.45,
+  maxDist: 14,
+  holdSec: 25,
+  firstBurstShots: 3,
+  coneDeg: 70,
+};
+
+function readAmbush(r: Reader, e: Record<string, unknown>, p: string): AmbushParams {
+  if (e.ambush === undefined) return { ...DEFAULT_AMBUSH };
+  const ap = `${p}.ambush`;
+  const a = r.obj(e.ambush, ap);
+  const d = DEFAULT_AMBUSH;
+  return {
+    chance: r.numOr(a, 'chance', ap, d.chance, 0, 1),
+    preAimReactionSec: r.numOr(a, 'preAimReactionSec', ap, d.preAimReactionSec, 0.02, 2),
+    firstBurstSpreadMul: r.numOr(a, 'firstBurstSpreadMul', ap, d.firstBurstSpreadMul, 0.05, 2),
+    maxDist: r.numOr(a, 'maxDist', ap, d.maxDist, 2, 60),
+    holdSec: r.numOr(a, 'holdSec', ap, d.holdSec, 2, 300),
+    firstBurstShots: Math.round(r.numOr(a, 'firstBurstShots', ap, d.firstBurstShots, 1, 10)),
+    coneDeg: r.numOr(a, 'coneDeg', ap, d.coneDeg, 10, 180),
+  };
+}
+
 export function validateAIProfiles(raw: unknown, source = 'ai_profiles'): AIProfile[] {
   const r = new Reader(source);
   const o = r.obj(raw, '') as Partial<AIProfilesData>;
@@ -1274,6 +1324,7 @@ export function validateAIProfiles(raw: unknown, source = 'ai_profiles'): AIProf
       combat: readCombat(r, e, p, type === 'suspect'),
       shield: type === 'suspect' ? readShield(r, e, p) : undefined,
       mobility: type === 'suspect' ? readMobility(r, e, p, true) : undefined,
+      ambush: type === 'suspect' ? readAmbush(r, e, p) : undefined,
       civilian: type === 'civilian' ? readCivilian(r, e, p, true) : undefined,
     };
   });
@@ -1289,6 +1340,83 @@ export function validateCrossReferences(map: MapData, profiles: AIProfile[]): vo
       throw new DataError(`map:${map.id}`, `entities[${i}].profile`, `ai_profiles.json に "${e.profile}" が存在しません`);
     }
   });
+}
+
+export const DEFAULT_WOUNDS: WoundsConfig = {
+  headMultiplier: 3.6,
+  headBand: 0.28,
+  lv1Below: 0.5,
+  lv2Below: 0.25,
+  speedMul: [0.75, 0.6],
+  spreadAddDeg: [1.2, 2.6],
+  swayDeg: [0.12, 0.3],
+};
+
+export const DEFAULT_OPTIWAND: OptiwandConfig = {
+  deploySec: 0.4,
+  reach: 0.6,
+  wallClearance: 0.08,
+  doorRange: 1.5,
+  doorCamHeight: [0.05, 0.15],
+  doorCamPastPlane: 0.05,
+  yawLimitDeg: 80,
+  pitchLimitDeg: [-5, 45],
+  fovDeg: 78,
+  viewRange: 14,
+  spotSec: 0.3,
+  scoutDwellSec: 1.2,
+  noticeRange: 3,
+  noticePerSec: 0.12,
+  noticeUnderDoorMul: 0.4,
+  viewWidthRatio: 0.35,
+  renderSize: [320, 240],
+};
+
+function readWounds(r: Reader, o: Record<string, unknown>): WoundsConfig {
+  if (o.wounds === undefined) return { ...DEFAULT_WOUNDS };
+  const w = r.obj(o.wounds, 'wounds');
+  const d = DEFAULT_WOUNDS;
+  const lv1Below = r.numOr(w, 'lv1Below', 'wounds', d.lv1Below, 0, 1);
+  const lv2Below = r.numOr(w, 'lv2Below', 'wounds', d.lv2Below, 0, 1);
+  if (lv2Below > lv1Below) r.fail('wounds.lv2Below', 'lv1Below 以下である必要があります');
+  return {
+    headMultiplier: r.numOr(w, 'headMultiplier', 'wounds', d.headMultiplier, 1, 20),
+    headBand: r.numOr(w, 'headBand', 'wounds', d.headBand, 0.05, 1),
+    lv1Below,
+    lv2Below,
+    speedMul: r.tupleOr(w, 'speedMul', 'wounds', d.speedMul, 0.1, 1),
+    spreadAddDeg: r.tupleOr(w, 'spreadAddDeg', 'wounds', d.spreadAddDeg, 0, 30),
+    swayDeg: r.tupleOr(w, 'swayDeg', 'wounds', d.swayDeg, 0, 10),
+  };
+}
+
+function readOptiwand(r: Reader, o: Record<string, unknown>): OptiwandConfig {
+  if (o.optiwand === undefined) return { ...DEFAULT_OPTIWAND };
+  const w = r.obj(o.optiwand, 'optiwand');
+  const d = DEFAULT_OPTIWAND;
+  const doorCamHeight = r.tupleOr(w, 'doorCamHeight', 'optiwand', d.doorCamHeight, 0.01, 1);
+  if (doorCamHeight[0] > doorCamHeight[1]) r.fail('optiwand.doorCamHeight', 'min <= max が必要です');
+  const pitchLimitDeg = r.tupleOr(w, 'pitchLimitDeg', 'optiwand', d.pitchLimitDeg, -89, 89);
+  if (pitchLimitDeg[0] > pitchLimitDeg[1]) r.fail('optiwand.pitchLimitDeg', 'min <= max が必要です');
+  return {
+    deploySec: r.numOr(w, 'deploySec', 'optiwand', d.deploySec, 0, 5),
+    reach: r.numOr(w, 'reach', 'optiwand', d.reach, 0.1, 3),
+    wallClearance: r.numOr(w, 'wallClearance', 'optiwand', d.wallClearance, 0, 0.5),
+    doorRange: r.numOr(w, 'doorRange', 'optiwand', d.doorRange, 0.3, 5),
+    doorCamHeight,
+    doorCamPastPlane: r.numOr(w, 'doorCamPastPlane', 'optiwand', d.doorCamPastPlane, 0, 0.5),
+    yawLimitDeg: r.numOr(w, 'yawLimitDeg', 'optiwand', d.yawLimitDeg, 5, 170),
+    pitchLimitDeg,
+    fovDeg: r.numOr(w, 'fovDeg', 'optiwand', d.fovDeg, 20, 140),
+    viewRange: r.numOr(w, 'viewRange', 'optiwand', d.viewRange, 2, 60),
+    spotSec: r.numOr(w, 'spotSec', 'optiwand', d.spotSec, 0, 5),
+    scoutDwellSec: r.numOr(w, 'scoutDwellSec', 'optiwand', d.scoutDwellSec, 0, 20),
+    noticeRange: r.numOr(w, 'noticeRange', 'optiwand', d.noticeRange, 0, 20),
+    noticePerSec: r.numOr(w, 'noticePerSec', 'optiwand', d.noticePerSec, 0, 5),
+    noticeUnderDoorMul: r.numOr(w, 'noticeUnderDoorMul', 'optiwand', d.noticeUnderDoorMul, 0, 1),
+    viewWidthRatio: r.numOr(w, 'viewWidthRatio', 'optiwand', d.viewWidthRatio, 0.1, 0.8),
+    renderSize: r.tupleOr(w, 'renderSize', 'optiwand', d.renderSize, 64, 1024),
+  };
 }
 
 export function validatePlayerConfig(raw: unknown, source = 'player'): PlayerConfig {
@@ -1352,6 +1480,8 @@ export function validatePlayerConfig(raw: unknown, source = 'player'): PlayerCon
       interval: perMode(fs, 'interval', 'footstep', 0.05, 10),
       radius: perMode(fs, 'radius', 'footstep', 0, 200),
     },
+    wounds: readWounds(r, o),
+    optiwand: readOptiwand(r, o),
   };
 }
 
@@ -1399,7 +1529,15 @@ const SCORE_KINDS: readonly ScoreKind[] = [
   'civilianHit',
   'nonlethalCivilianHit',
   'friendlyFire',
+  'allyDown',
+  'playerInjury',
 ];
+
+/** roe.json に新項目が無い旧データでも読めるようにする既定値（careless play ペナルティ） */
+const OPTIONAL_SCORE_DEFAULTS: Partial<Record<ScoreKind, { points: number; label: string }>> = {
+  allyDown: { points: -40, label: '隊員が負傷・戦闘不能' },
+  playerInjury: { points: -15, label: '被弾（負傷）' },
+};
 
 export function validatePerception(raw: unknown, source = 'perception'): PerceptionConfig {
   const r = new Reader(source);
@@ -1438,8 +1576,9 @@ export function validateRoe(raw: unknown, source = 'roe'): RoeConfig {
   const points = {} as Record<ScoreKind, number>;
   const labels = {} as Record<ScoreKind, string>;
   for (const k of SCORE_KINDS) {
-    points[k] = r.num(pts, k, 'points');
-    labels[k] = r.str(lbl, k, 'labels');
+    const def = OPTIONAL_SCORE_DEFAULTS[k];
+    points[k] = def && pts[k] === undefined ? def.points : r.num(pts, k, 'points');
+    labels[k] = def && lbl[k] === undefined ? def.label : r.str(lbl, k, 'labels');
   }
   const hostileStates: string[] = [];
   r.arr(o.hostileStates, 'hostileStates').forEach((v, i) => {
@@ -1478,7 +1617,42 @@ export const SQUAD_ORDERS: readonly SquadOrder[] = [
   'gasClear',
   'pieDoor',
   'restrain',
+  'mirror',
 ] as const;
+
+export const DEFAULT_MIRROR: MirrorConfig = {
+  durationSec: 4,
+  missChance: 0.35,
+  centerBandM: 1.1,
+  halfFovDeg: 55,
+  range: 12,
+};
+
+export const DEFAULT_ALLY_WOUNDS: AllyWoundsConfig = { headMultiplier: 2.2, woundBelow: 0.5, speedMul: 0.75 };
+
+function readAllyWounds(r: Reader, o: Record<string, unknown>): AllyWoundsConfig {
+  if (o.wounds === undefined) return { ...DEFAULT_ALLY_WOUNDS };
+  const w = r.obj(o.wounds, 'wounds');
+  const d = DEFAULT_ALLY_WOUNDS;
+  return {
+    headMultiplier: r.numOr(w, 'headMultiplier', 'wounds', d.headMultiplier, 1, 20),
+    woundBelow: r.numOr(w, 'woundBelow', 'wounds', d.woundBelow, 0, 1),
+    speedMul: r.numOr(w, 'speedMul', 'wounds', d.speedMul, 0.1, 1),
+  };
+}
+
+function readMirror(r: Reader, o: Record<string, unknown>): MirrorConfig {
+  if (o.mirror === undefined) return { ...DEFAULT_MIRROR };
+  const m = r.obj(o.mirror, 'mirror');
+  const d = DEFAULT_MIRROR;
+  return {
+    durationSec: r.numOr(m, 'durationSec', 'mirror', d.durationSec, 0.5, 30),
+    missChance: r.numOr(m, 'missChance', 'mirror', d.missChance, 0, 1),
+    centerBandM: r.numOr(m, 'centerBandM', 'mirror', d.centerBandM, 0.1, 10),
+    halfFovDeg: r.numOr(m, 'halfFovDeg', 'mirror', d.halfFovDeg, 5, 90),
+    range: r.numOr(m, 'range', 'mirror', d.range, 2, 40),
+  };
+}
 
 const SQUAD_ELEMENTS: readonly SquadElement[] = ['gold', 'alpha', 'bravo'] as const;
 
@@ -1539,6 +1713,8 @@ export function validateSquad(raw: unknown, source = 'squad'): SquadConfig {
     hostileStates: states('hostileStates'),
     warnStates: states('warnStates'),
     hint: r.str(o, 'hint', ''),
+    mirror: readMirror(r, o),
+    wounds: readAllyWounds(r, o),
     orderLabels,
     elementLabels,
   };

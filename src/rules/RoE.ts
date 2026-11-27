@@ -52,6 +52,9 @@ export class RoE {
         this.hostile.add(e.id);
       }),
       bus.on('entityHit', (e) => this.onHit(e.targetId, e.shooter, e.damage, !!e.nonlethal)),
+      // 不用意な突入の代償: 隊員の戦闘不能・プレイヤーの負傷レベル上昇ごとに減点（各 1 回）
+      bus.on('allyDown', (e) => this.violate('allyDown', e.allyId)),
+      bus.on('playerWound', (e) => this.violate('playerInjury', `lv${e.level}`)),
       bus.on('arrest', (e) => this.award('arrest', e.targetId)),
       bus.on('evidence', (e) => this.award('evidence', e.targetId)),
       bus.on('civilianStateChanged', (e) => {

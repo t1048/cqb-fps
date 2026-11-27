@@ -15,5 +15,33 @@
   "footstep": {
     "interval": { "run": 0.48, "quiet": 0.78, "crouch": 0.82 },
     "radius": { "run": 12, "quiet": 3, "crouch": 3 }
+  },
+  "wounds": {
+    "headMultiplier": 3.6,
+    "headBand": 0.28,
+    "lv1Below": 0.5,
+    "lv2Below": 0.25,
+    "speedMul": [0.75, 0.6],
+    "spreadAddDeg": [1.2, 2.6],
+    "swayDeg": [0.12, 0.3]
+  },
+  "optiwand": {
+    "deploySec": 0.4,
+    "reach": 0.6,
+    "wallClearance": 0.08,
+    "doorRange": 1.5,
+    "doorCamHeight": [0.05, 0.15],
+    "doorCamPastPlane": 0.05,
+    "yawLimitDeg": 80,
+    "pitchLimitDeg": [-5, 45],
+    "fovDeg": 78,
+    "viewRange": 14,
+    "spotSec": 0.3,
+    "scoutDwellSec": 1.2,
+    "noticeRange": 3,
+    "noticePerSec": 0.12,
+    "noticeUnderDoorMul": 0.4,
+    "viewWidthRatio": 0.35,
+    "renderSize": [320, 240]
   }
 }

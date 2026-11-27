@@ -369,6 +369,61 @@ export const CUFF: readonly RadioLine[] = [
   ['容疑者を拘束した。武器も押さえた。', 'Suspect secured. We have the weapon.'],
 ];
 
+/** 投降した容疑者の拘束に向かう（傍受される。拘束役が無防備になる隙のヒント） */
+export const RESTRAIN_GO: readonly RadioLine[] = [
+  ['容疑者が投降した。拘束に向かう、援護しろ。', 'Suspect surrendering, moving to restrain. Cover me.'],
+  ['投降を確認。手錠をかけに行く。周囲を見ていてくれ。', 'He is giving up. Moving to restrain him. Watch my back.'],
+  ['一人投降した。拘束する、援護を頼む。', 'One suspect on his knees. Moving to restrain. Cover.'],
+];
+
+/** 偽装投降に撃たれた */
+export const RESTRAIN_FAKE: readonly RadioLine[] = [
+  ['投降は偽装だ！武器を持っている！', 'It was a fake surrender! He has a weapon!'],
+  ['撃たれた！偽装投降だ！', 'Shots! He faked it!'],
+];
+
+/** 拘束完了（容疑者モード）。CUFF と別プール: 武器の押収は言わない */
+export const RESTRAIN_DONE: readonly RadioLine[] = [
+  ['拘束した。次へ進む。', 'Suspect cuffed. Moving on.'],
+  ['容疑者を拘束。クリア、続行する。', 'He is in cuffs. Continuing the sweep.'],
+];
+
+/** 見えない位置から撃たれた: 射手の位置と開口を全隊に共有（ホットスポット） */
+export const HOT_SPOT_DOOR: readonly RadioLine[] = [
+  ['ドアの隙間から撃たれた！あの隙間は覗くな！', 'Shot through the door gap! Do not peek it!'],
+  ['{room}のドアだ！隙間から撃ってくる、気を付けろ！', 'Shooter behind the {roomEn} door! He is firing through the gap!'],
+];
+export const HOT_SPOT_STAIR: readonly RadioLine[] = [
+  ['階段の上から撃たれた！階段は盾が先頭だ！', 'Shot from the stairwell! Shield leads on the stairs!'],
+  ['階段室に潜んでいる！直接上るな！', 'He is in the stairwell! Do not climb blind!'],
+];
+export const HOT_SPOT_WINDOW: readonly RadioLine[] = [
+  ['窓口から撃たれた！あそこに潜んでいる！', 'Shot through the window opening! He is right there!'],
+  ['室内の窓口だ！狙われている、覗くな！', 'Pass-through window! He is covering it!'],
+];
+export const HOT_SPOT_OPEN: readonly RadioLine[] = [
+  ['見えない位置から撃たれた！{room}だ、警戒しろ！', 'Shot from an angle we cannot see! {roomEn}, watch it!'],
+];
+export const HOT_PREAIM: readonly RadioLine[] = [
+  ['隙間に照準を合わせたまま進め！', 'Keep your sights on the gap as you move!'],
+  ['パイを切って進む。隙間から目を離すな。', 'Slice the pie. Eyes on the gap.'],
+];
+export const HOT_SUPPRESS: readonly RadioLine[] = [
+  ['制圧射撃！ドアの隙間を撃ち込め！', 'Suppressing fire on the gap!'],
+  ['隙間に撃ち込んで頭を下げさせろ！', 'Hammer the gap. Keep his head down!'],
+];
+export const HOT_SHIELD: readonly RadioLine[] = [
+  ['盾が先頭、全員その後ろにスタック！', 'Shield up front. Everyone stack behind him!'],
+  ['盾持ちが前へ。続け、後ろから援護。', 'Shield first. Stay behind him and cover.'],
+];
+export const HOT_STAIR_FLASH: readonly RadioLine[] = [
+  ['階段室へ閃光弾を投げ込む！上る前に目を潰せ！', 'Flashing the stairwell before we climb!'],
+  ['閃光弾を階段へ！爆発するまで上るな！', 'Bang up the stairs! Hold until it pops!'],
+];
+export const HOT_KICK: readonly RadioLine[] = [
+  ['半開きのドアだ。蹴り開ける、警戒！', 'Door cracked open. Kicking it wide, cover!'],
+];
+
 export const CIVILIAN_SECURE: readonly RadioLine[] = [
   ['民間人を確保した。', 'Civilian secure.'],
   ['民間人は安全だ。', 'Civilian is safe.'],
@@ -514,6 +569,20 @@ export const BLAST_DOWN: readonly RadioLine[] = [
 export const BLAST_WARN: readonly RadioLine[] = [
   ['爆発！ブービートラップだ。全員、ドアを警戒しろ。', 'IED! Booby trap! Watch the doors!'],
   ['ドアが炸裂した。他の扉も疑え。', 'A door just blew. Treat every door as rigged!'],
+];
+
+/** Z で未確認のドアに整列だけ行うときの申告 */
+export const UNSCOUTED_ROOM: readonly RadioLine[] = [
+  ['向こう側は未確認です。', 'Room behind is unknown.'],
+  ['中の状況が分かりません。確認が必要です。', 'No eyes on the room. Need a recon.'],
+  ['室内は未確認。このまま入るのは危険です。', 'Room is unconfirmed. Going in blind is risky.'],
+];
+
+/** ミラー確認の開始 */
+export const MIRROR_START: readonly RadioLine[] = [
+  ['ミラーでドア下を確認する。', 'Mirroring under the door.'],
+  ['ワンドを差し込む。少し待て。', 'Wand going under. Hold on.'],
+  ['ドアの下から中を見る。', 'Checking under the door.'],
 ];
 
 export const RESCAN = DRONE_RESCAN;

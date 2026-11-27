@@ -1,0 +1,308 @@
+import type { OptiwandConfig, Vec3 } from '../core/types';
+import { hasLineOfSight } from '../weapons/Flashbang';
+import { raycastColliders } from '../world/ColliderIndex';
+import type { Collider } from '../world/WorldBuilder';
+
+const DEG2RAD = Math.PI / 180;
+
+/** オプティワンドの幾何計算が必要とするドアの最小記述（Door がそのまま満たす）。 */
+export interface WandDoor {
+  readonly id: string;
+  readonly centerX: number;
+  readonly centerZ: number;
+  readonly normalX: number;
+  readonly normalZ: number;
+  readonly axisX: number;
+  readonly axisZ: number;
+  readonly width: number;
+  readonly sillY: number;
+  readonly angle: number;
+  readonly peekAngle: number;
+}
+
+export type WandMode = 'free' | 'door';
+
+export interface WandPose {
+  mode: WandMode;
+  x: number;
+  y: number;
+  z: number;
+  /** カメラ向き（ラジアン。前方 = (-sin yaw, -cos yaw)） */
+  yaw: number;
+  pitch: number;
+  doorId: string | null;
+  /** ドア下カメラ時の「向こう側」単位ベクトル（部屋の内側方向） */
+  farX: number;
+  farZ: number;
+}
+
+/** プレイヤー目線が、ドアの下を覗かせられる位置・状態か（距離内・ほぼ閉じている）。 */
+export function doorEligible(door: WandDoor, eye: { x: number; z: number }, cfg: OptiwandConfig): boolean {
+  const d = Math.hypot(eye.x - door.centerX, eye.z - door.centerZ);
+  if (d > cfg.doorRange + door.width * 0.5) return false;
+  // 全開（ピークを大きく超える）ドアは隙間ではなく開口なので対象外
+  return door.angle <= door.peekAngle * 1.25 + 1;
+}
+
+/** ドアの手前側（プレイヤー側）の符号。法線方向に対し eye がどちら側か。 */
+export function nearSideSign(door: WandDoor, eye: { x: number; z: number }): 1 | -1 {
+  return (eye.x - door.centerX) * door.normalX + (eye.z - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
+}
+
+export function yawFacing(fx: number, fz: number): number {
+  return Math.atan2(-fx, -fz);
+}
+
+/**
+ * ドア下カメラの位置と向き。
+ * - 向こう側（プレイヤーと反対側）のドア面から数 cm 先、床から doorCamHeight 付近。
+ * - 横位置はプレイヤー目線の射影（ドア幅の端を避ける）。
+ * - 首振り: yawOffset(rad) は ±yawLimitDeg、pitch(rad) は pitchLimitDeg にクランプ。
+ */
+export function computeDoorPose(
+  door: WandDoor,
+  eye: { x: number; z: number },
+  cfg: OptiwandConfig,
+  doorThickness: number,
+  yawOffset: number,
+  pitch: number,
+): WandPose {
+  const side = nearSideSign(door, eye);
+  const farX = -side * door.normalX;
+  const farZ = -side * door.normalZ;
+  const along = (eye.x - door.centerX) * door.axisX + (eye.z - door.centerZ) * door.axisZ;
+  const lim = Math.max(0, door.width / 2 - 0.15);
+  const lat = Math.max(-lim, Math.min(lim, along));
+  // 少し開いている（ピーク）ときは開いた扉板を避けるため、開き角に応じて奥へ送る
+  const ajarExtra = door.angle > 2 ? Math.sin(door.angle * DEG2RAD) * (door.width / 2) + 0.08 : 0;
+  const off = doorThickness / 2 + cfg.doorCamPastPlane + ajarExtra;
+  const yawLim = cfg.yawLimitDeg * DEG2RAD;
+  const yo = Math.max(-yawLim, Math.min(yawLim, yawOffset));
+  const pitchClamped = Math.max(cfg.pitchLimitDeg[0] * DEG2RAD, Math.min(cfg.pitchLimitDeg[1] * DEG2RAD, pitch));
+  const camY = door.sillY + (cfg.doorCamHeight[0] + cfg.doorCamHeight[1]) / 2;
+  return {
+    mode: 'door',
+    x: door.centerX + door.axisX * lat + farX * off,
+    y: camY,
+    z: door.centerZ + door.axisZ * lat + farZ * off,
+    yaw: yawFacing(farX, farZ) + yo,
+    pitch: pitchClamped,
+    doorId: door.id,
+    farX,
+    farZ,
+  };
+}
+
+/**
+ * 通常時の先端位置: 目線（リーン込み）から視線方向へ cfg.reach 進めた点。
+ * 壁（コライダ）を貫通しないよう、手前 wallClearance で止める。
+ */
+export function computeFreePose(
+  eye: Vec3,
+  yaw: number,
+  pitch: number,
+  colliders: readonly Collider[],
+  cfg: OptiwandConfig,
+): WandPose {
+  const cp = Math.cos(pitch);
+  const dir = { x: -Math.sin(yaw) * cp, y: Math.sin(pitch), z: -Math.cos(yaw) * cp };
+  const hit = raycastColliders(colliders, eye, dir, cfg.reach + cfg.wallClearance);
+  const dist = Math.max(0.04, Math.min(cfg.reach, hit - cfg.wallClearance));
+  return {
+    mode: 'free',
+    x: eye.x + dir.x * dist,
+    y: eye.y + dir.y * dist,
+    z: eye.z + dir.z * dist,
+    yaw,
+    pitch,
+    doorId: null,
+    farX: dir.x,
+    farZ: dir.z,
+  };
+}
+
+export interface ViewHit {
+  inView: boolean;
+  dist: number;
+}
+
+/** カメラ（位置・yaw/pitch・垂直 fov・アスペクト）の視錐台内に点があるか。 */
+export function pointInWandView(
+  pose: { x: number; y: number; z: number; yaw: number; pitch: number },
+  fovYDeg: number,
+  aspect: number,
+  p: Vec3,
+): ViewHit {
+  const sy = Math.sin(pose.yaw);
+  const cy = Math.cos(pose.yaw);
+  const sp = Math.sin(pose.pitch);
+  const cp = Math.cos(pose.pitch);
+  const fx = -sy * cp;
+  const fy = sp;
+  const fz = -cy * cp;
+  const rx = cy;
+  const rz = -sy;
+  const ux = sy * sp;
+  const uy = cp;
+  const uz = cy * sp;
+  const dx = p.x - pose.x;
+  const dy = p.y - pose.y;
+  const dz = p.z - pose.z;
+  const z = dx * fx + dy * fy + dz * fz;
+  const dist = Math.hypot(dx, dy, dz);
+  if (z < 0.05) return { inView: false, dist };
+  const x = dx * rx + dz * rz;
+  const y = dx * ux + dy * uy + dz * uz;
+  const tanV = Math.tan((fovYDeg * DEG2RAD) / 2);
+  const tanH = tanV * aspect;
+  return { inView: Math.abs(x) <= z * tanH && Math.abs(y) <= z * tanV, dist };
+}
+
+/** スポット対象（容疑者・民間人）の最小記述 */
+export interface WandContactSource {
+  id: string;
+  kind: 'suspect' | 'civilian';
+  armed: boolean;
+  chest: Vec3;
+  eye: Vec3;
+}
+
+/**
+ * 連続視認時間の蓄積と「発見」判定。cfg.spotSec 以上見え続けた接触を fresh に返す。
+ * 見えなくなると蓄積は 2 倍速で減衰する（一瞬の見切れで即リセットはしない）。
+ */
+export class WandSpotter {
+  private readonly seenSec = new Map<string, number>();
+  private readonly spotted = new Set<string>();
+
+  reset(): void {
+    this.seenSec.clear();
+    this.spotted.clear();
+  }
+
+  hasSpotted(id: string): boolean {
+    return this.spotted.has(id);
+  }
+
+  /** visible=今フレーム見えている接触, fresh=今フレーム新たに「発見」になった接触 */
+  update(
+    dt: number,
+    pose: { x: number; y: number; z: number; yaw: number; pitch: number },
+    cfg: OptiwandConfig,
+    aspect: number,
+    sources: Iterable<WandContactSource>,
+    colliders: readonly Collider[],
+  ): { visible: WandContactSource[]; fresh: WandContactSource[] } {
+    const visible: WandContactSource[] = [];
+    const fresh: WandContactSource[] = [];
+    const seenNow = new Set<string>();
+    const tip: Vec3 = { x: pose.x, y: pose.y, z: pose.z };
+    for (const c of sources) {
+      let ok = false;
+      for (const pt of [c.chest, c.eye]) {
+        const v = pointInWandView(pose, cfg.fovDeg, aspect, pt);
+        if (!v.inView || v.dist > cfg.viewRange) continue;
+        if (!hasLineOfSight(colliders, tip, pt)) continue;
+        ok = true;
+        break;
+      }
+      if (!ok) continue;
+      seenNow.add(c.id);
+      visible.push(c);
+      const t = (this.seenSec.get(c.id) ?? 0) + dt;
+      this.seenSec.set(c.id, t);
+      if (t >= cfg.spotSec && !this.spotted.has(c.id)) {
+        this.spotted.add(c.id);
+        fresh.push(c);
+      }
+    }
+    for (const [id, t] of this.seenSec) {
+      if (seenNow.has(id)) continue;
+      const next = t - dt * 2;
+      if (next <= 0) this.seenSec.delete(id);
+      else this.seenSec.set(id, next);
+    }
+    return { visible, fresh };
+  }
+}
+
+export interface NoticeCandidate {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  /** 視線の高さ */
+  eyeY: number;
+  /** 向いている方向（HumanoidBody の yawRad: 前方 = (-sin, -cos)） */
+  yawRad: number;
+}
+
+/**
+ * ワンド先端が容疑者に気付かれる判定。noticeRange 以内・おおむね正面（±60°）・視線が通る容疑者ごとに
+ * 確率 noticePerSec×dt（ドア下は noticeUnderDoorMul 倍）で気付かれる。
+ */
+export function rollNotices(
+  dt: number,
+  tip: Vec3,
+  candidates: Iterable<NoticeCandidate>,
+  cfg: OptiwandConfig,
+  underDoor: boolean,
+  colliders: readonly Collider[],
+  rand: () => number = Math.random,
+): string[] {
+  const out: string[] = [];
+  const p = cfg.noticePerSec * dt * (underDoor ? cfg.noticeUnderDoorMul : 1);
+  if (p <= 0) return out;
+  for (const c of candidates) {
+    const dx = tip.x - c.x;
+    const dz = tip.z - c.z;
+    const d = Math.hypot(dx, dz);
+    if (d > cfg.noticeRange) continue;
+    if (d > 0.05) {
+      const cos = (dx * -Math.sin(c.yawRad) + dz * -Math.cos(c.yawRad)) / d;
+      if (cos < 0.5) continue;
+    }
+    if (!hasLineOfSight(colliders, { x: c.x, y: c.eyeY, z: c.z }, tip)) continue;
+    if (rand() < p) out.push(c.id);
+  }
+  return out;
+}
+
+/** 呼び出し文言（日本語, 英語）。例: ["接触2名: 武装容疑者1、民間人1", "2 contacts: 1 armed suspect, 1 civilian"] */
+export function contactCallout(
+  armed: number,
+  unarmed: number,
+  civilians: number,
+  prefix: { ja: string; en: string } = { ja: '', en: '' },
+): [ja: string, en: string] {
+  const total = armed + unarmed + civilians;
+  if (total === 0) return [`${prefix.ja}接触なし`, `${prefix.en}no contacts`];
+  const partsJa: string[] = [];
+  const partsEn: string[] = [];
+  if (armed > 0) {
+    partsJa.push(`武装容疑者${armed}`);
+    partsEn.push(`${armed} armed suspect${armed > 1 ? 's' : ''}`);
+  }
+  if (unarmed > 0) {
+    partsJa.push(`非武装${unarmed}`);
+    partsEn.push(`${unarmed} unarmed`);
+  }
+  if (civilians > 0) {
+    partsJa.push(`民間人${civilians}`);
+    partsEn.push(`${civilians} civilian${civilians > 1 ? 's' : ''}`);
+  }
+  return [
+    `${prefix.ja}接触${total}名: ${partsJa.join('、')}`,
+    `${prefix.en}${total} contact${total > 1 ? 's' : ''}: ${partsEn.join(', ')}`,
+  ];
+}
+
+export function contactCalloutText(
+  armed: number,
+  unarmed: number,
+  civilians: number,
+  t: (ja: string, en: string) => string,
+): string {
+  const [ja, en] = contactCallout(armed, unarmed, civilians);
+  return t(ja, en);
+}

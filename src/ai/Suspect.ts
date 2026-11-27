@@ -16,6 +16,16 @@ import {
   type XZ,
 } from './EngageBehavior';
 import { blockedAtFiltered } from './SquadRoute';
+import {
+  AMBUSH_TRIGGER_KINDS,
+  ambushProbability,
+  doorwaysOfRoom,
+  findAmbushSpot,
+  pointInRoom,
+  roomRectOf,
+  type AmbushSpot,
+  type Doorway,
+} from './Ambush';
 import { HostageShieldBehavior, hasEscapeRoute } from './HostageShield';
 import { HumanoidBody } from './HumanoidBody';
 import type { TextureLibrary } from '../world/Materials';
@@ -24,6 +34,8 @@ import { StateMachine } from './StateMachine';
 
 const SUSPECT_COLOR = 0x937969;
 const ARRESTED_COLOR = 0x3060b0;
+/** 解放された味方の復帰時士気: 降伏しきい値 + この値（ほぼ折れる寸前で戦線に戻る） */
+const FREED_MORALE_MARGIN = 6;
 const DEFAULT_HP = 100;
 const MAX_DT = 0.05;
 
@@ -102,6 +114,11 @@ export class Suspect implements HitTarget {
   private gasCoughCd = 0;
   private gasFlushTarget: Vec3 | null = null;
   private gasFlushElapsed = 0;
+  /** 待ち伏せ（ファタルファネル）: 目標位置 / 到着済みか / 経過秒 / 再抽選までのクールダウン */
+  private ambushSpot: AmbushSpot | null = null;
+  private ambushReady = false;
+  private ambushElapsed = 0;
+  private ambushRollCd = 0;
 
   constructor(
     def: EntityDef,
@@ -165,6 +182,7 @@ export class Suspect implements HitTarget {
             this.alertMoveMode = null;
             this.alertMoveElapsed = 0;
             this.alertCover = null;
+            this.clearAmbush();
             this.nav?.reset();
           },
         },
@@ -269,6 +287,7 @@ export class Suspect implements HitTarget {
     this.body.tick(dt);
     this.warningLeft = Math.max(0, this.warningLeft - dt);
     this.blindLeft = Math.max(0, this.blindLeft - dt);
+    this.ambushRollCd = Math.max(0, this.ambushRollCd - dt);
     const density = Math.max(0, Math.min(1, gas?.density ?? 0));
     const st = this.fsm.state;
     if (st === SuspectState.DOWN || st === SuspectState.ARRESTED) {
@@ -478,6 +497,7 @@ export class Suspect implements HitTarget {
   onFlashed(seconds: number): void {
     if (!this.alive || !Number.isFinite(seconds) || seconds <= 0) return;
     this.blindLeft = Math.max(this.blindLeft, seconds);
+    this.clearAmbush(); // 閃光で視界を失うと待ち伏せは崩れる
   }
 
   getAABB(): AABB {
@@ -652,7 +672,131 @@ export class Suspect implements HitTarget {
     }
   }
 
+  /** 待ち伏せ中か（移動中・待機中どちらも） */
+  get isAmbushing(): boolean {
+    return this.ambushSpot !== null;
+  }
+
+  /** 位置に着き、入口へ照準を置いて待っているか（pre-aim 状態） */
+  get isAmbushReady(): boolean {
+    return this.ambushSpot !== null && this.ambushReady && this.state === SuspectState.ALERT && this.blindLeft <= 0;
+  }
+
+  /** pre-aim 状態の反応時間（秒）。非待ち伏せ時は profile.reactionTime */
+  get ambushReactionSec(): number {
+    return this.profile.ambush?.preAimReactionSec ?? this.profile.reactionTime;
+  }
+
+  /** pre-aim 円錐の半角 cos と有効距離（Perception が参照） */
+  get ambushCone(): { coneDeg: number; maxDist: number } {
+    const a = this.profile.ambush;
+    return { coneDeg: a?.coneDeg ?? 70, maxDist: a?.maxDist ?? 14 };
+  }
+
+  /** 待ち伏せ位置（デバッグ・テスト用） */
+  get ambushTarget(): AmbushSpot | null {
+    return this.ambushSpot;
+  }
+
+  private clearAmbush(): void {
+    if (!this.ambushSpot) return;
+    this.ambushSpot = null;
+    this.ambushReady = false;
+    this.ambushElapsed = 0;
+    if (this.managed && this.state !== SuspectState.HESITATE && this.blindLeft <= 0) this.body.setPose('stand');
+  }
+
+  /** 室内の入口方向へ待ち伏せる位置を決める。成功したら true（既存の調査移動・遮蔽退避は行わない）。 */
+  private tryBeginAmbush(pos: Vec3, kind: NoiseKind, source?: NoiseSource): boolean {
+    const params = this.profile.ambush;
+    if (!params || !this.ctx || !this.combat || this.friendly || source === 'suspect') return false;
+    if (this.blindLeft > 0 || this.gasLevel / 100 > GAS_COUGH_THRESHOLD) return false;
+    if (!AMBUSH_TRIGGER_KINDS.includes(kind)) return false;
+    if (this.ambushSpot) {
+      // 待ち伏せ継続中: 新しい物音で待機時間を延長する
+      this.ambushElapsed = Math.max(0, this.ambushElapsed - 2);
+      return true;
+    }
+    if (this.ambushRollCd > 0) return false;
+    const room = this.currentRoom();
+    const doors = this.ctx.doors?.doors;
+    if (!room || !doors || doors.length === 0) return false;
+    const rect = roomRectOf(room);
+    if (pointInRoom(rect, pos.x, pos.z, resolveFloorY(pos, this.ctx.rooms, kind), 0)) return false; // すでに室内
+    const dist = Math.hypot(pos.x - this.body.px, pos.z - this.body.pz);
+    if (dist > params.maxDist * 1.6) return false;
+    // 乱数は 1 つの物音エピソードにつき一度だけ（足音ごとの再抽選で確率が上振れしない）
+    this.ambushRollCd = 8;
+    if (Math.random() >= ambushProbability(params, this.profile.aggression)) return false;
+
+    const cand: Doorway[] = doorwaysOfRoom(
+      doors.map((d) => ({
+        id: d.id,
+        x: d.centerX,
+        z: d.centerZ,
+        nx: d.normalX,
+        nz: d.normalZ,
+        ax: d.axisX,
+        az: d.axisZ,
+        sillY: d.sillY,
+        width: d.width,
+      })),
+      rect,
+    );
+    if (cand.length === 0) return false;
+    cand.sort((a, b) => Math.hypot(a.x - pos.x, a.z - pos.z) - Math.hypot(b.x - pos.x, b.z - pos.z));
+    const entry = cand[0]!;
+    if (Math.hypot(entry.x - pos.x, entry.z - pos.z) > params.maxDist) return false;
+    const spot = findAmbushSpot({
+      colliders: this.ctx.colliders,
+      room: rect,
+      doorway: entry,
+      from: { x: this.body.px, z: this.body.pz },
+      maxDist: params.maxDist,
+    });
+    if (!spot) return false;
+    this.ambushSpot = spot;
+    this.ambushReady = false;
+    this.ambushElapsed = 0;
+    this.alertMoveTarget = null;
+    this.alertMoveMode = null;
+    this.alertCover = null;
+    this.nav?.reset();
+    return true;
+  }
+
+  /** ALERT 中の待ち伏せ行動。処理した（通常の ALERT 挙動をスキップする）なら true。 */
+  private updateAmbush(dt: number): boolean {
+    const spot = this.ambushSpot;
+    const params = this.profile.ambush;
+    if (!spot || !params || !this.combat || !this.ctx) return false;
+    if (this.blindLeft > 0 || this.gasLevel / 100 > GAS_COUGH_THRESHOLD) {
+      this.clearAmbush();
+      return false;
+    }
+    this.ambushElapsed += dt;
+    if (this.ambushElapsed >= params.holdSec) {
+      this.clearAmbush();
+      return false;
+    }
+    this.alertTimer = 0; // 待ち伏せ中は ALERT の自然鎮静を止める
+    const d = Math.hypot(spot.x - this.body.px, spot.z - this.body.pz);
+    if (!this.ambushReady) {
+      if (d > 0.14) {
+        this.body.faceToward(spot.x, spot.z);
+        stepToward(this.body, this.ctx.colliders, spot.x, spot.z, this.combat.moveSpeed * 0.8 * dt);
+        return true;
+      }
+      this.ambushReady = true;
+      this.body.setPose(spot.crouch ? 'crouch' : 'stand');
+      this.body.setReadyPose('high');
+    }
+    this.body.aimAt(spot.aim.x, spot.aim.y, spot.aim.z, dt, Math.PI * 3 * dt);
+    return true;
+  }
+
   private updateAlert(dt: number): void {
+    if (this.ambushSpot && this.updateAmbush(dt)) return;
     if (this.alertMoveTarget && this.combat && this.mobility && this.nav && this.blindLeft <= 0) {
       this.alertMoveElapsed += dt;
       const speedScale =
@@ -929,6 +1073,11 @@ export class Suspect implements HitTarget {
     this.heardAt = target;
     this.alertTimer = 0;
 
+    if (this.tryBeginAmbush(pos, kind, _source)) {
+      this.setState(SuspectState.ALERT);
+      return;
+    }
+
     const mob = this.mobility;
     const guardRoom = Boolean(mob?.guardHostageRoom && this.hasUnsecuredCivilianInSameRoom());
     const dist = Math.hypot(pos.x - this.body.px, pos.z - this.body.pz);
@@ -968,6 +1117,13 @@ export class Suspect implements HitTarget {
     if (!this.canPerceive || this.blindLeft > 0) return;
     this.body.faceToward(pos.x, pos.z);
     this.known = { x: pos.x, y: pos.y, z: pos.z };
+    const params = this.profile.ambush;
+    if (this.isAmbushReady && params && this.morale.value >= this.profile.thresholds.hesitateBelow) {
+      // 待ち伏せ成立: 警告の応酬（CONFRONTATION）を飛ばして即交戦し、初弾バーストは狙いが締まる
+      this.engage?.armPreAim(params.firstBurstShots, params.firstBurstSpreadMul);
+      this.setState(SuspectState.ENGAGE);
+      return;
+    }
     this.setState(SuspectState.CONFRONTATION);
   }
 
@@ -986,6 +1142,49 @@ export class Suspect implements HitTarget {
   collectEvidence(): void {
     this.evidenceCollected = true;
     this.body.removeGun();
+  }
+
+  /** 偽装投降の確率（ai_profiles.json の fakeSurrenderChance）。容疑者モードの拘束判定が使う */
+  get fakeSurrenderChance(): number {
+    return this.combat?.fakeSurrenderChance ?? 0;
+  }
+
+  /** 拘束済み（手錠）か */
+  get isRestrained(): boolean {
+    return this.state === SuspectState.ARRESTED;
+  }
+
+  /**
+   * 容疑者モード専用: 偽装投降の反撃。拘束に来た隊員の至近で武器を拾い直し、不意に撃つ（投降状態のみ・1 度きり）。
+   * 続けて通常の交戦へ移る。
+   */
+  fakeSurrenderAttack(at: Vec3): boolean {
+    if (!this.friendly || this.state !== SuspectState.SURRENDER) return false;
+    this.fakeSurrenderChecked = true;
+    this.known = { x: at.x, y: at.y, z: at.z };
+    this.body.faceToward(at.x, at.z);
+    this.morale.shift(Math.max(15, this.profile.thresholds.hesitateBelow + 12 - this.morale.value));
+    this.prevMorale = this.morale.value;
+    this.setState(SuspectState.ENGAGE);
+    this.engage?.fireAt(null, this.known);
+    return true;
+  }
+
+  /**
+   * 容疑者モード専用: プレイヤーが拘束(ARRESTED)の味方を解放した。士気は降伏しきい値の少し上まで下がった状態で
+   * 戦線に復帰し、まず遮蔽へ退避してから戦う（偽装投降の再抽選はしない）。
+   */
+  freeFromRestraint(): boolean {
+    if (!this.friendly || this.state !== SuspectState.ARRESTED) return false;
+    this.body.setRestrained(false);
+    this.body.setTint(SUSPECT_COLOR);
+    this.fakeSurrenderChecked = true;
+    this.unwatchedSurrenderSec = 0;
+    const th = this.profile.thresholds;
+    this.morale.shift(th.surrenderBelow + FREED_MORALE_MARGIN - this.morale.value);
+    this.prevMorale = this.morale.value;
+    this.setState(SuspectState.ENGAGE);
+    return true;
   }
 
   /** 拘束完了（SURRENDER のみ受理）。戻り値: 受理したか */

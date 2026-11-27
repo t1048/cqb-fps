@@ -28,7 +28,9 @@
   "doorOpenTimeoutSec": 2.2,
   "hostileStates": ["ENGAGE", "HOSTAGE_SHIELD"],
   "warnStates": ["BARRICADED", "ALERT", "CONFRONTATION", "HESITATE"],
-  "hint": "右クリック: 部隊指揮 / Z: クイック / X: 集合 / T: チーム切替 / Tab: 突入モード切替",
+  "mirror": { "durationSec": 4, "missChance": 0.35, "centerBandM": 1.1, "halfFovDeg": 55, "range": 12 },
+  "wounds": { "headMultiplier": 2.2, "woundBelow": 0.5, "speedMul": 0.75 },
+  "hint": "右クリック: 部隊指揮 / Z: クイック(未確認はミラー確認→突入) / 4: オプティワンド / X: 集合 / T: チーム切替 / Tab: 突入モード切替",
   "orderLabels": {
     "follow": "追従",
     "hold": "現在位置待機",
@@ -41,7 +43,8 @@
     "c2Clear": "C2爆破突入",
     "gasClear": "ガス突入",
     "pieDoor": "扉開放警戒",
-    "restrain": "対象確保"
+    "restrain": "対象確保",
+    "mirror": "ミラー確認"
   },
   "elementLabels": {
     "gold": "GOLD (全員)",

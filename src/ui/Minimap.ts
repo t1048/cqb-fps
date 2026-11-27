@@ -99,6 +99,14 @@ export interface FloorPlanWaypoint {
   color: string;
 }
 
+/** オプティワンド等で確認した接触（最後に確認した位置）。threat=武装容疑者, civilian=民間人, unarmed=無力化済み/投降 */
+export interface FloorPlanContact {
+  x: number;
+  y: number;
+  z: number;
+  kind: 'threat' | 'civilian' | 'unarmed';
+}
+
 export interface DrawFloorPlanOptions {
   coverage?: readonly Cell[];
   /** 論理描画幅(px)。省略時は canvas.width */
@@ -119,6 +127,8 @@ export interface DrawFloorPlanOptions {
   allies?: readonly FloorPlanAllyState[];
   /** 指示された移動・警戒ポイント */
   waypoints?: readonly FloorPlanWaypoint[];
+  /** スカウト（オプティワンド/ミラー）で確認した接触マーカー */
+  contacts?: readonly FloorPlanContact[];
   /** ドア ID → リアルタイム開閉状態（省略時は静的定義から closed/locked を描画） */
   doors?: ReadonlyMap<string, FloorPlanDoorState>;
   /** コンパクト表示（ミニマップ用） */
@@ -588,6 +598,28 @@ function drawDynamicFloorPlan(
     }
   }
 
+  // スカウトした接触（赤=武装容疑者の最終確認位置 / 黄=民間人）
+  if (options.contacts) {
+    for (const c of options.contacts) {
+      if (options.floorY !== undefined && Math.abs(c.y - options.floorY) > 1.4) continue;
+      const cx = toX(c.x);
+      const cy = toY(c.z);
+      const r = compact ? 3.6 : 5;
+      ctx.save();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = '#09121a';
+      ctx.fillStyle = c.kind === 'threat' ? '#ff4d4d' : c.kind === 'civilian' ? '#ffd24a' : '#9aa6b2';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r);
+      ctx.lineTo(cx + r, cy + r * 0.8);
+      ctx.lineTo(cx - r, cy + r * 0.8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // 隊員マーカー
   if (options.allies) {
     for (const ally of options.allies) {
@@ -732,6 +764,7 @@ export class Minimap {
     private readonly coverage: readonly Cell[],
     private readonly getAllies?: () => readonly FloorPlanAllyState[],
     private readonly getWaypoints?: () => readonly FloorPlanWaypoint[],
+    private readonly getContacts?: () => readonly FloorPlanContact[],
   ) {
     this.floorLevels = collectFloorLevels(map);
 
@@ -917,6 +950,7 @@ export class Minimap {
       floorY: floor.floorY,
       allies: this.getAllies?.(),
       waypoints: this.getWaypoints?.(),
+      contacts: this.getContacts?.(),
       player: this.playerState,
     });
     ctx.restore();

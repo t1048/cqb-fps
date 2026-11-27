@@ -158,7 +158,7 @@ export class Flashbang {
     // 構え切替: 3 でトグル、1〜2 で通常武器へ戻る（指揮メニュー展開中は抑止）
     if (!this.input.isOrderMenuOpen) {
       if (this.input.wasPressed('slot3')) this.setEquipped(!this.isEquipped && this.count > 0);
-      else if (this.input.wasPressed('slot1') || this.input.wasPressed('slot2')) {
+      else if (this.input.wasPressed('slot1') || this.input.wasPressed('slot2') || this.input.wasPressed('slot4')) {
         this.setEquipped(false);
       }
     }

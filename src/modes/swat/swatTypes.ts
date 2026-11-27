@@ -3,6 +3,7 @@ import type { GameEventBus } from '../../core/events';
 import type { AllyTarget } from '../../ai/EngageBehavior';
 import type { HumanoidBody } from '../../ai/HumanoidBody';
 import type { StackSlot } from '../../ai/stackSlots';
+import type { RestrainTarget } from '../../ai/restrain';
 import type { CqbPortal, EntryMode, EntryPlan, EntrySlotRank, FriendlyPos } from '../../ai/cqbEntry';
 import {
   BASE_SHIELD_COMBAT,
@@ -25,6 +26,7 @@ import type { Collider } from '../../world/WorldBuilder';
 import type { FlashOverlay } from '../../ui/FlashOverlay';
 import type { Subtitle } from '../../ui/Subtitle';
 import type { SwatHunter } from './SwatHunter';
+import type { RoutePlan } from './swatRoutePlanner';
 
 /**
  * 容疑者モードの SWAT 戦闘パラメータ（基準値は SwatProfile.ts）。
@@ -161,6 +163,52 @@ export const ROUTE_CACHE_TTL = 1;
 export const ROUTE_CACHE_MAX = 6;
 export const ENTRY_WALK_RADIUS = 0.3;
 
+/** 施錠ドアを考慮した経路計画: 結果キャッシュ秒・ドア判定半径(m)・歩行半径(m)・各隊員の再計画間隔(s)・ブリーチ失敗扉の除外秒・他隊員のブリーチ待ちの上限秒 */
+export const ROUTE_PLAN_CACHE_SEC = 1.2;
+export const ROUTE_PLAN_DOOR_RADIUS = 0.95;
+export const ROUTE_WALK_RADIUS = 0.3;
+export const ROUTE_CHECK_SEC = 1.0;
+export const SKIP_DOOR_TTL_SEC = 25;
+export const ROUTE_BREACH_WAIT_SEC = 10;
+
+/** 停滞監視: 段階ごとに無進捗がこの秒数続いたら次の打開策（再計画 / 施錠ドアのブリーチ / ドローン / 直接押し込み）。最終段階は繰り返す */
+export const STALL_LEVEL_SEC = [8, 14, 20, 28] as const;
+/** 交戦・ブリーチなどで進行中とみなす間、無進捗秒をこの値で頭打ちにする */
+export const STALL_BUSY_CAP_SEC = 4;
+
+/**
+ * 投降した味方容疑者の拘束（容疑者モード）: 手錠をかける隊員は無防備になる。
+ * 接触（手錠を始める）距離・援護役が離れて見張る距離・拘束中の反応遅れ(s)・拘束役を割り当てる最大距離(m)
+ * 偽装投降の反撃が起きる進行度の範囲（拘束時間に対する割合）
+ */
+export const RESTRAIN_REACH = 1.3;
+export const RESTRAIN_COVER_DIST = 3.0;
+export const RESTRAIN_REACT_PENALTY = 0.3;
+export const RESTRAIN_MAX_DIST = 45;
+export const RESTRAIN_FAKE_AT_MIN = 0.35;
+export const RESTRAIN_FAKE_AT_SPAN = 0.45;
+export const RESTRAIN_GIVEUP_SEC = 45;
+
+/**
+ * ホットスポット学習（見えない位置から撃たれた開口を全隊で共有し、裸でのぞかない）:
+ * 近づいたとみなす距離(m) / 先行照準した隊員が地点に現れた相手へ反応する秒（通常は reactionSec）と、その半径(m)
+ * 閃光・ガス・制圧射撃の待機秒 / 盾待ち・挟撃待ちの上限秒 / 前進（先行照準を維持）秒 / 同じ地点の再対策までの秒
+ * 半開きドアを疑わしいとみなす静止秒・疑わしい地点を捨てる秒
+ */
+export const HOT_APPROACH_DIST = 7.5;
+export const HOT_PREAIM_REACT_SEC = 0.15;
+export const HOT_PREAIM_RADIUS = 2.8;
+export const HOT_FLASH_WAIT_SEC = 2.4;
+export const HOT_GAS_WAIT_SEC = 4.0;
+export const HOT_SUPPRESS_SEC = 3.0;
+export const HOT_SHIELD_MAX_SEC = 8;
+export const HOT_PINCER_MAX_SEC = 14;
+export const HOT_ADVANCE_SEC = 7;
+export const HOT_REUSE_SEC = 25;
+export const HOT_DOOR_STABLE_SEC = 1.0;
+export const HOT_BLIND_TEAM_SEC = 1.2;
+export const HOT_SUSPECT_NEAR = 4.5;
+
 export const NAMES = ['アルファ', 'ブラボー', 'チャーリー', 'デルタ', 'エコー', 'フォックス'];
 
 export const CAMP_GAS_THRESHOLD_SEC = 20;
@@ -199,6 +247,7 @@ export type HunterState =
   | 'engage'
   | 'rush'
   | 'disarm'
+  | 'restrain'
   | 'down';
 
 /** 同じ入口に積んだ隊員の突入グループ（スタック枠・突入順・突入計画を共有） */
@@ -256,6 +305,8 @@ export interface SwatTeamDeps {
   textures?: TextureLibrary;
   /** 味方容疑者 NPC。未指定ならプレイヤーだけを狙う */
   suspects?: () => readonly AllyTarget[];
+  /** 投降・拘束済みの味方容疑者（SWAT が手錠をかけに行く）。未指定なら拘束しない */
+  restrainables?: () => readonly RestrainTarget[];
   /** 人質の盾が今有効か（人質が暴れている間は無効）。未指定なら常に有効 */
   shieldActive?: () => boolean;
   /** ペッパーボールの命中（プレイヤー本人 / 抱えた人質） */
@@ -327,6 +378,7 @@ export interface SwatTeamHost {
   markBad(c: CoverCell): void;
   markSeenAround(x: number, z: number, y: number, radius: number): void;
   sameIndoorRoom(x: number, z: number, y: number, goal: Vec3): boolean;
+  planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan;
   trapHeld(door: Door): boolean;
   isDoorBeingBreached(doorId: string, exclude?: SwatHunter): boolean;
   findLockedDoor(h: SwatHunter, goal: Vec3, skip: ReadonlySet<string>): Door | null;

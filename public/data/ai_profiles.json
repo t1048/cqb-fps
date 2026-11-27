@@ -86,6 +86,15 @@
         "repositionAfterLostSec": 5.0,
         "flankChance": 0.2,
         "guardHostageRoom": true
+      },
+      "ambush": {
+        "chance": 0.35,
+        "preAimReactionSec": 0.2,
+        "firstBurstSpreadMul": 0.55,
+        "maxDist": 14,
+        "holdSec": 25,
+        "firstBurstShots": 3,
+        "coneDeg": 70
       }
     },
     {
@@ -174,6 +183,15 @@
         "repositionAfterLostSec": 2.4,
         "flankChance": 0.75,
         "guardHostageRoom": true
+      },
+      "ambush": {
+        "chance": 0.75,
+        "preAimReactionSec": 0.14,
+        "firstBurstSpreadMul": 0.4,
+        "maxDist": 14,
+        "holdSec": 25,
+        "firstBurstShots": 3,
+        "coneDeg": 70
       }
     },
     {
@@ -299,6 +317,15 @@
         "repositionAfterLostSec": 3.2,
         "flankChance": 0.5,
         "guardHostageRoom": true
+      },
+      "ambush": {
+        "chance": 0.6,
+        "preAimReactionSec": 0.16,
+        "firstBurstSpreadMul": 0.45,
+        "maxDist": 14,
+        "holdSec": 25,
+        "firstBurstShots": 3,
+        "coneDeg": 70
       }
     }
   ]

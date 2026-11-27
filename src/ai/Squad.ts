@@ -1,3 +1,5 @@
+import { ScoutIntel } from './ScoutIntel';
+import { refreshScoutIntel } from './squad/squadScout';
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
 import { t } from '../core/i18n';
@@ -197,6 +199,8 @@ export class SquadSystem implements SquadContext {
   readonly flashbang?: Flashbang;
   readonly tearGas?: TearGas;
   readonly windows: readonly WindowDef[];
+  readonly intel: ScoutIntel;
+  private intelTimer = 0;
 
   flashesLeft = SWAT_FLASH_PER_TEAM;
   flashCd = 0;
@@ -241,8 +245,9 @@ export class SquadSystem implements SquadContext {
     readonly flash: { range: number; blindSec: number },
     readonly rooms: readonly RoomDef[],
     readonly arrestCfg: ArrestConfig,
-    gadgets?: { flashbang?: Flashbang; tearGas?: TearGas; windows?: readonly WindowDef[] },
+    gadgets?: { flashbang?: Flashbang; tearGas?: TearGas; windows?: readonly WindowDef[]; intel?: ScoutIntel },
   ) {
+    this.intel = gadgets?.intel ?? new ScoutIntel();
     this.flashbang = gadgets?.flashbang;
     this.tearGas = gadgets?.tearGas;
     this.windows = gadgets?.windows ?? [];
@@ -378,6 +383,7 @@ export class SquadSystem implements SquadContext {
         warnCd: 0,
         hp: SWAT_HP,
         maxHp: SWAT_HP,
+        wounded: false,
         down: false,
         engaging: false,
         engageActive: false,
@@ -446,6 +452,9 @@ export class SquadSystem implements SquadContext {
         stealthEntry: false,
         flashRetryCd: 0,
         sweepRetryCd: 0,
+        mirrorLeft: 0,
+        mirrorStarted: false,
+        mirrorThen: null,
         targetWrapper,
         label,
         getAABB: () => body.getAABB(),
@@ -483,7 +492,7 @@ export class SquadSystem implements SquadContext {
     this.root.add(this.burstMesh);
 
     this.unsubs.push(
-      bus.on('entityHit', (e) => onHit(this, e.targetId, e.damage, e.nonlethal === true)),
+      bus.on('entityHit', (e) => onHit(this, e.targetId, e.damage, e.nonlethal === true, e.pos.y, e.shooter)),
       bus.on('suspectFired', (e) => {
         this.provoked.add(e.id);
         for (const ally of this.allies) {
@@ -630,6 +639,11 @@ export class SquadSystem implements SquadContext {
     this.simTime += dt;
     updateFollowHeading(this, dt);
     updatePortalGroups(this, dt);
+    this.intelTimer -= dt;
+    if (this.intelTimer <= 0) {
+      this.intelTimer = 0.5;
+      refreshScoutIntel(this);
+    }
 
     this.ackLeft = Math.max(0, this.ackLeft - dt);
     this.flashCd = Math.max(0, this.flashCd - dt);

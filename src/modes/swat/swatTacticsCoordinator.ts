@@ -567,7 +567,8 @@ export class SwatTacticsCoordinator {
         h.state === 'stack' ||
         h.state === 'pie' ||
         h.state === 'entry' ||
-        h.state === 'disarm'
+        h.state === 'disarm' ||
+        h.state === 'restrain'
       ) continue;
       if (h.huntingFlank) continue;
       if (h.leader && h.leader.alive) continue;
@@ -776,6 +777,66 @@ export class SwatTacticsCoordinator {
     this.launchFlash(by, origin, plan.velocity, plan.fuse);
   }
 
+  /** ホットスポット対策用: 追跡条件（目撃の鮮度など）に縛られず、指定地点へ閃光を投げ込めるか */
+  flashAvailable(): boolean {
+    return this.flashesLeft > 0 && this.flashCd <= 3 && !this.host.hostageShieldUp();
+  }
+
+  /** 指定地点（階段室・ドア隙間の先）へ閃光を投げる。間接投擲（ドア枠・窓・壁バウンド）が計画できなければ直射の弾道で投げる */
+  throwFlashAtSpot(by: SwatHunter, target: Vec3): boolean {
+    if (!this.flashAvailable()) return false;
+    const from = by.body.chestPos(this.chestScratch);
+    const origin = { x: from.x, y: from.y + 0.25, z: from.z };
+    const d = Math.hypot(target.x - origin.x, target.z - origin.z);
+    if (d < 1.8 || d > SWAT_FLASH_MAX_DIST + 2) return false;
+    const plan = planFlashThrow(
+      origin,
+      target,
+      this.host.d.doors.doors,
+      this.host.d.windows ?? [],
+      this.host.d.colliders,
+      this.host.d.flashbang.gravity,
+      Math.min(SWAT_FLASH_MIN_DIST, 2.2),
+      SWAT_FLASH_MAX_DIST,
+    );
+    if (plan) {
+      this.launchFlash(by, origin, plan.velocity, plan.fuse);
+      return true;
+    }
+    // 階段室など: 目標高さを狙って山なりに投げる（天井・壁で跳ねる）
+    if (Math.abs(target.y - origin.y) > 4) return false;
+    this.throwFlash(by, target, 1.5);
+    return true;
+  }
+
+  gasAvailable(): boolean {
+    return !!this.host.d.tearGas && this.gasLeft > 0 && this.gasCd <= 0 && !this.host.hostageShieldUp();
+  }
+
+  /** 指定地点へ催涙ガスを投げ込む（planFlashThrow の間接投擲を使う） */
+  throwGasAtSpot(by: SwatHunter, target: Vec3): boolean {
+    const gas = this.host.d.tearGas;
+    if (!gas || !this.gasAvailable()) return false;
+    const origin: Vec3 = { x: by.body.px, y: by.body.footY + 1.35, z: by.body.pz };
+    const plan = planFlashThrow(
+      origin,
+      target,
+      this.host.d.doors.doors,
+      this.host.d.windows ?? [],
+      this.host.d.colliders,
+      gas.gravity ?? 9.8,
+      SWAT_GAS_MIN_DIST,
+      SWAT_GAS_MAX_DIST,
+    );
+    if (!plan) return false;
+    gas.throwFrom(origin, plan.velocity, by.id, plan.fuse);
+    this.gasLeft--;
+    this.gasCd = THREE.MathUtils.lerp(GAS_TEAM_CD, GAS_TEAM_CD * 0.65, this.pressure);
+    const [gasJa, gasEn] = dugInGasLine(this.host.roomName(target));
+    this.host.queueRadio(by, gasJa, gasEn);
+    return true;
+  }
+
   throwFlash(by: SwatHunter, target: Vec3, fuse: number): void {
     const from = by.body.chestPos(this.chestScratch);
     const origin = { x: from.x, y: from.y + 0.25, z: from.z };
@@ -961,6 +1022,7 @@ export class SwatTacticsCoordinator {
         h.state === 'stack' ||
         h.state === 'pie' ||
         h.state === 'entry' ||
+        h.state === 'restrain' ||
         h.state === 'rush'
       ) continue;
       if (h.leader && h.leader.alive) continue; // 組員はリーダーに追従する
