@@ -292,6 +292,14 @@ export function updateMarkers(ctx: SquadContext): void {
   ctx.menu.updateActiveMarkers(markers);
 }
 
+function isLeadAtStackPos(lead: AllyUnit, portal: EntryPortal): boolean {
+  return (
+    lead.stackPos !== null &&
+    Math.abs(lead.body.footY - portal.sillY) < 0.4 &&
+    Math.hypot(lead.body.px - lead.stackPos.x, lead.body.pz - lead.stackPos.z) <= 0.34
+  );
+}
+
 export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx: OrderContext): void {
   // 閉じた未チェックのドアへのスタック指示は、同時にドアチェック（罠・施錠）も行う（指示の手数を減らしテンポを保つ）。
   // check は全員スタック → 先頭がチェックなので、スタック位置に着いた時点でそのままチェックが始まる。
@@ -382,6 +390,9 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
     // 全員がスタックし、先頭の 1 名が数秒静止してドア下をミラー確認する（右クリックメニューから選んだときだけ）
     const lead = assignPortalGroup(ctx, targets, portal, targetRoom, 'stack');
     startMirror(ctx, lead);
+    if (isLeadAtStackPos(lead, portal)) lead.mirrorStarted = true;
+    const [jaText, enText] = pickRadio(doorAck('mirror', false));
+    ctx.emitRadio(lead, jaText, enText);
     return;
   }
 
@@ -403,8 +414,16 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
     }
     // 全員がスタックし、先頭の 1 名がドア際でしゃがんで作業する（突入はしない）
     const lead = assignPortalGroup(ctx, targets, portal, targetRoom, 'stack');
-    if (order === 'check') startCheck(ctx, lead);
-    else startDisarm(ctx, lead);
+    const alreadyAtDoor = isLeadAtStackPos(lead, portal);
+    if (order === 'check') {
+      startCheck(ctx, lead);
+      if (alreadyAtDoor) lead.checkStarted = true;
+    } else {
+      startDisarm(ctx, lead);
+      if (alreadyAtDoor) lead.disarmStarted = true;
+    }
+    const [jaText, enText] = pickRadio(doorAck(order, false));
+    ctx.emitRadio(lead, jaText, enText);
     return;
   }
 

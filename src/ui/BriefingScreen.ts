@@ -437,10 +437,11 @@ export class BriefingScreen {
     onSelectStage: (stageId: string) => void,
     stepNum: number,
   ): void {
-    this.stageSlot.appendChild(this.stepTitle(stepNum, t('マップの広さ（間取りは毎回ランダム）', 'Map Size (Procedural Layout)')));
+    this.stageSlot.appendChild(this.stepTitle(stepNum, t('マップ（間取りは毎回ランダム）', 'Map (Procedural Layout)')));
     const grid = document.createElement('div');
     grid.className = 'bfs-choices';
-    grid.style.gridTemplateColumns = `repeat(${Math.min(stages.length, 3)}, minmax(0, 1fr))`;
+    const cols = stages.length === 4 ? 2 : Math.min(stages.length, 3);
+    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
     const color = '#f2c14e';
     for (const stage of stages) {
       const active = stage.id === currentStageId;

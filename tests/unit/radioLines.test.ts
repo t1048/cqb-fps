@@ -5,6 +5,7 @@ import {
   ENTRY_COORD_POOLS,
   FLANK,
   cellSetLine,
+  doorAck,
   pickRadio,
   roomClearLine,
 } from '../../src/ai/radioLines';
@@ -60,6 +61,17 @@ describe('SWAT 4 radio variants', () => {
       const [ja] = pickRadio(CONTACT);
       expect(ja).not.toBe(prev);
       prev = ja;
+    }
+  });
+
+  it('returns dedicated order acknowledgments for check, disarm, and mirror', () => {
+    for (const order of ['check', 'disarm', 'mirror'] as const) {
+      const pool = doorAck(order, false);
+      expect(pool.length).toBeGreaterThanOrEqual(2);
+      for (const [ja, en] of pool) {
+        expect(ja).toContain('了解');
+        expect(en.length).toBeGreaterThan(0);
+      }
     }
   });
 });

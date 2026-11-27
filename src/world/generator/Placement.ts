@@ -34,6 +34,17 @@ export class PlacementGrid {
     this.layer(floorY).keepOut.push(r);
   }
 
+  /** 指定した矩形・回転 BoxDef をそのまま配置する（航空機の座席列など）。 */
+  placeBox(rect: Rect, box: BoxDef, floorY: number = this.defaultFloorY, gap = 0): boolean {
+    const layer = this.layer(floorY);
+    if (this.blocked(layer, rect, gap)) return false;
+    layer.coverRects.push(rect);
+    const out: BoxDef = { ...box };
+    if (floorY !== 0) out.y = round3(floorY);
+    this.covers.push(out);
+    return true;
+  }
+
   private blocked(layer: PlacementLayer, r: Rect, gap: number): boolean {
     for (const k of layer.keepOut) if (rectsOverlap(r, k)) return true;
     for (const c of layer.coverRects) {

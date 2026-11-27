@@ -36,6 +36,7 @@ const HALL_NAME: Record<MotifId, string> = {
   embassy: 'レセプションホール',
   residence: 'リビング',
   japanese_house: '座敷',
+  air_force_one: '会議室',
 };
 
 const TOILET_NAME: Record<MotifId, string> = {
@@ -47,6 +48,7 @@ const TOILET_NAME: Record<MotifId, string> = {
   embassy: '化粧室',
   residence: 'トイレ',
   japanese_house: 'トイレ',
+  air_force_one: '化粧室',
 };
 
 const HALL_FLOOR: Record<MotifId, string> = {
@@ -58,6 +60,7 @@ const HALL_FLOOR: Record<MotifId, string> = {
   embassy: 'marble',
   residence: 'wood',
   japanese_house: 'tatami',
+  air_force_one: 'carpet',
 };
 
 const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
@@ -154,6 +157,7 @@ const ROOM_PROPS: Record<MotifId, Partial<Record<RoomRole, Spec[]>>> = {
       { prop: 'planter', width: 0.7, depth: 0.7, height: 0.55, place: 'wall' },
     ],
   },
+  air_force_one: {},
 };
 
 function rectOf(r: RoomDef): Rect {

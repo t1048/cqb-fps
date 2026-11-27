@@ -77,6 +77,12 @@ export function doorAck(order: string, open: boolean): readonly RadioLine[] {
       return ACK_GAS;
     case 'pieDoor':
       return ACK_HOLD_DOOR;
+    case 'check':
+      return ACK_CHECK;
+    case 'disarm':
+      return ACK_DISARM;
+    case 'mirror':
+      return ACK_MIRROR;
     default:
       return ACK_ROGER;
   }
@@ -228,6 +234,22 @@ const ACK_HOLD_DOOR: readonly RadioLine[] = [
   ['了解。ドアを開けて外から警戒する。', 'Copy. Opening the door and holding outside.'],
   ['了解。外から室内を確認する。', 'Roger. We will cover the room from outside.'],
   ['了解だ。入らずにドアを押さえる。', 'Copy. Holding the door. We are not going in.'],
+];
+
+const ACK_CHECK: readonly RadioLine[] = [
+  ['了解。ドアに付いて施錠と罠を確認する。', 'Copy. Stacking up and checking the door.'],
+  ['了解。ドアの鍵と仕掛けを確認する。', 'Roger. Checking the door for locks and traps.'],
+  ['了解だ。ドア際で確認する。', 'Copy that. Moving to check the door.'],
+];
+
+const ACK_DISARM: readonly RadioLine[] = [
+  ['了解。トラップを解除する。', 'Copy. Moving to disarm the trap.'],
+  ['了解だ。ドアの仕掛けを外す。', 'Roger. Disarming the door trap.'],
+];
+
+const ACK_MIRROR: readonly RadioLine[] = [
+  ['了解。ミラーでドア下を確認する。', 'Copy. Mirroring under the door.'],
+  ['了解だ。ワンドで室内を覗く。', 'Roger. Checking under the door with the wand.'],
 ];
 
 const ACK_MOVE: readonly RadioLine[] = [

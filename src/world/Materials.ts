@@ -252,20 +252,42 @@ function paintFabric(ctx: CanvasRenderingContext2D, w: number, h: number, a: str
 }
 
 function paintMetal(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  const g = ctx.createLinearGradient(0, 0, w, h);
-  g.addColorStop(0, '#8d9398');
-  g.addColorStop(0.4, '#5c6368');
-  g.addColorStop(0.7, '#b0b6bb');
-  g.addColorStop(1, '#3e4448');
+  // 建築外壁（航空機胴体等）で RepeatWrapping されるため、上下左右の境界が完全につながるシームレス塗りにする
+  ctx.fillStyle = '#a4abb2';
+  ctx.fillRect(0, 0, w, h);
+
+  // 0..1 で同じ値に戻る対称・低コントラストの水平シマー（境界の不連続を防ぐ）
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, 'rgba(255,255,255,0.03)');
+  g.addColorStop(0.25, 'rgba(0,0,0,0.025)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.03)');
+  g.addColorStop(0.75, 'rgba(0,0,0,0.025)');
+  g.addColorStop(1, 'rgba(255,255,255,0.03)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  for (let y = 8; y < h; y += 10) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
+
+  // h の約数周期（32px）の穏やかなブラッシュ帯（モアレ・境界ズレを避ける）
+  const band = Math.max(16, Math.round(h / 16));
+  for (let y = 0; y < h; y += band) {
+    ctx.fillStyle = (y / band) % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(20,28,36,0.03)';
+    ctx.fillRect(0, y, w, band / 2);
   }
+
+  // 外板パネルの繊細な目地（タイル境界 0 と中央 w/2, h/2 に揃えてシームレス化）
+  const px = Math.round(w / 2);
+  const py = Math.round(h / 2);
+  ctx.fillStyle = 'rgba(20,28,36,0.11)';
+  ctx.fillRect(0, 0, w, 1);
+  ctx.fillRect(0, py, w, 1);
+  ctx.fillRect(0, 0, 1, h);
+  ctx.fillRect(px, 0, 1, h);
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  ctx.fillRect(0, 1, w, 1);
+  ctx.fillRect(0, py + 1, w, 1);
+  ctx.fillRect(1, 0, 1, h);
+  ctx.fillRect(px + 1, 0, 1, h);
+
+  speckle(ctx, w, h, 48, 0xd8e0e8, 0.05);
 }
 
 function paintWood(ctx: CanvasRenderingContext2D, w: number, h: number): void {

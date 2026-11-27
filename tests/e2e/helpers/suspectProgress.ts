@@ -11,16 +11,17 @@ import { createSwatHarness, type SwatHarness } from './simDriver';
  * 受け身の容疑者が、突入地点から最も遠い（扉でしか出入りできない）部屋に籠もり、
  * その部屋の扉をすべて施錠した状態で、SWAT が（ブリーチして）部屋を順に掃討し辿り着けるかを固定 dt で回す。
  */
-export type Tpl = 'house_compact' | 'house' | 'embassy';
+export type Tpl = 'house_compact' | 'house' | 'embassy' | 'air_force_one';
 
 /** 決定論的なシード。単層 / B1 / 2F / 3 層・階段コア 1〜2 基を各ジェネレータで混ぜてある */
 export const CASES: Record<Tpl, number[]> = {
   house_compact: [1, 3, 7, 10, 13, 17, 20, 30],
   house: [3, 9, 12, 16, 5, 24, 28, 31],
   embassy: [2, 4, 9, 12, 5, 10, 24, 33],
+  air_force_one: [1, 2, 3, 4],
 };
-/** 容疑者の部屋に辿り着く（または視認する）までの許容秒数。小・中は 150 秒、大使館は 200 秒 */
-export const CONTACT_LIMIT: Record<Tpl, number> = { house_compact: 150, house: 150, embassy: 200 };
+/** 容疑者の部屋に辿り着く（または視認する）までの許容秒数。小・中は 150 秒、大使館は 200 秒、専用機は 220 秒 */
+export const CONTACT_LIMIT: Record<Tpl, number> = { house_compact: 150, house: 150, embassy: 200, air_force_one: 220 };
 export const HOLD_SEC = 240;
 export const DT = 0.05;
 /** 交戦・ブリーチ・突入手順の最中を除いて、進捗（確認済みマス・クリア部屋・解錠ドア）が止まってよい上限 */

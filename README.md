@@ -82,9 +82,11 @@ npm run preview
 
 | ID | 広さ | 構成・特徴 |
 | --- | --- | --- |
-| `random_small` | **小** | `generators/house_compact.json` によるコンパクトな一戸建て（平屋 / 2F 建て / B1+1F の最大 2 階層構成）。 |
-| `random_house` | **中** | `generators/house.json` による中庭付き大型邸宅（平屋 / 2F 建て / B1+1F / B1+1F+2F の全 4 階層構成）。 |
-| `random_embassy` | **大** | `generators/embassy.json` による大使館複合施設（全 4 階層構成・最大 2 階段コア・中庭・地下保管庫対応）。 |
+| `random_small` | **小** | `generators/house_compact.json`（平屋 / 2F / B1+1F）。施設の種類は 民家 5・和風民家 4・クラブハウス 2・オフィス 2・倉庫 2・病院（診療所）1 の重み。銀行・大使館は出ない。 |
+| `random_house` | **中** | `generators/house.json`（中庭付き・最大 B1+1F+2F）。民家 3・オフィス 3・和風民家 2・クラブハウス 2・病院 2・銀行（支店）2・倉庫 2。大使館は出ない。 |
+| `random_embassy` | **大** | 5/6 で `generators/embassy.json`（最大 2 階段コア・中庭・地下）: 大使館 4・病院 3・オフィス 3・銀行（本店）3・倉庫 2・クラブハウス 1・民家（大邸宅）1。1/6 で `generators/air_force_one.json` の大統領専用機（最大 3 デッキ・タラップ突入）。 |
+
+建物の候補と重みは `public/data/stages.json` の `variants`（`generator`・`weight`・`motifs`）で決まり、シードから一意に選ばれます（同じシードなら同じ建物）。
 
 ランダム生成ステージでは外窓に加えて、隣り合う部屋の仕切り壁に**室内の窓口**（腰壁＋カウンター付きの素通し開口。通り抜けはできないが見通し・射線は通る）が生成されます（生成テンプレートの `window.interiorChance` / `interiorWidth` / `interiorSill` / `interiorHeight` / `interiorMaxPerLevel`）。
 
@@ -252,10 +254,11 @@ SWAT モードでは「Z 連打で全部片付く」ことはありません。�
 ```text
 public/data/
 ├── stages.json          # ステージ一覧マニフェスト（選択 UI に自動反映）
-├── generators/          # モジュラー建築生成テンプレート（type: "modular"）
+├── generators/          # 建築・機内生成テンプレート（type: "modular" / "aircraft"）
 │   ├── house_compact.json
 │   ├── house.json
-│   └── embassy.json
+│   ├── embassy.json
+│   └── air_force_one.json
 ├── weapons.json         # 実弾・非致死性装備・フラッシュバンのパラメータ
 ├── ai_profiles.json     # 容疑者・民間人の士気・戦闘・人質盾・パニック設定、容疑者の警戒度（suspectAlert）
 ├── squad.json           # 味方隊員 AI（スタック・突入・警戒・階段追従）、閃光/ガスの所持数（inventory）、ドアチェック・ドアトラップのパラメータ
@@ -287,6 +290,10 @@ public/data/
 - **シードの扱いと JSON 調整**:
   - ステージ選択や「別の間取りを生成」で新しいシード、リトライ（`R`）では同じシードを使用します。ブリーフィング画面にシードが表示され、シード入力欄・URL（`?stage=random_house&seed=12345`）・コンソールから同じ間取りを完全再現できます。
   - 階層プロファイル重み・目標面積・建築モジュール（寸法・個数・家具・サブ室）・動線ループ数・敷地変換規則・施錠率・人数などはテンプレート JSON のみで調整できます。
+
+### 航空機（大統領専用機）ランダム生成（`type: "aircraft"`）
+
+`generators/air_force_one.json` で定義された専用テンプレートから、機首〜機尾までの連なり（大統領私室・執務室・ギャレー・会議兼食堂・来賓席・報道席などのブロック、および連続スイートの機内通路）と、上部デッキ（操縦室・通信センター・乗員休憩室・機上指揮所）・下部デッキ（貨物室・電子機器室・手荷物室）・階段接続・タラップ・主翼/エンジン/尾翼の外装をシードから生成し、敷地 8 変換を適用します。各ブロックの出現確率・寸法・座席ピッチ・デッキ/ハッチ出現率・施錠率・人数などはテンプレート JSON で調整できます。
 
 ---
 

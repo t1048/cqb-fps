@@ -170,6 +170,8 @@ export class AudioEngine {
   private tinnitusGain: GainNode | null = null;
   private radioSeq = 0;
   private stopAllyRadioEffect: (() => void) | null = null;
+  private warningSeq = 0;
+  private warningSpeakTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly handleGestureUnlock = (): void => {
     this.unlock();
@@ -204,6 +206,7 @@ export class AudioEngine {
     this.applyUserGain();
     if (muted) {
       this.cancelAllyRadio();
+      this.cancelWarningSpeech();
       try {
         window.speechSynthesis?.cancel();
       } catch {
@@ -1056,11 +1059,16 @@ export class AudioEngine {
 
     const speech = this.resolveEnglishSpeech();
     if (speech) {
+      const hadEffect = Boolean(this.stopAllyRadioEffect);
+      const needCancel = Boolean(hadEffect || speech.synth.speaking || speech.synth.pending);
       this.cancelAllyRadio();
-      try {
-        speech.synth.cancel();
-      } catch {
-        // Ignore speechSynthesis cancel errors.
+      this.cancelWarningSpeech();
+      if (needCancel && !hadEffect) {
+        try {
+          speech.synth.cancel();
+        } catch {
+          // Ignore speechSynthesis cancel errors.
+        }
       }
       const lines = [
         'Police! Drop the weapon!',
@@ -1072,10 +1080,24 @@ export class AudioEngine {
       if (vol <= 0) return;
       const utter = new SpeechSynthesisUtterance(lines[Math.floor(Math.random() * lines.length)]!);
       utter.voice = speech.voice;
-      utter.lang = 'en-US';
+      utter.lang = speech.voice.lang || 'en-US';
       utter.pitch = 0.82;
       utter.rate = 1.22;
       utter.volume = clamp(0.85 * vol, 0, 1);
+      const seq = ++this.warningSeq;
+      if (needCancel) {
+        // Chromium では synth.cancel() 直後の同期 speak() が取り消されることがあるため 1 拍遅らせる
+        this.warningSpeakTimer = setTimeout(() => {
+          this.warningSpeakTimer = null;
+          if (this.disposed || this.warningSeq !== seq || this.effectiveVolume <= 0) return;
+          try {
+            speech.synth.speak(utter);
+          } catch {
+            // Ignore deferred speech errors.
+          }
+        }, 40);
+        return;
+      }
       try {
         speech.synth.speak(utter);
         return;
@@ -1268,6 +1290,7 @@ export class AudioEngine {
     this.stopTinnitus();
     this.restoreMasterBus();
     this.cancelAllyRadio();
+    this.cancelWarningSpeech();
     try {
       window.speechSynthesis?.cancel();
     } catch {
@@ -1786,6 +1809,14 @@ export class AudioEngine {
     }
   }
 
+  private cancelWarningSpeech(): void {
+    this.warningSeq++;
+    if (this.warningSpeakTimer !== null) {
+      clearTimeout(this.warningSpeakTimer);
+      this.warningSpeakTimer = null;
+    }
+  }
+
   private cancelAllyRadio(): void {
     this.radioSeq++;
     if (this.stopAllyRadioEffect) {
@@ -1815,16 +1846,31 @@ export class AudioEngine {
     if (!speech) return false;
     const { synth, voice: enVoice } = speech;
 
+    const hadEffect = Boolean(this.stopAllyRadioEffect);
+    const needCancel = Boolean(hadEffect || synth.speaking || synth.pending);
     this.cancelAllyRadio();
+    this.cancelWarningSpeech();
+    if (needCancel && !hadEffect) {
+      try {
+        synth.cancel();
+      } catch {
+        // Ignore speechSynthesis cancel errors.
+      }
+    }
     const seq = ++this.radioSeq;
     const stopNoise = this.startRadioCarrierNoise(ready);
     this.playRadioSquelch(ready, true);
 
     let finished = false;
     let timerId: ReturnType<typeof setTimeout> | null = null;
+    let speakTimerId: ReturnType<typeof setTimeout> | null = null;
     const finish = (playTail: boolean): void => {
       if (finished) return;
       finished = true;
+      if (speakTimerId !== null) {
+        clearTimeout(speakTimerId);
+        speakTimerId = null;
+      }
       if (timerId !== null) {
         clearTimeout(timerId);
         timerId = null;
@@ -1850,13 +1896,27 @@ export class AudioEngine {
 
     const utter = new SpeechSynthesisUtterance(text);
     utter.voice = enVoice;
-    utter.lang = 'en-US';
+    utter.lang = enVoice.lang || 'en-US';
     utter.volume = clamp(volume * effVol, 0, 1);
     utter.pitch = pitch;
     utter.rate = rate;
     utter.onend = () => finish(true);
     utter.onerror = () => finish(false);
     timerId = setTimeout(() => finish(true), 4500);
+
+    if (needCancel) {
+      // Chromium では synth.cancel() 直後の同期 speak() が取り消されることがあるため 1 拍遅らせる
+      speakTimerId = setTimeout(() => {
+        speakTimerId = null;
+        if (finished || this.disposed || this.radioSeq !== seq || this.effectiveVolume <= 0) return;
+        try {
+          synth.speak(utter);
+        } catch {
+          finish(false);
+        }
+      }, 40);
+      return true;
+    }
 
     try {
       synth.speak(utter);

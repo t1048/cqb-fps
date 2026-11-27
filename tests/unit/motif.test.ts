@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { validateGeneratorTemplate } from '../../src/core/DataLoader';
 import type { GeneratedMapRaw, MotifId } from '../../src/core/types';
-import { MOTIF_IDS } from '../../src/core/types';
-import { dressWithMotif, motifFromSeed, roleOf, withMotifBias } from '../../src/world/Motif';
+import { dressWithMotif, motifFromSeed, roleOf, SEEDED_MOTIF_IDS, withMotifBias } from '../../src/world/Motif';
 import { generateMap } from '../../src/world/generator';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,7 +42,7 @@ describe('map motifs', () => {
     expect(motifFromSeed(101).id).toBe(motifFromSeed(101).id);
     const seen = new Set<MotifId>();
     for (let s = 0; s < 400; s++) seen.add(motifFromSeed(s).id);
-    expect([...seen].sort()).toEqual([...MOTIF_IDS].sort());
+    expect([...seen].sort()).toEqual([...SEEDED_MOTIF_IDS].sort());
   });
 
   it('renames rooms and retints surfaces without moving collision boxes', () => {
@@ -97,8 +96,8 @@ describe('map motifs', () => {
   it('generates two motifs with different names from the same template', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators/house_compact.json'), 'utf8')) as unknown;
     const tpl = validateGeneratorTemplate(raw, 'house_compact.json');
-    const seeds = MOTIF_IDS.map((id) => [...Array(400).keys()].find((s) => motifFromSeed(s).id === id)).filter((s): s is number => s !== undefined);
-    expect(seeds.length).toBe(MOTIF_IDS.length);
+    const seeds = SEEDED_MOTIF_IDS.map((id) => [...Array(400).keys()].find((s) => motifFromSeed(s).id === id)).filter((s): s is number => s !== undefined);
+    expect(seeds.length).toBe(SEEDED_MOTIF_IDS.length);
     const a = generateMap(tpl, seeds[0]!, 'random_small', 2.18);
     const b = generateMap(tpl, seeds[1]!, 'random_small', 2.18);
     expect(a.motif).not.toBe(b.motif);

@@ -799,9 +799,98 @@ export const MOTIFS: readonly MotifDef[] = [
     categoryWeight: { living_hub: 1.2, wing_private: 1.15, study_office: 0.9, basement_utility: 0.85, garage: 0.8, corridor: 1.05, courtyard: 0.9, terrace: 1.15 },
     profileWeight: {},
   },
+  {
+    id: 'air_force_one',
+    label: '大統領専用機',
+    accentCss: css(0x5b8fd6),
+    summaries: [
+      '駐機中の大統領専用機が武装グループに占拠された。タラップから機内へ突入し、狭い機内通路と各区画を確実にクリアリングして搭乗者を救出せよ。',
+      '給油中の大統領専用機がハイジャックされた。上部デッキの操縦室と下部デッキの貨物室にも注意し、執務区画と報道席の人質を確保せよ。',
+    ],
+    atmosphere: {
+      background: 0x47566b,
+      fog: 0x52627a,
+      fogNear: 30,
+      fogFar: 120,
+      hemiSky: 0xc8d4e4,
+      hemiGround: 0x3a3f46,
+      hemiIntensity: 0.55,
+      sunColor: 0xffd8b0,
+      sunIntensity: 1.9,
+      roomLights: [0xfff1dc, 0xf4f0e8, 0xfff1dc, 0xeef2f8],
+      roomIntensity: 10,
+      exposure: 1.05,
+    },
+    palette: {
+      id: 'air_force_one',
+      wall: 0xe2dccd,
+      wallAlt: 0xcfc6b3,
+      grout: 0xb4ab98,
+      tileA: 0xe6e4de,
+      tileB: 0xcbc7be,
+      carpetA: 0x2c4a7a,
+      carpetB: 0x1f3760,
+      woodA: 0x9a6b42,
+      woodB: 0x6e4a2c,
+      metalA: 0xe9edf2,
+      metalB: 0xa9b3be,
+      marbleA: 0xe4e2dc,
+      marbleVein: 0xa8a49c,
+      brickA: 0xc8c8cc,
+      brickB: 0xa4a8b0,
+      mortar: 0xb8bcc2,
+      ceiling: 0xe8e5dc,
+      ceilingLine: 0xc8c2b4,
+      linenA: 0xdfd9cc,
+      linenB: 0xbab2a4,
+      accent: 0x2b5797,
+      concrete: 0x6e737b,
+      doorA: 0xdad5c8,
+      doorB: 0xc2bcb0,
+      frame: 0x6e7782,
+      wallStyle: 'plaster',
+      ceilingStyle: 'acoustic',
+      signText: 'VIP-01',
+    },
+    tint: { wood: 0x9a6b42, metal: 0xe9edf2, fabric: 0x3d5a8a },
+    interiorTex: 'panel',
+    exteriorTex: 'metal',
+    ceilingTex: 'ceiling',
+    roofTex: 'metal',
+    groundTex: 'concrete',
+    stairTex: 'metal',
+    floorTex: {
+      wet: 'tile',
+      service: 'linoleum',
+      circ: 'carpet',
+      private: 'carpet',
+      work: 'carpet',
+      outdoor: 'concrete',
+      secure: 'metal',
+      social: 'carpet',
+      stair: 'carpet',
+    },
+    props: { vehicle: 'metal', tall: 'metal', low: 'linen', counter: 'wood', misc: 'wood' },
+    roomNames: {
+      wet: '化粧室',
+      service: 'ギャレー',
+      circ: '機内通路',
+      private: '大統領私室',
+      work: '執務室',
+      outdoor: '駐機場',
+      secure: '武器保管庫',
+      social: '会議室',
+      stair: '機内階段',
+    },
+    decals: ['sign', 'stripe', 'scuff', 'dirt'],
+    categoryWeight: {},
+    profileWeight: {},
+  },
 ];
 
 const BY_ID = new Map<MotifId, MotifDef>(MOTIFS.map((m) => [m.id, m]));
+const SEEDED_MOTIFS = MOTIFS.filter((m) => m.id !== 'air_force_one');
+export const SEEDED_MOTIF_IDS: readonly MotifId[] = SEEDED_MOTIFS.map((m) => m.id);
 
 export function motifById(id: MotifId): MotifDef {
   return BY_ID.get(id) ?? MOTIFS[0]!;
@@ -810,7 +899,7 @@ export function motifById(id: MotifId): MotifDef {
 /** 同じシードなら同じモチーフ。生成器の乱数ストリームは消費しない。 */
 export function motifFromSeed(seed: number): MotifDef {
   const h = Math.imul(normalizeSeed(seed) ^ 0x9e3779b1, 0x85ebca6b) >>> 0;
-  return MOTIFS[h % MOTIFS.length]!;
+  return SEEDED_MOTIFS[h % SEEDED_MOTIFS.length]!;
 }
 
 export function roleOf(id: string): RoomRole {
@@ -888,8 +977,8 @@ function coverTex(motif: MotifDef, box: BoxDef, room: RoomDef | undefined): Text
  * 生成済みマップの座標・扉・スポーンは動かさず、部屋名とマテリアルだけをモチーフへ寄せる。
  * 当たり判定の箱寸法は変えない。
  */
-export function dressWithMotif<T extends GeneratedMapRaw>(map: T, seed: number): T {
-  const motif = motifFromSeed(seed);
+export function dressWithMotif<T extends GeneratedMapRaw>(map: T, seed: number, motifId?: MotifId): T {
+  const motif = motifId !== undefined ? motifById(motifId) : motifFromSeed(seed);
   if (motif.id === 'residence') {
     return { ...map, name: `民家（${scaleLabel(map.id)}）`, motif: 'residence' };
   }

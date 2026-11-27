@@ -1,4 +1,4 @@
-import { legacyZeroFallbackOf, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
+import { hasFloorSupport, legacyZeroFallbackOf, STEP_HEIGHT, type StairMark } from '../world/Walk';
 import type { Collider } from '../world/WorldBuilder';
 import type { XZ } from './EngageBehavior';
 import { collidersNear } from '../world/ColliderIndex';
@@ -45,7 +45,7 @@ export function blockedAtFiltered(
     const dz = z - cz;
     if (dx * dx + dz * dz < r2) return true;
   }
-  if (!legacyZeroFallbackOf(colliders) && probeGround(colliders, x, z, feetY, r, false) === null) {
+  if (!legacyZeroFallbackOf(colliders) && !hasFloorSupport(colliders, x, z, feetY, r, false)) {
     return true;
   }
   return false;

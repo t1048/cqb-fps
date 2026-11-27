@@ -155,7 +155,7 @@ export interface BriefingDef {
 }
 
 /** ランダム生成マップの施設モチーフ。シードから一意に決まり、見た目と部屋の出方を変える。 */
-export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse', 'embassy', 'residence', 'japanese_house'] as const;
+export const MOTIF_IDS = ['hospital', 'clubhouse', 'bank', 'office', 'warehouse', 'embassy', 'residence', 'japanese_house', 'air_force_one'] as const;
 export type MotifId = (typeof MOTIF_IDS)[number];
 
 export interface MapData {
@@ -195,8 +195,21 @@ export interface StageEntry {
   size?: string;
   /** 選択 UI に出す一行の特徴 */
   tagline?: string;
-  /** generators/{generator}.json のテンプレートからシードでランダム生成する */
+  /** generators/{generator}.json のテンプレートからシードでランダム生成する（variants が無いときの既定） */
   generator: string;
+  /**
+   * 同じ規模の中で出る建物の候補（重み付き）。シードから 1 つ選ぶ。
+   * 省略時は generator だけを使い、モチーフは全種から均等。
+   */
+  variants?: StageVariant[];
+}
+
+/** ステージ内の建物候補: 生成器と、その生成器で出す施設モチーフの重み */
+export interface StageVariant {
+  generator: string;
+  weight: number;
+  /** 施設モチーフの重み。省略時は全モチーフ均等（生成器が固有モチーフを持つ機内などは不要） */
+  motifs?: Partial<Record<MotifId, number>>;
 }
 
 export interface StagesData {
@@ -581,8 +594,134 @@ export type ModularGeneratorTemplateRaw = Omit<ModularGeneratorTemplate, 'module
   modules: ArchitecturalModuleDefRaw[];
 };
 
+// ---------- Aircraft generator template ----------
+
+export type AircraftBlockKind = 'head' | 'suite' | 'entry' | 'cabin';
+
+export interface AircraftSeatingDef {
+  prop: string;
+  width: number;
+  depth: number;
+  height: number;
+  pitch: number;
+}
+
+export interface AircraftRoomDef {
+  id: string;
+  name: string;
+  length: NumRange;
+  spawnWeight: number;
+  floorMaterial?: string;
+  private: boolean;
+  weight: number;
+  minCount: number;
+  maxCount: number;
+  seating?: AircraftSeatingDef;
+  furniture: ModularFurnitureDef[];
+}
+
+export interface AircraftBlockDef {
+  id: string;
+  kind: AircraftBlockKind;
+  chance: number;
+  rooms: AircraftRoomDef[];
+  compartments?: NumRange;
+  hostsUpperStair: boolean;
+  hostsLowerStair: boolean;
+}
+
+export interface AircraftGeneratorTemplate {
+  type: 'aircraft';
+  id: string;
+  name: string;
+  summaries: string[];
+  wallThickness: number;
+  slabThickness: number;
+  deckRise: number;
+  snap: ModularSnap;
+  maxAttempts: number;
+  fuselage: {
+    width: NumRange;
+    length: NumRange;
+    corridorWidth: NumRange;
+    corridorName: string;
+    corridorSpawnWeight: number;
+  };
+  stairs: {
+    rise: number;
+    run: number;
+    flightWidth: number;
+    landing: number;
+    parapetHeight: number;
+  };
+  airstair: {
+    width: number;
+    platformDepth: number;
+    platformWidth: number;
+    aftChance: number;
+  };
+  site: {
+    rotationsAllowed: OrthogonalRotation[];
+    mirrorAllowed: boolean;
+    margin: number;
+    spawnSetback: number;
+    allyLateralOffset: number;
+    allyBackOffset: number;
+    approachName: string;
+  };
+  door: {
+    width: number;
+    maxAngle: number;
+    margin: number;
+    swingClearance: number;
+    lockedChance: number;
+    maxLocked: number;
+    extraDoorChance: number;
+  };
+  window: {
+    chance: number;
+    width: number;
+    height: number;
+    sill: number;
+    spacing: number;
+    maxPerRoom: number;
+  };
+  exterior: {
+    wingSpan: number;
+    wingChord: number;
+    finHeight: number;
+    engines: boolean;
+  };
+  furnitureGap: number;
+  wallClearance: number;
+  mainDeck: {
+    blocks: AircraftBlockDef[];
+  };
+  upperDeck: {
+    chance: number;
+    corridorName: string;
+    stairRoomName: string;
+    stairRoomUpperName: string;
+    cockpit: AircraftRoomDef;
+    forward: AircraftRoomDef[];
+    aft: AircraftRoomDef[];
+    aftChance: number;
+  };
+  lowerDeck: {
+    chance: number;
+    stairRoomName: string;
+    stairRoomLowerName: string;
+    passageName: string;
+    aftHold: AircraftRoomDef[];
+    foreHold: AircraftRoomDef[];
+    foreChance: number;
+    hatchChance: number;
+  };
+  entities: ModularEntitiesDef;
+}
+
 /** 生成テンプレート（validateGeneratorTemplate の戻り値・generator/index.ts の generateMap の入力）。 */
-export type GeneratorTemplate = HouseGeneratorTemplate | ModularGeneratorTemplate;
+export type GeneratorTemplate = HouseGeneratorTemplate | ModularGeneratorTemplate | AircraftGeneratorTemplate;
 /** GeneratorTemplate の別名（WP-1 からの互換） */
 export type AnyGeneratorTemplate = GeneratorTemplate;
 

@@ -32,6 +32,11 @@ import type {
   HouseGeneratorTemplate,
   AnyGeneratorTemplate,
   ModularGeneratorTemplate,
+  AircraftBlockDef,
+  AircraftBlockKind,
+  AircraftGeneratorTemplate,
+  AircraftRoomDef,
+  AircraftSeatingDef,
   ModularFurnitureDef,
   StoryProfileDef,
   StoryLevel,
@@ -55,14 +60,16 @@ import type {
   SpecialAreaDef,
   SquadElement,
   SquadOrder,
+  MotifId,
   StageEntry,
+  StageVariant,
   StagesData,
   ThrowableDef,
   WeaponDef,
   WeaponsData,
 } from './types';
 import { MOTIF_IDS } from './types';
-import { generateMap, verifyFallbackFeasibility } from '../world/generator';
+import { generateMap, pickStageVariant, verifyFallbackFeasibility } from '../world/generator';
 
 import { DataError } from './DataError';
 
@@ -431,6 +438,28 @@ export function validateStages(raw: unknown, source = 'stages'): StageEntry[] {
       if (typeof v === 'string') entry[key] = v;
       else r.fail(`${p}.${key}`, '文字列が必要です');
     }
+    if (e.variants !== undefined) {
+      entry.variants = r.arr(e.variants, `${p}.variants`, 1).map((vd, j) => {
+        const vp = `${p}.variants[${j}]`;
+        const ve = r.obj(vd, vp);
+        const gen = r.str(ve, 'generator', vp);
+        if (!STAGE_ID_RE.test(gen)) r.fail(`${vp}.generator`, '英数字・ハイフン・アンダースコアのみ使用できます');
+        const variant: StageVariant = { generator: gen, weight: r.num(ve, 'weight', vp, 0) };
+        if (ve.motifs !== undefined) {
+          const mo = r.obj(ve.motifs, `${vp}.motifs`);
+          const motifs: Partial<Record<MotifId, number>> = {};
+          for (const [k, w] of Object.entries(mo)) {
+            if (!(MOTIF_IDS as readonly string[]).includes(k)) r.fail(`${vp}.motifs.${k}`, '未知のモチーフ ID です');
+            if (typeof w !== 'number' || !Number.isFinite(w) || w < 0) r.fail(`${vp}.motifs.${k}`, '0 以上の数値が必要です');
+            motifs[k as MotifId] = w as number;
+          }
+          if (!Object.values(motifs).some((w) => (w ?? 0) > 0)) r.fail(`${vp}.motifs`, '正の重みが 1 つ以上必要です');
+          variant.motifs = motifs;
+        }
+        return variant;
+      });
+      if (!entry.variants.some((v) => v.weight > 0)) r.fail(`${p}.variants`, '正の重みが 1 つ以上必要です');
+    }
     return entry;
   });
   r.uniqueIds(stages, 'stages');
@@ -491,8 +520,9 @@ function parseSpecialArea(r: Reader, o: Record<string, unknown>, key: string): S
 export function validateGeneratorTemplate(raw: unknown, source = 'generator'): AnyGeneratorTemplate {
   const r = new Reader(source);
   const o = r.obj(raw, '');
-  const type = r.oneOf(o, 'type', '', ['house', 'modular'] as const);
+  const type = r.oneOf(o, 'type', '', ['house', 'modular', 'aircraft'] as const);
   if (type === 'modular') return validateModularTemplate(r, o);
+  if (type === 'aircraft') return validateAircraftTemplate(r, o);
   return validateHouseTemplate(r, o);
 }
 
@@ -669,9 +699,9 @@ export function modularStairSteps(storyRise: number, targetRise: number): number
   return Math.max(MIN_MODULAR_STAIR_STEPS, Math.ceil(storyRise / targetRise - DIM_TOL));
 }
 
-/** doors.json の扉リーフ高（モジュラー生成の扉開口高の一元契約）。>= 2.05m でなければ DataError。 */
+/** doors.json の扉リーフ高（モジュラー/航空機生成の扉開口高の一元契約）。>= 2.05m でなければ DataError。 */
 export function modularDoorLeafHeight(doorConfig: DoorConfig | undefined): number {
-  if (doorConfig === undefined) throw new DataError('doors', 'height', 'type "modular" の生成には doors.json の設定が必要です');
+  if (doorConfig === undefined) throw new DataError('doors', 'height', 'type "modular" / "aircraft" の生成には doors.json の設定が必要です');
   if (!(doorConfig.height >= MIN_HEADROOM)) {
     throw new DataError('doors', 'height', `扉高 ${doorConfig.height} は ${MIN_HEADROOM}m 以上が必要です`);
   }
@@ -1077,6 +1107,248 @@ function validateModularTemplate(r: Reader, o: Record<string, unknown>): Modular
     wallClearance: r.num(o, 'wallClearance', '', 0, 3),
     modules,
     fallbackModuleId,
+    entities: {
+      suspects,
+      civilians: intRange(r, ent, 'civilians', 'entities', 0, 40),
+      suspectProfiles,
+      civilianProfile: r.str(ent, 'civilianProfile', 'entities'),
+      minSpawnDistance: r.num(ent, 'minSpawnDistance', 'entities', 0),
+      hostagePairChance: r.num(ent, 'hostagePairChance', 'entities', 0, 1),
+      clearance: r.num(ent, 'clearance', 'entities', 0.1, 2),
+      briefingUncertainty: r.num(ent, 'briefingUncertainty', 'entities', 0, 10),
+      minEntitySeparation: r.num(ent, 'minEntitySeparation', 'entities', 0.1, 20),
+    },
+  };
+}
+
+const AIRCRAFT_ROOM_ID_RE = /^[a-z0-9_]+$/;
+const AIRCRAFT_BLOCK_KINDS: readonly AircraftBlockKind[] = ['head', 'suite', 'entry', 'cabin'];
+
+function parseAircraftRoom(r: Reader, v: unknown, path: string, doorPassMin: number): AircraftRoomDef {
+  const e = r.obj(v, path);
+  const id = r.str(e, 'id', path);
+  if (!AIRCRAFT_ROOM_ID_RE.test(id)) r.fail(`${path}.id`, '英小文字・数字・アンダースコアのみ使用できます');
+  const minCount = e.minCount === undefined ? 0 : int(r, e, 'minCount', path, 0, 10);
+  const maxCount = e.maxCount === undefined ? 1 : int(r, e, 'maxCount', path, 1, 10);
+  if (minCount > maxCount) r.fail(path, 'minCount は maxCount 以下である必要があります');
+  let seating: AircraftSeatingDef | undefined;
+  if (e.seating !== undefined) {
+    const sp = `${path}.seating`;
+    const se = r.obj(e.seating, sp);
+    seating = {
+      prop: r.str(se, 'prop', sp),
+      width: r.num(se, 'width', sp, 0.1, 5),
+      depth: r.num(se, 'depth', sp, 0.1, 5),
+      height: r.num(se, 'height', sp, 0.1, 5),
+      pitch: r.num(se, 'pitch', sp, 0.5, 10),
+    };
+  }
+  const fm = optStr(r, e, 'floorMaterial', path);
+  return {
+    id,
+    name: r.str(e, 'name', path),
+    length: numRange(r, e, 'length', path, doorPassMin - DIM_TOL, 100),
+    spawnWeight: r.num(e, 'spawnWeight', path, 0),
+    ...(fm !== undefined ? { floorMaterial: fm } : {}),
+    private: optBool(r, e, 'private', path, false),
+    weight: e.weight === undefined ? 1 : r.num(e, 'weight', path, 0),
+    minCount,
+    maxCount,
+    ...(seating !== undefined ? { seating } : {}),
+    furniture: parseModularFurniture(r, e.furniture, `${path}.furniture`),
+  };
+}
+
+function validateAircraftTemplate(r: Reader, o: Record<string, unknown>): AircraftGeneratorTemplate {
+  const wallThickness = r.num(o, 'wallThickness', '', 0.1, 0.4);
+  const slabThickness = r.num(o, 'slabThickness', '', 0.1, 0.4);
+  const deckRise = r.num(o, 'deckRise', '', 2.8, 3.6);
+  if (deckRise - slabThickness < MIN_STORY_CLEARANCE - DIM_TOL) {
+    r.fail('deckRise', `deckRise - slabThickness = ${deckRise - slabThickness} は ${MIN_STORY_CLEARANCE}m 以上が必要です`);
+  }
+  const snapRaw = r.num(o, 'snap', '', 0, 1);
+  if (snapRaw !== 0.25 && snapRaw !== 0.5) r.fail('snap', `0.25 | 0.5 のいずれかが必要です (現在 ${snapRaw})`);
+  const snap: ModularSnap = snapRaw;
+  const maxAttempts = int(r, o, 'maxAttempts', '', 1, 200);
+
+  const dr = r.obj(o.door, 'door');
+  const doorWidth = r.num(dr, 'width', 'door', MIN_DOOR_WIDTH, 3);
+  const doorMargin = r.num(dr, 'margin', 'door', 0.15, 2);
+  const door = {
+    width: doorWidth,
+    maxAngle: r.num(dr, 'maxAngle', 'door', 90, 130),
+    margin: doorMargin,
+    swingClearance: r.num(dr, 'swingClearance', 'door', 0.3, 5),
+    lockedChance: r.num(dr, 'lockedChance', 'door', 0, 1),
+    maxLocked: int(r, dr, 'maxLocked', 'door', 0, 50),
+    extraDoorChance: r.num(dr, 'extraDoorChance', 'door', 0, 1),
+  };
+  const doorPassMin = doorWidth + wallThickness + 2 * doorMargin;
+
+  const sr = r.obj(o.stairs, 'stairs');
+  const stairRise = r.num(sr, 'rise', 'stairs', 0.12, 0.24);
+  const steps = Math.round(deckRise / stairRise);
+  if (Math.abs(steps * stairRise - deckRise) >= 1e-6 || steps > 40) {
+    r.fail('stairs.rise', `deckRise=${deckRise} を整数段 (<=40) で割り切れません (rise=${stairRise})`);
+  }
+  const stairs = {
+    rise: stairRise,
+    run: r.num(sr, 'run', 'stairs', 0.24, 0.34),
+    flightWidth: r.num(sr, 'flightWidth', 'stairs', 0.9, 2),
+    landing: r.num(sr, 'landing', 'stairs', 1.0, 10),
+    parapetHeight: r.num(sr, 'parapetHeight', 'stairs', MIN_PARAPET_HEIGHT, 2),
+  };
+
+  const fu = r.obj(o.fuselage, 'fuselage');
+  const fuselageWidth = numRange(r, fu, 'width', 'fuselage', 1, 30);
+  const fuselageLength = numRange(r, fu, 'length', 'fuselage', 10, 200);
+  const corridorWidth = numRange(r, fu, 'corridorWidth', 'fuselage', doorPassMin - DIM_TOL, 10);
+  if (fuselageWidth.min - corridorWidth.max - wallThickness < stairs.flightWidth + 1.2 - DIM_TOL) {
+    r.fail('fuselage.width', '胴体最小幅が通路最大幅＋階段幅＋余白 1.2m に対して狭すぎます');
+  }
+  const fuselage = {
+    width: fuselageWidth,
+    length: fuselageLength,
+    corridorWidth,
+    corridorName: r.str(fu, 'corridorName', 'fuselage'),
+    corridorSpawnWeight: r.num(fu, 'corridorSpawnWeight', 'fuselage', 0),
+  };
+
+  const as = r.obj(o.airstair, 'airstair');
+  const airstair = {
+    width: r.num(as, 'width', 'airstair', 0.8, 4),
+    platformDepth: r.num(as, 'platformDepth', 'airstair', 1.0, 10),
+    platformWidth: r.num(as, 'platformWidth', 'airstair', 1.5, 10),
+    aftChance: r.num(as, 'aftChance', 'airstair', 0, 1),
+  };
+
+  const st = r.obj(o.site, 'site');
+  const rotationsAllowed = r.arr(st.rotationsAllowed, 'site.rotationsAllowed', 1).map((x, i) => {
+    if (typeof x !== 'number' || !(ORTHO_ROTATIONS as readonly number[]).includes(x)) {
+      r.fail(`site.rotationsAllowed[${i}]`, '0 | 90 | 180 | 270 のいずれかが必要です');
+    }
+    return x as OrthogonalRotation;
+  });
+  if (rotationsAllowed.length > 4) r.fail('site.rotationsAllowed', '要素数は 4 以下が必要です');
+  if (new Set(rotationsAllowed).size !== rotationsAllowed.length) r.fail('site.rotationsAllowed', '重複があります');
+  const site = {
+    rotationsAllowed,
+    mirrorAllowed: r.bool(st, 'mirrorAllowed', 'site'),
+    margin: r.num(st, 'margin', 'site', 0, 50),
+    spawnSetback: r.num(st, 'spawnSetback', 'site', 1, 50),
+    allyLateralOffset: r.num(st, 'allyLateralOffset', 'site', 0.5, 10),
+    allyBackOffset: r.num(st, 'allyBackOffset', 'site', 0.2, 10),
+    approachName: r.str(st, 'approachName', 'site'),
+  };
+
+  const wn = r.obj(o.window, 'window');
+  const winHeight = r.num(wn, 'height', 'window', 0.3, 1.2);
+  const winSill = r.num(wn, 'sill', 'window', 0.2, 3);
+  const winLimit = deckRise - slabThickness - 0.1;
+  if (winSill + winHeight > winLimit + DIM_TOL) {
+    r.fail('window', `sill + height = ${winSill + winHeight} が上限 ${winLimit} を超えます`);
+  }
+  const win = {
+    chance: r.num(wn, 'chance', 'window', 0, 1),
+    width: r.num(wn, 'width', 'window', 0.3, 1.2),
+    height: winHeight,
+    sill: winSill,
+    spacing: r.num(wn, 'spacing', 'window', 0.5, 20),
+    maxPerRoom: int(r, wn, 'maxPerRoom', 'window', 1, 20),
+  };
+
+  const ex = r.obj(o.exterior, 'exterior');
+  const exterior = {
+    wingSpan: r.num(ex, 'wingSpan', 'exterior', 1, 60),
+    wingChord: r.num(ex, 'wingChord', 'exterior', 1, 40),
+    finHeight: r.num(ex, 'finHeight', 'exterior', 1, 20),
+    engines: r.bool(ex, 'engines', 'exterior'),
+  };
+
+  const md = r.obj(o.mainDeck, 'mainDeck');
+  const blocks: AircraftBlockDef[] = r.arr(md.blocks, 'mainDeck.blocks', 1).map((d, i) => {
+    const p = `mainDeck.blocks[${i}]`;
+    const e = r.obj(d, p);
+    const kind = r.oneOf(e, 'kind', p, AIRCRAFT_BLOCK_KINDS);
+    const rooms = r.arr(e.rooms, `${p}.rooms`, 1).map((rd, j) => parseAircraftRoom(r, rd, `${p}.rooms[${j}]`, doorPassMin));
+    r.uniqueIds(rooms, `${p}.rooms`);
+    const blk: AircraftBlockDef = {
+      id: r.str(e, 'id', p),
+      kind,
+      chance: r.num(e, 'chance', p, 0, 1),
+      rooms,
+      hostsUpperStair: optBool(r, e, 'hostsUpperStair', p, false),
+      hostsLowerStair: optBool(r, e, 'hostsLowerStair', p, false),
+    };
+    if (kind === 'suite') {
+      if (e.compartments === undefined) r.fail(`${p}.compartments`, 'suite ブロックには compartments が必要です');
+      blk.compartments = intRange(r, e, 'compartments', p, 1, 6);
+    } else if (e.compartments !== undefined) {
+      blk.compartments = intRange(r, e, 'compartments', p, 1, 6);
+    }
+    return blk;
+  });
+  r.uniqueIds(blocks, 'mainDeck.blocks');
+  if (!blocks.some((b) => b.kind === 'entry' && b.chance === 1)) {
+    r.fail('mainDeck.blocks', 'chance=1 の entry ブロックが 1 つ以上必要です');
+  }
+
+  const ud = r.obj(o.upperDeck, 'upperDeck');
+  const upperDeck = {
+    chance: r.num(ud, 'chance', 'upperDeck', 0, 1),
+    corridorName: r.str(ud, 'corridorName', 'upperDeck'),
+    stairRoomName: r.str(ud, 'stairRoomName', 'upperDeck'),
+    stairRoomUpperName: r.str(ud, 'stairRoomUpperName', 'upperDeck'),
+    cockpit: parseAircraftRoom(r, ud.cockpit, 'upperDeck.cockpit', doorPassMin),
+    forward: r.arr(ud.forward, 'upperDeck.forward', 1).map((rd, j) => parseAircraftRoom(r, rd, `upperDeck.forward[${j}]`, doorPassMin)),
+    aft: r.arr(ud.aft, 'upperDeck.aft', 1).map((rd, j) => parseAircraftRoom(r, rd, `upperDeck.aft[${j}]`, doorPassMin)),
+    aftChance: r.num(ud, 'aftChance', 'upperDeck', 0, 1),
+  };
+
+  const ld = r.obj(o.lowerDeck, 'lowerDeck');
+  const lowerDeck = {
+    chance: r.num(ld, 'chance', 'lowerDeck', 0, 1),
+    stairRoomName: r.str(ld, 'stairRoomName', 'lowerDeck'),
+    stairRoomLowerName: r.str(ld, 'stairRoomLowerName', 'lowerDeck'),
+    passageName: r.str(ld, 'passageName', 'lowerDeck'),
+    aftHold: r.arr(ld.aftHold, 'lowerDeck.aftHold', 1).map((rd, j) => parseAircraftRoom(r, rd, `lowerDeck.aftHold[${j}]`, doorPassMin)),
+    foreHold: r.arr(ld.foreHold, 'lowerDeck.foreHold', 1).map((rd, j) => parseAircraftRoom(r, rd, `lowerDeck.foreHold[${j}]`, doorPassMin)),
+    foreChance: r.num(ld, 'foreChance', 'lowerDeck', 0, 1),
+    hatchChance: r.num(ld, 'hatchChance', 'lowerDeck', 0, 1),
+  };
+
+  const ent = r.obj(o.entities, 'entities');
+  const suspectProfiles = r.arr(ent.suspectProfiles, 'entities.suspectProfiles', 1).map((d, i) => {
+    const p = `entities.suspectProfiles[${i}]`;
+    const e = r.obj(d, p);
+    return { profile: r.str(e, 'profile', p), weight: r.num(e, 'weight', p, 0), max: int(r, e, 'max', p, 0, 40) };
+  });
+  const suspects = intRange(r, ent, 'suspects', 'entities', 1, 40);
+  const sumMax = suspectProfiles.reduce((a, sp) => a + sp.max, 0);
+  if (sumMax < suspects.max) r.fail('entities.suspectProfiles', `max の合計 ${sumMax} が suspects.max ${suspects.max} 未満です`);
+
+  return {
+    type: 'aircraft',
+    id: r.str(o, 'id', ''),
+    name: r.str(o, 'name', ''),
+    summaries: strList(r, o.summaries, 'summaries', 1),
+    wallThickness,
+    slabThickness,
+    deckRise,
+    snap,
+    maxAttempts,
+    fuselage,
+    stairs,
+    airstair,
+    site,
+    door,
+    window: win,
+    exterior,
+    furnitureGap: r.num(o, 'furnitureGap', '', 0, 3),
+    wallClearance: r.num(o, 'wallClearance', '', 0, 3),
+    mainDeck: { blocks },
+    upperDeck,
+    lowerDeck,
     entities: {
       suspects,
       civilians: intRange(r, ent, 'civilians', 'entities', 0, 40),
@@ -2034,15 +2306,21 @@ export const DataLoader = {
     if (seed === undefined || !Number.isFinite(seed)) {
       throw new DataError('map', 'seed', `ランダム生成ステージ "${stage.id}" には有限数値のシードが必要です (現在 ${String(seed)})`);
     }
-    const tpl = await DataLoader.loadGeneratorTemplate(stage.generator);
+    // 同じ規模の中の建物候補（住宅・銀行・機内など）をシードで 1 つ選ぶ
+    const picked = pickStageVariant(stage, seed);
+    const tpl = await DataLoader.loadGeneratorTemplate(picked.generator);
     validateGeneratorReferences(tpl, profiles);
     if (tpl.type === 'modular') {
       // 扉リーフ高は doors.json の height を一元契約として生成器へ渡す（§2.2）。
       const doorLeafHeight = modularDoorLeafHeight(doorConfig);
       verifyModularFallback(tpl, doorLeafHeight);
+      return validateMap(generateMap(tpl, seed, stage.id, doorLeafHeight, picked.motif), `generator:${tpl.id}#${seed}`);
+    }
+    if (tpl.type === 'aircraft') {
+      const doorLeafHeight = modularDoorLeafHeight(doorConfig);
       return validateMap(generateMap(tpl, seed, stage.id, doorLeafHeight), `generator:${tpl.id}#${seed}`);
     }
-    return validateMap(generateMap(tpl, seed, stage.id), `generator:${tpl.id}#${seed}`);
+    return validateMap(generateMap(tpl, seed, stage.id, undefined, picked.motif), `generator:${tpl.id}#${seed}`);
   },
   /** 共通JSONを並列ロードし検証、続いてステージのマップを読み込み/生成。不正なら DataError を throw。 */
   async loadAll(stage: StageEntry, seed?: number): Promise<GameData> {

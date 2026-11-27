@@ -7,6 +7,7 @@ import type {
   GeneratedMapRaw,
   ModularEdgeStyle,
   ModularGeneratorTemplate,
+  MotifId,
   OrthogonalRotation,
   RoomDef,
   StairDef,
@@ -16,7 +17,7 @@ import type {
 } from '../../core/types';
 import { DataError } from '../../core/DataError';
 import { missionRoster } from '../../rules/MissionRoster';
-import { motifFromSeed, withMotifBias } from '../Motif';
+import { motifById, motifFromSeed, withMotifBias } from '../Motif';
 import {
   CirculationRules,
   FRONT_APPROACH_ID,
@@ -118,7 +119,7 @@ const SELECTION_SEED_XOR = 0x51ed270b;
  * SWAT 隊員 NPC。人数は missionRoster（プレイヤー込み合計 − 1）。
  * side はスポーン左右、back はさらに後方へのずらし（m）。
  */
-const ALLY_SLOTS: readonly { id: string; name: string; side: number; back: number }[] = [
+export const ALLY_SLOTS: readonly { id: string; name: string; side: number; back: number }[] = [
   { id: 'ally_miller', name: 'Miller', side: -1, back: 0 },
   { id: 'ally_cole', name: 'Cole', side: 1, back: 0 },
   { id: 'ally_reed', name: 'Reed', side: -2, back: 0.4 },
@@ -1426,13 +1427,14 @@ export function generateModularMapWithMeta(
   seed: number,
   mapId: string,
   doorLeafHeight: number,
+  motifId?: MotifId,
 ): ModularGenerationResult {
   if (!(doorLeafHeight >= 2.05)) throw new Error(`[generator:${tpl.id}] doorLeafHeight ${doorLeafHeight} は 2.05m 以上が必要です`);
   verifyFallbackFeasibility(tpl, doorLeafHeight);
   const normSeed = normalizeSeed(seed);
   // モチーフはシードから独立に決め、計画用の複製だけ部屋カテゴリの重みを偏らせる。
   // 最小構成の検証と最終フォールバックは元テンプレートのまま（寸法契約を変えない）。
-  const themed = withMotifBias(tpl, motifFromSeed(normSeed));
+  const themed = withMotifBias(tpl, motifId !== undefined ? motifById(motifId) : motifFromSeed(normSeed));
   // 階層プロファイルと敷地変換は試行ループの前に 1 回だけ選ぶ（以後降格・変更しない）
   const sel = new Rng((normSeed ^ SELECTION_SEED_XOR) >>> 0);
   const profile = pickStoryProfile(themed, sel);
@@ -1476,8 +1478,14 @@ export function generateModularMapWithMeta(
 }
 
 /** type "modular" の生成（validateMap 互換の生データ）。 */
-export function generateModularMap(tpl: ModularGeneratorTemplate, seed: number, mapId: string, doorLeafHeight: number): GeneratedMapRaw {
-  return generateModularMapWithMeta(tpl, seed, mapId, doorLeafHeight).map;
+export function generateModularMap(
+  tpl: ModularGeneratorTemplate,
+  seed: number,
+  mapId: string,
+  doorLeafHeight: number,
+  motifId?: MotifId,
+): GeneratedMapRaw {
+  return generateModularMapWithMeta(tpl, seed, mapId, doorLeafHeight, motifId).map;
 }
 
 /** 検査用: 同じ正準レイアウトを任意の変換枠でコンパイルする（TST-10 の写像一致検査に使う）。 */

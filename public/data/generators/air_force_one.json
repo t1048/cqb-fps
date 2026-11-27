@@ -1,0 +1,463 @@
+{
+  "type": "aircraft",
+  "id": "air_force_one",
+  "name": "大統領専用機",
+  "summaries": [
+    "駐機中の大統領専用機が武装グループに占拠された。タラップから機内へ突入し、狭い機内通路と各区画を確実にクリアリングして搭乗者を救出せよ。",
+    "給油中の大統領専用機がハイジャックされた。上部デッキの操縦室と下部デッキの貨物室にも注意し、執務区画と報道席の人質を確保せよ。"
+  ],
+  "wallThickness": 0.2,
+  "slabThickness": 0.2,
+  "deckRise": 3.04,
+  "snap": 0.25,
+  "maxAttempts": 40,
+  "fuselage": {
+    "width": { "min": 6.25, "max": 6.75 },
+    "length": { "min": 48, "max": 68 },
+    "corridorWidth": { "min": 2.0, "max": 2.25 },
+    "corridorName": "機内通路",
+    "corridorSpawnWeight": 0.3
+  },
+  "stairs": {
+    "rise": 0.19,
+    "run": 0.28,
+    "flightWidth": 1.2,
+    "landing": 1.25,
+    "parapetHeight": 1.05
+  },
+  "airstair": {
+    "width": 1.6,
+    "platformDepth": 2.25,
+    "platformWidth": 4.0,
+    "aftChance": 0.6
+  },
+  "site": {
+    "rotationsAllowed": [0, 90, 180, 270],
+    "mirrorAllowed": true,
+    "margin": 4,
+    "spawnSetback": 3.5,
+    "allyLateralOffset": 1.15,
+    "allyBackOffset": 0.6,
+    "approachName": "駐機場エプロン"
+  },
+  "door": {
+    "width": 1.2,
+    "maxAngle": 105,
+    "margin": 0.2,
+    "swingClearance": 0.35,
+    "lockedChance": 0.3,
+    "maxLocked": 3,
+    "extraDoorChance": 0.3
+  },
+  "window": {
+    "chance": 0.85,
+    "width": 0.5,
+    "height": 0.55,
+    "sill": 1.05,
+    "spacing": 2.5,
+    "maxPerRoom": 3
+  },
+  "exterior": {
+    "wingSpan": 18,
+    "wingChord": 9,
+    "finHeight": 6.5,
+    "engines": true
+  },
+  "furnitureGap": 0.6,
+  "wallClearance": 0.6,
+  "mainDeck": {
+    "blocks": [
+      {
+        "id": "nose",
+        "kind": "head",
+        "chance": 1,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "presidential_suite",
+            "name": "大統領私室",
+            "length": { "min": 5.5, "max": 6.5 },
+            "spawnWeight": 2,
+            "floorMaterial": "carpet",
+            "furniture": [
+              { "id": "bed", "width": 2.0, "depth": 1.6, "height": 0.6, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "wardrobe", "width": 1.2, "depth": 0.6, "height": 1.9, "place": "corner", "chance": 0.9, "count": { "min": 1, "max": 1 } },
+              { "id": "desk", "width": 1.2, "depth": 0.6, "height": 0.75, "place": "wall", "chance": 0.6, "count": { "min": 1, "max": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "presidential",
+        "kind": "suite",
+        "chance": 1,
+        "compartments": { "min": 2, "max": 2 },
+        "hostsUpperStair": true,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "president_office",
+            "name": "大統領執務室",
+            "length": { "min": 4.5, "max": 5.5 },
+            "spawnWeight": 2.5,
+            "floorMaterial": "carpet",
+            "minCount": 1,
+            "maxCount": 1,
+            "weight": 2,
+            "furniture": [
+              { "id": "desk", "width": 1.6, "depth": 0.8, "height": 0.76, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "chair", "width": 0.55, "depth": 0.55, "height": 0.95, "place": "center", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "sofa", "width": 1.9, "depth": 0.85, "height": 0.84, "place": "wall", "chance": 0.8, "count": { "min": 1, "max": 1 } }
+            ]
+          },
+          {
+            "id": "vip_lavatory",
+            "name": "専用化粧室",
+            "length": { "min": 2.75, "max": 3.25 },
+            "spawnWeight": 0.5,
+            "floorMaterial": "tile",
+            "private": true,
+            "maxCount": 1,
+            "weight": 1,
+            "furniture": [
+              { "id": "toilet", "width": 0.5, "depth": 0.7, "height": 0.8, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "sink", "width": 0.6, "depth": 0.45, "height": 0.9, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } }
+            ]
+          },
+          {
+            "id": "medical_room",
+            "name": "医務室",
+            "length": { "min": 4.0, "max": 5.0 },
+            "spawnWeight": 1.5,
+            "floorMaterial": "linoleum",
+            "maxCount": 1,
+            "weight": 1.2,
+            "furniture": [
+              { "id": "hbed", "width": 2.0, "depth": 1.0, "height": 0.85, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "medcab", "width": 0.95, "depth": 0.42, "height": 1.75, "place": "wall", "chance": 0.9, "count": { "min": 1, "max": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "entry_fwd",
+        "kind": "entry",
+        "chance": 1,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "forward_galley",
+            "name": "前方ギャレー",
+            "length": { "min": 3.5, "max": 4.25 },
+            "spawnWeight": 0.8,
+            "floorMaterial": "linoleum",
+            "furniture": [
+              { "id": "counter", "width": 2.0, "depth": 0.65, "height": 0.95, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "fridge", "width": 0.8, "depth": 0.7, "height": 1.8, "place": "corner", "chance": 0.8, "count": { "min": 1, "max": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "staff",
+        "kind": "suite",
+        "chance": 0.85,
+        "compartments": { "min": 1, "max": 2 },
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "senior_staff",
+            "name": "上級スタッフ室",
+            "length": { "min": 4.0, "max": 5.5 },
+            "spawnWeight": 2,
+            "floorMaterial": "carpet",
+            "weight": 2,
+            "maxCount": 2,
+            "furniture": [
+              { "id": "desk", "width": 1.5, "depth": 0.75, "height": 0.76, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } },
+              { "id": "chair", "width": 0.5, "depth": 0.5, "height": 0.9, "place": "center", "chance": 0.8, "count": { "min": 1, "max": 2 } }
+            ]
+          },
+          {
+            "id": "chief_of_staff_office",
+            "name": "首席補佐官室",
+            "length": { "min": 3.5, "max": 4.5 },
+            "spawnWeight": 1.8,
+            "floorMaterial": "carpet",
+            "weight": 1.5,
+            "maxCount": 1,
+            "furniture": [
+              { "id": "desk", "width": 1.4, "depth": 0.7, "height": 0.76, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "shelf", "width": 1.2, "depth": 0.4, "height": 1.8, "place": "wall", "chance": 0.6, "count": { "min": 1, "max": 1 } }
+            ]
+          },
+          {
+            "id": "staff_lavatory",
+            "name": "化粧室",
+            "length": { "min": 2.75, "max": 3.0 },
+            "spawnWeight": 0.4,
+            "floorMaterial": "tile",
+            "private": true,
+            "weight": 0.8,
+            "maxCount": 1,
+            "furniture": [
+              { "id": "toilet", "width": 0.5, "depth": 0.7, "height": 0.8, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "sink", "width": 0.6, "depth": 0.45, "height": 0.9, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "conference",
+        "kind": "cabin",
+        "chance": 1,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "conference_room",
+            "name": "会議兼食堂",
+            "length": { "min": 6.0, "max": 7.5 },
+            "spawnWeight": 3,
+            "floorMaterial": "carpet",
+            "furniture": [
+              { "id": "conf_table", "width": 3.0, "depth": 1.2, "height": 0.76, "place": "center", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "chair", "width": 0.5, "depth": 0.5, "height": 0.9, "place": "wall", "chance": 0.8, "count": { "min": 2, "max": 4 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "guest",
+        "kind": "cabin",
+        "chance": 0.6,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "guest_cabin",
+            "name": "来賓席",
+            "length": { "min": 5.5, "max": 7.0 },
+            "spawnWeight": 2.5,
+            "floorMaterial": "carpet",
+            "seating": { "prop": "sofa", "width": 1.4, "depth": 0.8, "height": 1.05, "pitch": 1.5 },
+            "furniture": []
+          }
+        ]
+      },
+      {
+        "id": "security",
+        "kind": "suite",
+        "chance": 0.9,
+        "compartments": { "min": 1, "max": 2 },
+        "hostsUpperStair": false,
+        "hostsLowerStair": true,
+        "rooms": [
+          {
+            "id": "secret_service",
+            "name": "シークレットサービス詰所",
+            "length": { "min": 4.0, "max": 5.5 },
+            "spawnWeight": 2.2,
+            "floorMaterial": "carpet",
+            "minCount": 1,
+            "maxCount": 1,
+            "weight": 2,
+            "furniture": [
+              { "id": "shelf", "width": 1.5, "depth": 0.45, "height": 1.85, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "desk", "width": 1.4, "depth": 0.7, "height": 0.76, "place": "wall", "chance": 0.7, "count": { "min": 1, "max": 1 } }
+            ]
+          },
+          {
+            "id": "armory",
+            "name": "武器保管庫",
+            "length": { "min": 3.0, "max": 4.0 },
+            "spawnWeight": 1.2,
+            "floorMaterial": "metal",
+            "private": true,
+            "maxCount": 1,
+            "furniture": [
+              { "id": "vault", "width": 1.35, "depth": 0.38, "height": 2.05, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "metal_rack", "width": 1.2, "depth": 0.45, "height": 1.8, "place": "wall", "chance": 0.8, "count": { "min": 1, "max": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "press",
+        "kind": "cabin",
+        "chance": 1,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "press_cabin",
+            "name": "報道席",
+            "length": { "min": 6.5, "max": 9.0 },
+            "spawnWeight": 2.5,
+            "floorMaterial": "carpet",
+            "seating": { "prop": "sofa", "width": 1.4, "depth": 0.8, "height": 1.05, "pitch": 1.5 },
+            "furniture": []
+          }
+        ]
+      },
+      {
+        "id": "aft_entry",
+        "kind": "entry",
+        "chance": 1,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "aft_galley",
+            "name": "後方ギャレー",
+            "length": { "min": 3.5, "max": 4.25 },
+            "spawnWeight": 1,
+            "floorMaterial": "linoleum",
+            "furniture": [
+              { "id": "counter", "width": 2.0, "depth": 0.65, "height": 0.95, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "crates", "width": 0.9, "depth": 0.7, "height": 0.9, "place": "corner", "chance": 0.6, "count": { "min": 1, "max": 1 } }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tail",
+        "kind": "head",
+        "chance": 0.5,
+        "hostsUpperStair": false,
+        "hostsLowerStair": false,
+        "rooms": [
+          {
+            "id": "aft_stowage",
+            "name": "後部収納庫",
+            "length": { "min": 3.0, "max": 4.0 },
+            "spawnWeight": 1.2,
+            "floorMaterial": "metal",
+            "furniture": [
+              { "id": "shelf", "width": 1.5, "depth": 0.45, "height": 1.85, "place": "wall", "chance": 1, "count": { "min": 1, "max": 1 } },
+              { "id": "crates", "width": 1.0, "depth": 0.8, "height": 1.0, "place": "corner", "chance": 0.8, "count": { "min": 1, "max": 2 } }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "upperDeck": {
+    "chance": 1,
+    "corridorName": "上部デッキ通路",
+    "stairRoomName": "上部デッキ階段",
+    "stairRoomUpperName": "上部デッキ階段ホール",
+    "aftChance": 0.6,
+    "cockpit": {
+      "id": "cockpit",
+      "name": "操縦室",
+      "length": { "min": 4.0, "max": 5.0 },
+      "spawnWeight": 1.5,
+      "floorMaterial": "carpet",
+      "furniture": [
+        { "id": "desk", "width": 1.8, "depth": 0.8, "height": 0.9, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } },
+        { "id": "chair", "width": 0.55, "depth": 0.55, "height": 1.0, "place": "center", "chance": 1, "count": { "min": 1, "max": 2 } }
+      ]
+    },
+    "forward": [
+      {
+        "id": "comms_center",
+        "name": "通信センター",
+        "length": { "min": 3.5, "max": 5.0 },
+        "spawnWeight": 2,
+        "floorMaterial": "carpet",
+        "weight": 2,
+        "furniture": [
+          { "id": "shelf", "width": 1.5, "depth": 0.45, "height": 1.85, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } },
+          { "id": "desk", "width": 1.4, "depth": 0.7, "height": 0.76, "place": "wall", "chance": 0.8, "count": { "min": 1, "max": 1 } }
+        ]
+      },
+      {
+        "id": "crew_rest",
+        "name": "乗員休憩室",
+        "length": { "min": 3.0, "max": 4.5 },
+        "spawnWeight": 1.5,
+        "floorMaterial": "carpet",
+        "weight": 1.5,
+        "furniture": [
+          { "id": "bed", "width": 2.0, "depth": 0.9, "height": 0.6, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } },
+          { "id": "wardrobe", "width": 1.0, "depth": 0.55, "height": 1.9, "place": "corner", "chance": 0.6, "count": { "min": 1, "max": 1 } }
+        ]
+      }
+    ],
+    "aft": [
+      {
+        "id": "mission_room",
+        "name": "機上指揮所",
+        "length": { "min": 3.5, "max": 5.0 },
+        "spawnWeight": 2,
+        "floorMaterial": "carpet",
+        "furniture": [
+          { "id": "conf_table", "width": 2.0, "depth": 1.0, "height": 0.76, "place": "center", "chance": 1, "count": { "min": 1, "max": 1 } },
+          { "id": "shelf", "width": 1.2, "depth": 0.4, "height": 1.8, "place": "wall", "chance": 0.6, "count": { "min": 1, "max": 1 } }
+        ]
+      }
+    ]
+  },
+  "lowerDeck": {
+    "chance": 0.6,
+    "stairRoomName": "下部デッキ階段",
+    "stairRoomLowerName": "下部デッキ階段口",
+    "passageName": "下部デッキ通路",
+    "foreChance": 0.6,
+    "hatchChance": 0.6,
+    "aftHold": [
+      {
+        "id": "cargo_hold",
+        "name": "貨物室",
+        "length": { "min": 5.0, "max": 8.0 },
+        "spawnWeight": 1.8,
+        "floorMaterial": "metal",
+        "furniture": [
+          { "id": "container", "width": 1.6, "depth": 1.05, "height": 1.35, "place": "wall", "chance": 1, "count": { "min": 1, "max": 2 } },
+          { "id": "crates", "width": 1.0, "depth": 0.8, "height": 1.0, "place": "corner", "chance": 0.9, "count": { "min": 1, "max": 3 } }
+        ]
+      }
+    ],
+    "foreHold": [
+      {
+        "id": "avionics_bay",
+        "name": "電子機器室",
+        "length": { "min": 4.0, "max": 6.0 },
+        "spawnWeight": 1.2,
+        "floorMaterial": "metal",
+        "furniture": [
+          { "id": "metal_rack", "width": 1.2, "depth": 0.45, "height": 1.8, "place": "wall", "chance": 1, "count": { "min": 1, "max": 3 } }
+        ]
+      },
+      {
+        "id": "baggage_hold",
+        "name": "手荷物室",
+        "length": { "min": 4.0, "max": 6.0 },
+        "spawnWeight": 1.2,
+        "floorMaterial": "metal",
+        "furniture": [
+          { "id": "crates", "width": 1.0, "depth": 0.8, "height": 1.0, "place": "wall", "chance": 1, "count": { "min": 1, "max": 3 } }
+        ]
+      }
+    ]
+  },
+  "entities": {
+    "suspects": { "min": 3, "max": 7 },
+    "civilians": { "min": 3, "max": 8 },
+    "suspectProfiles": [
+      { "profile": "armed_militant", "weight": 4, "max": 9 },
+      { "profile": "nervous_robber", "weight": 2, "max": 5 },
+      { "profile": "hardcore_leader", "weight": 1, "max": 2 }
+    ],
+    "civilianProfile": "frightened_civilian",
+    "minSpawnDistance": 10,
+    "hostagePairChance": 0.55,
+    "clearance": 0.45,
+    "briefingUncertainty": 2,
+    "minEntitySeparation": 1.0
+  }
+}

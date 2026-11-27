@@ -392,13 +392,14 @@ export class WorldBuilder {
       const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);
       const y = (def.y ?? 0) + def.height / 2;
       const yaw = (def.yaw ?? 0) * DEG2RAD;
-      if (kind === 'wall' || kind === 'floor') alignBoxTexture(geometry, def.x, y, def.z, yaw);
+      const largeCover = kind === 'cover' && Math.max(def.width, def.depth, def.height) > 2.4;
+      if (kind === 'wall' || kind === 'floor' || largeCover) alignBoxTexture(geometry, def.x, y, def.z, yaw);
       const baseColor = kind === 'cover' && def.material ? 0xb7b2a9 : color;
       const mesh = new THREE.Mesh(geometry, this.material(safe, this.colorFor(safe, baseColor)));
       mesh.position.set(def.x, y, def.z);
       mesh.rotation.y = yaw;
       mesh.name = kind;
-      if (kind === 'cover' && def.material) {
+      if (kind === 'cover' && def.material && !largeCover) {
         const detail = (w: number, h: number, d: number, x: number, y: number, z: number, tint: number) => {
           const trim = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), this.material(safe, tint));
           trim.position.set(x,y,z);

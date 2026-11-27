@@ -3,7 +3,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { checkResultLine } from '../../src/ai/radioLines';
-import { executeOrder } from '../../src/ai/squad/squadOrders';
+import { ScoutIntel } from '../../src/ai/ScoutIntel';
+import { executeOrder, resetUnitForOrder } from '../../src/ai/squad/squadOrders';
 import { rollTrapSpot, tickCheck, tickDisarm } from '../../src/ai/squad/squadScout';
 import type { AllyUnit, SquadContext } from '../../src/ai/squad/squadTypes';
 import { validateSquad } from '../../src/core/DataLoader';
@@ -49,22 +50,32 @@ function setup(opts: { trapped?: boolean; locked?: boolean; rand?: number; flash
     victims: () => [],
   });
   if (opts.trapped) traps.place(door);
-  const radio: string[] = [];
+  const radio: { ja: string; en?: string }[] = [];
   const ally = {
     id: 'ally_1',
     door,
     entryPortal: { door },
+    path: [],
+    skippedDoors: new Map(),
+    skipped: new Set(),
     checkLeft: 0,
     checkStarted: false,
     disarmLeft: 0,
     disarmStarted: false,
+    mirrorLeft: 0,
+    mirrorStarted: false,
     progress: '',
     down: false,
-    body: { setPose: vi.fn(), aimAt: vi.fn() },
+    body: { px: 0, pz: 4, footY: 0, setPose: vi.fn(), aimAt: vi.fn(), setLean: vi.fn() },
   } as unknown as AllyUnit;
   const ctx = {
     cfg,
     traps,
+    intel: new ScoutIntel(),
+    colliders: [],
+    portalGroups: new Map(),
+    announcedStacks: new Set<string>(),
+    announcedRooms: new Set<string>(),
     doorChecks: new Map(),
     trapSpotRolled: new Set<string>(),
     rand: () => opts.rand ?? 0,
@@ -76,7 +87,8 @@ function setup(opts: { trapped?: boolean; locked?: boolean; rand?: number; flash
     allies: [ally],
     player: { position: new THREE.Vector3(0, 0, 0) },
     rooms: [],
-    emitRadio: (_a: AllyUnit, ja: string) => radio.push(ja),
+    resetUnitForOrder,
+    emitRadio: (_a: AllyUnit, ja: string, en?: string) => radio.push({ ja, en }),
   } as unknown as SquadContext;
   return { ctx, ally, door, traps, radio, detonations };
 }
@@ -111,7 +123,7 @@ describe('ドアチェック（Z #2）: ドア際で 1.5〜2 秒しゃがんで�
     expect(traps.isDiscovered(door.id)).toBe(true);
     expect(ctx.doorChecks.get(door.id)).toMatchObject({ trapFound: true, locked: false });
     expect(ctx.ack).toContain('トラップ有り');
-    expect(radio.some((l) => l.includes('トラップ有り') && l.includes('未施錠'))).toBe(true);
+    expect(radio.some((l) => l.ja.includes('トラップ有り') && l.ja.includes('未施錠'))).toBe(true);
   });
 
   it('detectChance を外れると見落とす（トラップ無しと報告される）', () => {
@@ -195,16 +207,26 @@ describe('閃光弾・CS ガスの携行数は有限（squad.json の inventory�
     expect(s.ctx.gasLeft).toBe(0);
   });
 
-  it('未チェックの閉じたドアへの stack 指示は check に置き換わる（スタック＋ドアチェック）', () => {
+  it('未チェックの閉じたドアへの stack 指示は check に置き換わり、即座に応答無線を発行する', () => {
     const s = setup({ trapped: true });
-    s.ctx.announcedStacks = new Set();
-    s.ctx.announcedRooms = new Set();
-    try {
-      executeOrder(s.ctx, 'stack', orderCtx(s.door));
-    } catch {
-      /* モック文脈ではスタック配置の後段が未対応。ack で置換だけ確認する */
-    }
+    executeOrder(s.ctx, 'stack', orderCtx(s.door));
     expect(s.ctx.ack).toContain('ドアチェック');
+    expect(s.radio.length).toBe(1);
+    expect(s.radio[0]!.ja).toContain('了解');
+    expect(s.radio[0]!.en).toBeTruthy();
+  });
+
+  it('check / disarm / mirror の指示発令時にも即座に応答無線を発行する', () => {
+    const s = setup({ trapped: true });
+    executeOrder(s.ctx, 'check', orderCtx(s.door));
+    executeOrder(s.ctx, 'mirror', orderCtx(s.door));
+    s.traps.discover(s.door.id);
+    executeOrder(s.ctx, 'disarm', orderCtx(s.door));
+    expect(s.radio.length).toBe(3);
+    for (const r of s.radio) {
+      expect(r.ja).toContain('了解');
+      expect(r.en && r.en.length > 0).toBe(true);
+    }
   });
 
   it('check/disarm はドアが必要。解除対象が無ければ発令されない', () => {

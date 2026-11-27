@@ -6,7 +6,7 @@ import type { Door, DoorSystem } from '../world/Door';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { HumanoidBody } from './HumanoidBody';
 import type { AlertView } from './SuspectAlert';
-import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
+import { hasFloorSupport, legacyZeroFallbackOf, MAX_DROP_HEIGHT, nextFootY, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
 import { collidersNear, raycastColliders } from '../world/ColliderIndex';
 import {
   blockedAtFiltered,
@@ -189,7 +189,7 @@ export function resolveOverlap(
   const legacy = legacyZeroFallbackOf(colliders);
   const canStand = (x: number, z: number): boolean =>
     !blockedAt(colliders, x, z, radius, feet) &&
-    (legacy || probeGround(colliders, x, z, feet, radius, false) !== null);
+    (legacy || hasFloorSupport(colliders, x, z, feet, radius, false));
   const res = pushOutCircleAABB(colliders, body.px, body.pz, radius, feet, maxPasses);
   if (res.pushed && Math.hypot(res.x - body.px, res.z - body.pz) <= radius * 3 && canStand(res.x, res.z)) {
     const support = probeGround(colliders, res.x, res.z, feet, radius, legacy) ?? feet;
@@ -233,9 +233,15 @@ export function stepToward(
   const sz = body.pz + dz * k;
   const feet = body.footY;
   const legacy = legacyZeroFallbackOf(colliders);
-  const canStand = (x: number, z: number): boolean =>
-    !blockedAt(colliders, x, z, radius, feet) &&
-    (legacy || probeGround(colliders, x, z, feet, radius, false) !== null);
+  const curSupport = probeGround(colliders, body.px, body.pz, feet, radius, legacy);
+  const grounded = legacy || (curSupport !== null && feet - curSupport <= MAX_DROP_HEIGHT);
+  const canStand = (x: number, z: number): boolean => {
+    if (blockedAt(colliders, x, z, radius, feet)) return false;
+    if (legacy) return true;
+    const g = probeGround(colliders, x, z, feet, radius, false);
+    if (g === null) return false;
+    return grounded ? feet - g <= MAX_DROP_HEIGHT : true;
+  };
   let nx = body.px;
   let nz = body.pz;
   let moved = false;

@@ -4,6 +4,8 @@ import { collidersNear } from './ColliderIndex';
 
 /** これ以下の段差は水平衝突を無視して乗り上げる（m）。階段の rise はこの値以下。 */
 export const STEP_HEIGHT = 0.45;
+/** 歩行・立ち位置判定で「現在階から踏み出せる」とみなす最大降下段差（m）。階段 1〜2 段は通しつつ高所からの転落を防ぐ。 */
+export const MAX_DROP_HEIGHT = 0.55;
 /** 直下に通常支持が無いとき、微小めり込みからの復帰として許す上方向の上限（m）。 */
 const SINK_RECOVERY = 0.5;
 
@@ -102,6 +104,23 @@ export function sampleGround(
   fallbackY?: number,
 ): number {
   return probeGround(colliders, x, z, feetY, radius) ?? fallbackY ?? feetY;
+}
+
+/**
+ * (x, z) の足元付近（feetY - MAX_DROP_HEIGHT 以上）に歩行支持面があるか。
+ * タラップ踊り場や吹き抜け等の高所で、下階の地面を支持面と誤認して転落するのを防ぐ。
+ */
+export function hasFloorSupport(
+  colliders: readonly Collider[],
+  x: number,
+  z: number,
+  feetY: number,
+  radius: number,
+  legacyZeroFallback: boolean = legacyZeroFallbackOf(colliders),
+): boolean {
+  const g = probeGround(colliders, x, z, feetY, radius, legacyZeroFallback);
+  if (g === null) return false;
+  return legacyZeroFallback || feetY - g <= MAX_DROP_HEIGHT;
 }
 
 /** 段差は即乗せ、下りは maxDrop までに制限して穴へ落ちる。 */

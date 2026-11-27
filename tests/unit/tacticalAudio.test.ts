@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { createGameEventBus } from '../../src/core/events';
-import { pickEnglishVoice, radioVoiceProfile } from '../../src/core/Audio';
+import { AudioEngine, pickEnglishVoice, radioVoiceProfile } from '../../src/core/Audio';
 import { AudioBridge, type AudioBridgeSink } from '../../src/core/AudioBridge';
 import {
   SwatTeam,
@@ -231,5 +231,101 @@ describe('F12 — Tactical Radio Chatter & Stack/C2/Gas Audio', () => {
     team.dispose();
     doorNorth.dispose();
     doorSouth.dispose();
+  });
+
+  it('AudioEngine.playAllyRadio speaks immediately when idle and defers speak after cancel when overlapping', () => {
+    vi.useFakeTimers();
+    const g = globalThis as Record<string, unknown>;
+    const prevWin = g.window;
+    const prevUtter = g.SpeechSynthesisUtterance;
+    const spoken: { text: string; lang: string }[] = [];
+    const canceled: number[] = [];
+    const synth = {
+      speaking: false,
+      pending: false,
+      getVoices: () => [{ name: 'Google UK English Male', lang: 'en-GB' }],
+      speak: (u: { text: string; lang: string }) => {
+        spoken.push({ text: u.text, lang: u.lang });
+        synth.speaking = true;
+      },
+      cancel: () => {
+        canceled.push(spoken.length);
+        synth.speaking = false;
+      },
+    };
+    const noopNode = () => ({
+      type: '',
+      frequency: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+      Q: { value: 0 },
+      gain: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      loop: false,
+      buffer: null,
+      onended: null as (() => void) | null,
+    });
+    class FakeAudioCtx {
+      state = 'running';
+      currentTime = 0;
+      sampleRate = 44100;
+      destination = {};
+      listener = {
+        positionX: { value: 0 }, positionY: { value: 0 }, positionZ: { value: 0 },
+        forwardX: { value: 0 }, forwardY: { value: 0 }, forwardZ: { value: -1 },
+        upX: { value: 0 }, upY: { value: 1 }, upZ: { value: 0 },
+      };
+      createBiquadFilter = noopNode;
+      createGain = noopNode;
+      createOscillator = noopNode;
+      createBufferSource = noopNode;
+      createBuffer = () => ({ getChannelData: () => new Float32Array(44100 * 2) });
+      close = vi.fn().mockResolvedValue(undefined);
+    }
+    g.window = {
+      AudioContext: FakeAudioCtx,
+      speechSynthesis: synth,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    g.SpeechSynthesisUtterance = class {
+      text: string;
+      lang = '';
+      voice: unknown = null;
+      volume = 1;
+      pitch = 1;
+      rate = 1;
+      onend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(t: string) {
+        this.text = t;
+      }
+    };
+
+    try {
+      const engine = new AudioEngine();
+      engine.unlock();
+
+      // First call while idle: synchronous speak without cancel
+      engine.playAllyRadio('ally_miller', 'Copy. Checking the door.');
+      expect(canceled).toEqual([]);
+      expect(spoken).toEqual([{ text: 'Copy. Checking the door.', lang: 'en-GB' }]);
+
+      // Overlapping call while synth.speaking is true: cancels first, then defers speak past cancel
+      engine.playAllyRadio('ally_cole', 'Roger. Moving in.');
+      expect(canceled).toEqual([1]);
+      expect(spoken.length).toBe(1);
+
+      vi.advanceTimersByTime(45);
+      expect(spoken.length).toBe(2);
+      expect(spoken[1]).toEqual({ text: 'Roger. Moving in.', lang: 'en-GB' });
+
+      engine.dispose();
+    } finally {
+      vi.useRealTimers();
+      g.window = prevWin;
+      g.SpeechSynthesisUtterance = prevUtter;
+    }
   });
 });

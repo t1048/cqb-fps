@@ -4,25 +4,47 @@
       "id": "random_small",
       "name": "ランダムマップ 小",
       "size": "小",
-      "tagline": "コンパクトな一戸建て・平屋〜2階",
-      "description": "屋外の前庭から突入するコンパクトな一戸建て。部屋数が少なく短時間で遊べる。選ぶたびに間取り・家具・容疑者/人質の配置が変わる。",
-      "generator": "house_compact"
+      "tagline": "民家・和風民家・小さな店舗や事務所・平屋〜2階",
+      "description": "屋外の前庭から突入するコンパクトな建物。多くは一戸建ての民家で、ときどき小さなクラブハウス・事務所・倉庫・診療所になる。部屋数が少なく短時間で遊べる。選ぶたびに建物の種類・間取り・家具・容疑者/人質の配置が変わる。",
+      "generator": "house_compact",
+      "variants": [
+        {
+          "generator": "house_compact",
+          "weight": 1,
+          "motifs": { "residence": 5, "japanese_house": 4, "clubhouse": 2, "office": 2, "warehouse": 2, "hospital": 1 }
+        }
+      ]
     },
     {
       "id": "random_house",
       "name": "ランダムマップ 中",
       "size": "中",
-      "tagline": "大型邸宅・中庭付き・最大3フロア",
-      "description": "前庭・中庭を備えた大型邸宅。突入経路が複数あり、広い廊下・リビング・上下階を連携してクリアリングする。",
-      "generator": "house"
+      "tagline": "邸宅・オフィス・銀行支店・病院・中庭付き・最大3フロア",
+      "description": "前庭・中庭を備えた中規模の建物。邸宅のほか、オフィス・銀行の支店・病院・クラブハウス・倉庫になる。突入経路が複数あり、広い廊下・上下階を連携してクリアリングする。",
+      "generator": "house",
+      "variants": [
+        {
+          "generator": "house",
+          "weight": 1,
+          "motifs": { "residence": 3, "office": 3, "japanese_house": 2, "clubhouse": 2, "hospital": 2, "bank": 2, "warehouse": 2 }
+        }
+      ]
     },
     {
       "id": "random_embassy",
       "name": "ランダムマップ 大",
       "size": "大",
-      "tagline": "大使館複合施設・東西ウイング・地下",
-      "description": "正門前アプローチ・中庭・東西ウイング・地下保管庫を備えた大規模施設。高武装の過激派を含む多数の標的を制圧する長丁場。",
-      "generator": "embassy"
+      "tagline": "大使館・銀行本店・病院・大統領専用機ほか",
+      "description": "大規模な施設。大使館・銀行の本店・病院・オフィスビル・倉庫などの複合施設のほか、ハイジャックされた駐機中の大統領専用機（最大3デッキ・タラップ突入）になることもある。多数の標的を制圧する長丁場。",
+      "generator": "embassy",
+      "variants": [
+        {
+          "generator": "embassy",
+          "weight": 5,
+          "motifs": { "embassy": 4, "hospital": 3, "office": 3, "bank": 3, "warehouse": 2, "clubhouse": 1, "residence": 1 }
+        },
+        { "generator": "air_force_one", "weight": 1 }
+      ]
     }
   ]
 }

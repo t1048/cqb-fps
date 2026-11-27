@@ -29,20 +29,20 @@ const STAGE_EN: Record<string, { name: string; size: string; tagline: string; de
   random_small: {
     name: 'Compact',
     size: 'Small',
-    tagline: '6-8 rooms / 1-2F · Tight quarters & rapid breach',
-    description: 'Compact floor plan with short sightlines. Quick to clear, ideal for fast CQB drills.',
+    tagline: 'Houses, small shops & offices · 1-2F',
+    description: 'A compact building — usually a family home, sometimes a small clubhouse, office, warehouse or clinic. Short sightlines, quick to clear.',
   },
   random_house: {
     name: 'Standard',
     size: 'Medium',
-    tagline: '8-12 rooms / 1-2F · Balanced tactical layout',
-    description: 'Procedural multi-room facility with hallways, flanks, and multiple breach points.',
+    tagline: 'Mansions, offices, bank branches, hospitals · up to 3F',
+    description: 'A mid-size building with courtyards — a mansion, office, bank branch, hospital, clubhouse or warehouse. Multiple breach points and linked floors.',
   },
   random_embassy: {
     name: 'Large',
     size: 'Large',
-    tagline: '12-18 rooms / 2F · Complex compound & long sightlines',
-    description: 'Large two-story compound with multi-wing corridors, stairwells, and heavy resistance.',
+    tagline: 'Embassies, bank HQs, hospitals, presidential jet and more',
+    description: 'A large facility — embassy, bank headquarters, hospital, office tower or warehouse compound — or a hijacked presidential jumbo jet parked on the apron (up to 3 decks, airstair breach).',
   },
 };
 
@@ -141,6 +141,13 @@ const MOTIF_EN: Record<string, { label: string; summaries: [string, string] }> =
     summaries: [
       'Armed militants breached a diplomatic compound. High-value civilians must be protected.',
       'Two-story estate under siege. Coordinate entry across multiple wings and stairwells.',
+    ],
+  },
+  air_force_one: {
+    label: 'Presidential Jet',
+    summaries: [
+      'Armed suspects have hijacked the parked presidential jet. Breach via the airstairs, clear the narrow cabin aisles and compartments, and rescue all passengers.',
+      'Hostage standoff aboard the presidential jumbo jet. Watch the upper-deck cockpit and lower cargo hold while securing the executive offices and press cabin.',
     ],
   },
 };
@@ -324,6 +331,38 @@ const ROOM_NAME_EN: Record<string, string> = {
   '厨房': 'Kitchen',
   '図書室': 'Library',
   '客室': 'Guest Suite',
+  // Presidential Jet (Air Force One)
+  '大統領私室': 'Presidential Stateroom',
+  '大統領執務室': 'Presidential Office',
+  '専用化粧室': 'Private Lavatory',
+  '医務室': 'Medical Suite',
+  '前方ギャレー': 'Forward Galley',
+  '上級スタッフ室': 'Senior Staff Room',
+  '首席補佐官室': 'Chief of Staff Office',
+  '会議兼食堂': 'Conference / Dining Room',
+  '来賓席': 'Guest Cabin',
+  'シークレットサービス詰所': 'Secret Service Post',
+  '武器保管庫': 'Armory',
+  '報道席': 'Press Cabin',
+  '後方ギャレー': 'Aft Galley',
+  '後部収納庫': 'Aft Stowage',
+  '操縦室': 'Cockpit',
+  '通信センター': 'Communications Center',
+  '乗員休憩室': 'Crew Rest',
+  '機上指揮所': 'Airborne Command Room',
+  '機内通路': 'Cabin Aisle',
+  '上部デッキ通路': 'Upper Deck Aisle',
+  '上部デッキ階段': 'Upper Deck Stairs',
+  '上部デッキ階段ホール': 'Upper Stair Landing',
+  '下部デッキ階段': 'Lower Deck Stairs',
+  '下部デッキ階段口': 'Lower Stair Landing',
+  '下部デッキ通路': 'Lower Deck Passage',
+  '貨物室': 'Cargo Hold',
+  '電子機器室': 'Avionics Bay',
+  '手荷物室': 'Baggage Hold',
+  '駐機場エプロン': 'Apron',
+  '前方タラップ上': 'Forward Airstair Top',
+  '後方タラップ上': 'Aft Airstair Top',
 };
 
 export function tRoomName(name: string): string {

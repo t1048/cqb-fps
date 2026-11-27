@@ -41,14 +41,14 @@ export function loadWeaponsData(): WeaponDef[] {
   return cachedWeapons;
 }
 
-export function loadGeneratorTemplate(name: 'house_compact' | 'house' | 'embassy'): GeneratorTemplate {
+export function loadGeneratorTemplate(name: 'house_compact' | 'house' | 'embassy' | 'air_force_one'): GeneratorTemplate {
   const filePath = path.join(DATA_DIR, 'generators', `${name}.json`);
   const raw: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   return validateGeneratorTemplate(raw, filePath);
 }
 
 export function generateRealMap(
-  templateName: 'house_compact' | 'house' | 'embassy',
+  templateName: 'house_compact' | 'house' | 'embassy' | 'air_force_one',
   seed: number,
 ): MapData {
   const tpl = loadGeneratorTemplate(templateName);

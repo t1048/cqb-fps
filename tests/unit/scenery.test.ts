@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { validateGeneratorTemplate, validateMap } from '../../src/core/DataLoader';
 import type { MotifId } from '../../src/core/types';
-import { MOTIF_IDS } from '../../src/core/types';
-import { motifFromSeed } from '../../src/world/Motif';
+import { motifFromSeed, SEEDED_MOTIF_IDS } from '../../src/world/Motif';
 import { buildScenery } from '../../src/world/Scenery';
 import { generateMap } from '../../src/world/generator';
 import * as THREE from 'three';
@@ -58,7 +57,7 @@ describe('motif scenery', () => {
       embassy: 'banquet_table',
       japanese_house: 'bed',
     };
-    for (const id of MOTIF_IDS) {
+    for (const id of SEEDED_MOTIF_IDS) {
       const map = mapFor(id);
       if (id === 'residence') {
         expect(map.rooms.some((r) => /玄関|寝室|リビング|浴室/.test(r.name)), id).toBe(true);

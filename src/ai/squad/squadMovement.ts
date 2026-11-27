@@ -1,5 +1,5 @@
 import type { Collider } from '../../world/WorldBuilder';
-import { legacyZeroFallbackOf, nextFootY, probeGround, type StairMark } from '../../world/Walk';
+import { hasFloorSupport, legacyZeroFallbackOf, nextFootY, probeGround, type StairMark } from '../../world/Walk';
 import type { Door } from '../../world/Door';
 import {
   distToSegment,
@@ -74,7 +74,7 @@ export function holdLook(ally: AllyUnit, want: string, dt: number): string {
 export function isStandable(ctx: SquadContext, x: number, z: number, y: number): boolean {
   if (blockedAt(ctx.colliders, x, z, ctx.cfg.bodyRadius, y)) return false;
   const legacy = legacyZeroFallbackOf(ctx.colliders);
-  return legacy || probeGround(ctx.colliders, x, z, y, ctx.cfg.bodyRadius, false) !== null;
+  return legacy || hasFloorSupport(ctx.colliders, x, z, y, ctx.cfg.bodyRadius, false);
 }
 
 const navPassableScratch = new Set<Collider>();
