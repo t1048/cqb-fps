@@ -12,7 +12,7 @@ const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
 
 /**
- * 一人称移動: PointerLock 視点、WASD、Shift 静音、C しゃがみ、AABB 壁スライディング衝突。
+ * 一人称移動: PointerLock 視点、WASD、Shift 静音、C しゃがみ（トグル）、AABB 壁スライディング衝突。
  * 座標は足元基準 (pos.y = 床高さ)。カメラは毎フレーム目線位置へ更新する。
  */
 export class PlayerController {
@@ -45,6 +45,8 @@ export class PlayerController {
    * （オプティワンドのドア下カメラ首振り用）。
    */
   lookSink: ((dx: number, dy: number) => void) | null = null;
+  /** true の間はしゃがみトグルを受け付けない（オプティワンドのカメラ展開中） */
+  stanceLocked = false;
   /** 負傷モデル（HP 比率による速度低下・照準の乱れ）を有効にするか。SWAT モードのみ true */
   woundsEnabled = false;
   private woundLv: WoundLevel = 0;
@@ -195,8 +197,8 @@ export class PlayerController {
       this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch - md.y * sens * ySign));
     }
 
-    // しゃがみ（押している間）
-    this.crouching = this.input.isDown('crouch');
+    // しゃがみ（C でトグル）。ワンド展開中など姿勢固定中は切り替えない
+    if (this.input.wasPressed('crouch') && !this.stanceLocked) this.crouching = !this.crouching;
 
     // 入力方向（ローカル: x=右, z=前）
     const fwd = (this.input.isDown('moveForward') ? 1 : 0) - (this.input.isDown('moveBackward') ? 1 : 0);

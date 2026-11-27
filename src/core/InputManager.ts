@@ -58,6 +58,8 @@ export class InputManager {
   private readonly down = new Set<string>();
   private readonly pressedFrame = new Set<string>();
   private readonly buttons = new Set<number>();
+  /** このフレームで押された瞬間のマウスボタン（endFrame で消える） */
+  private readonly pressedButtons = new Set<number>();
   private mouseDX = 0;
   private mouseDY = 0;
   onOrderMenu?: (event: OrderMenuEvent, value: number) => void;
@@ -95,6 +97,7 @@ export class InputManager {
     window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('auxclick', this.onAuxClick);
     window.addEventListener('wheel', this.onWheel, { passive: true });
     element.addEventListener('contextmenu', this.contextMenu);
     element.addEventListener('click', this.onClick);
@@ -129,6 +132,11 @@ export class InputManager {
     return this.buttons.has(button);
   }
 
+  /** このフレームで押された瞬間のみ true（指揮メニュー展開中・ポインタ非ロック中は false） */
+  wasMousePressed(button: number): boolean {
+    return this.pressedButtons.has(button);
+  }
+
   /** 蓄積されたマウス移動量を取得して 0 に戻す */
   consumeMouseDelta(): { x: number; y: number } {
     const r = { x: this.mouseDX, y: this.mouseDY };
@@ -146,6 +154,7 @@ export class InputManager {
   /** フレーム末尾で呼ぶ（wasPressed をクリア） */
   endFrame(): void {
     this.pressedFrame.clear();
+    this.pressedButtons.clear();
   }
 
   dispose(): void {
@@ -159,12 +168,14 @@ export class InputManager {
     window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('auxclick', this.onAuxClick);
     window.removeEventListener('wheel', this.onWheel);
     this.element.removeEventListener('click', this.onClick);
     document.removeEventListener('pointerlockchange', this.onLockChange);
     if (this.isPointerLocked) document.exitPointerLock();
     this.down.clear();
     this.pressedFrame.clear();
+    this.pressedButtons.clear();
     this.buttons.clear();
   }
 
@@ -244,6 +255,9 @@ export class InputManager {
       this.choosing = false;
       this.choosingTrigger = null;
       this.onOrderMenu?.('cancel', 0);
+    } else if (e.button === 1 && this.isPointerLocked) {
+      // ホイール押し込み（オプティワンド切替など）。メニューを閉じた押下は含めない
+      this.pressedButtons.add(1);
     }
     this.buttons.add(e.button);
   };
@@ -255,6 +269,10 @@ export class InputManager {
       this.onOrderMenu?.(this.isPointerLocked ? 'confirm' : 'cancel', 0);
     }
     this.buttons.delete(e.button);
+  };
+  /** 中ボタンのブラウザ既定動作（オートスクロール・リンクの新規タブ等）をプレイ中は抑止する */
+  private onAuxClick = (e: MouseEvent): void => {
+    if (e.button === 1 && this.isPointerLocked) e.preventDefault();
   };
   private onWheel = (e: WheelEvent): void => {
     if (this.choosing) {

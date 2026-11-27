@@ -420,9 +420,9 @@ export class Fortify {
 
   // ---------- ドアトラップ ----------
 
-  /** SuspectMission のドア操作から呼ぶ: しゃがみ + F 長押し中か */
+  /** SuspectMission のドア操作から呼ぶ: しゃがみ姿勢（C トグル）で F 長押し中か */
   wantsTrap(): boolean {
-    return this.d.input.isDown('crouch');
+    return this.d.player.isCrouching;
   }
 
   /** 戻り値: 処理した（ゲージ表示中/設置完了）なら true */
@@ -652,7 +652,7 @@ export class Fortify {
         }
       }
       text += en
-        ? '  |  Hold F at Window: Board / Crouch+Hold F at Door: Trap'
+        ? '  |  Hold F at Window: Board / Crouch (C) + Hold F at Door: Trap'
         : '　｜　窓の前で F 長押し: 板 / しゃがみ+F 長押し（ドア）: トラップ';
     }
     if (text !== this.lastText) {
