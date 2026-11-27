@@ -74,27 +74,29 @@ function makeCtx(opts: { stacked?: boolean; door?: Door; flashes?: number; gas?:
 }
 
 describe('Z クイック指示: 偵察状況による分岐', () => {
-  it('未確認のドア: 1 回目の Z は整列のみ（案内無線の対象）', () => {
-    const { ctx, orderCtx } = makeCtx({});
-    const info = quickOrderInfo(ctx, orderCtx);
-    expect(info.order).toBe('stack');
-    expect(info.scouted).toBe(false);
-    expect(info.unscoutedStack).toBe(true);
-    expect(pickQuickOrder(ctx, orderCtx)).toBe('stack');
+  it('未確認のドア: 1 回の Z でミラー確認（→自動突入）。整列済みかどうかに依らない', () => {
+    for (const stacked of [false, true]) {
+      const { ctx, orderCtx } = makeCtx({ stacked });
+      const info = quickOrderInfo(ctx, orderCtx);
+      expect(info.order).toBe('mirror');
+      expect(info.mirrorFirst).toBe(true);
+      expect(info.scouted).toBe(false);
+      expect(pickQuickOrder(ctx, orderCtx)).toBe('mirror');
+    }
   });
 
-  it('未確認のドアに整列済みでもう一度 Z: 閃光なしの素の clear（施錠なら breachClear）', () => {
-    const { ctx, orderCtx } = makeCtx({ stacked: true });
-    const info = quickOrderInfo(ctx, orderCtx);
-    expect(info.order).toBe('clear');
-    expect(info.stacked).toBe(true);
-    expect(info.unscoutedStack).toBe(false);
+  it('ミラー確認中にもう一度 Z: 確認を打ち切って素の clear（施錠なら breachClear）', () => {
+    const a = makeCtx({ stacked: true });
+    (a.ctx.allies[0] as unknown as { mirrorLeft: number }).mirrorLeft = 2;
+    const info = quickOrderInfo(a.ctx, a.orderCtx);
+    expect(info).toMatchObject({ order: 'clear', mirroring: true, mirrorFirst: false });
     const locked = makeDoor({ locked: true });
     const l = makeCtx({ stacked: true, door: locked });
+    (l.ctx.allies[0] as unknown as { mirrorLeft: number }).mirrorLeft = 2;
     expect(quickOrderInfo(l.ctx, { ...l.orderCtx, door: locked }).order).toBe('breachClear');
   });
 
-  it('確認済み・既知の脅威あり: 整列前でも一度の Z で閃光クリア（閃光切れならガス、両方切れなら clear）', () => {
+  it('確認済み・既知の脅威あり: 即座に（ミラーなしで）閃光クリア（閃光切れならガス、両方切れなら clear）', () => {
     const intel = new ScoutIntel();
     intel.reportContact('target', { id: 's1', kind: 'suspect', armed: true, x: 1, y: 0, z: -6, time: 0 });
     const a = makeCtx({ intel, flashes: 2 });
@@ -102,7 +104,7 @@ describe('Z クイック指示: 偵察状況による分岐', () => {
     expect(info.order).toBe('flashClear');
     expect(info.scouted).toBe(true);
     expect(info.threats).toBe(1);
-    expect(info.unscoutedStack).toBe(false);
+    expect(info.mirrorFirst).toBe(false);
     expect(quickOrderInfo(makeCtx({ intel, flashes: 0, gas: 1 }).ctx, a.orderCtx).order).toBe('gasClear');
     expect(quickOrderInfo(makeCtx({ intel, flashes: 0, gas: 0 }).ctx, a.orderCtx).order).toBe('clear');
   });

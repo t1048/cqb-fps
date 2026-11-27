@@ -454,6 +454,7 @@ export class SquadSystem implements SquadContext {
         sweepRetryCd: 0,
         mirrorLeft: 0,
         mirrorStarted: false,
+        mirrorThen: null,
         targetWrapper,
         label,
         getAABB: () => body.getAABB(),

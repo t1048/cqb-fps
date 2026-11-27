@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
-import type { MirrorConfig, RoomDef, Vec3 } from '../../core/types';
+import type { SquadElement, MirrorConfig, RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
 import type { Collider } from '../../world/WorldBuilder';
@@ -10,6 +10,7 @@ import { MIRROR_START, pickRadio } from '../radioLines';
 import type { ScoutContact } from '../ScoutIntel';
 import { findRoomAcrossDoor } from './squadEntry';
 import { approachSign } from './squadMovement';
+import { finishMirrorEntry } from './squadOrders';
 import type { AllyUnit, EntryPortal, SquadContext } from './squadTypes';
 
 const DEG2RAD = Math.PI / 180;
@@ -143,9 +144,10 @@ export function scanMirrorContacts(inp: MirrorScanInput): MirrorScanResult {
 }
 
 /** ミラー確認の開始（スタック位置に着いてから経過を数える）。 */
-export function startMirror(ctx: SquadContext, ally: AllyUnit): void {
+export function startMirror(ctx: SquadContext, ally: AllyUnit, then: { element: SquadElement } | null = null): void {
   ally.mirrorLeft = ctx.cfg.mirror.durationSec;
   ally.mirrorStarted = false;
+  ally.mirrorThen = then;
 }
 
 /** スタック位置に着いている隊員のミラー確認を進める。確認が終われば報告して false を返す。 */
@@ -167,7 +169,10 @@ export function tickMirror(ctx: SquadContext, ally: AllyUnit, dt: number): boole
   ally.progress = t('ミラー確認中', 'Mirroring Door');
   if (ally.mirrorLeft > 0) return true;
   ally.body.setPose('stand');
+  const then = ally.mirrorThen;
+  ally.mirrorThen = null;
   resolveMirror(ctx, ally, door);
+  if (then) finishMirrorEntry(ctx, door, then.element);
   return false;
 }
 

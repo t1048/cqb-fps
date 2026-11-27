@@ -284,6 +284,8 @@ export interface AllyUnit extends HitTarget {
   /** ミラー確認の残り秒（>0 の間、スタック位置で静止してドア下を確認する） */
   mirrorLeft: number;
   mirrorStarted: boolean;
+  /** Z 由来のミラー確認: 終了後に結果に応じた突入へ自動で移る（対象チーム）。null=確認だけ */
+  mirrorThen: { element: SquadElement } | null;
   readonly targetWrapper: AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean };
   label: AIDebugLabel;
 }

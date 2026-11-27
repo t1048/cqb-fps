@@ -30,7 +30,7 @@
   "warnStates": ["BARRICADED", "ALERT", "CONFRONTATION", "HESITATE"],
   "mirror": { "durationSec": 4, "missChance": 0.35, "centerBandM": 1.1, "halfFovDeg": 55, "range": 12 },
   "wounds": { "headMultiplier": 2.2, "woundBelow": 0.5, "speedMul": 0.75 },
-  "hint": "右クリック: 部隊指揮 / Z: クイック(未確認の扉は整列のみ) / 4: オプティワンド / X: 集合 / T: チーム切替 / Tab: 突入モード切替",
+  "hint": "右クリック: 部隊指揮 / Z: クイック(未確認はミラー確認→突入) / 4: オプティワンド / X: 集合 / T: チーム切替 / Tab: 突入モード切替",
   "orderLabels": {
     "follow": "追従",
     "hold": "現在位置待機",
