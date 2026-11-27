@@ -1,4 +1,5 @@
 import type {
+  ArmorConfig,
   AllyWoundsConfig,
   DoorCheckConfig,
   DoorTrapConfig,
@@ -1394,6 +1395,28 @@ function readWounds(r: Reader, o: Record<string, unknown>): WoundsConfig {
   };
 }
 
+export const DEFAULT_ARMOR: ArmorConfig = {
+  absorb: 0.6,
+  minAbsorb: 0.35,
+  swatIssue: 50,
+  suspectVest: 50,
+};
+
+function readArmor(r: Reader, o: Record<string, unknown>): ArmorConfig {
+  if (o.armor === undefined) return { ...DEFAULT_ARMOR };
+  const a = r.obj(o.armor, 'armor');
+  const d = DEFAULT_ARMOR;
+  const absorb = r.numOr(a, 'absorb', 'armor', d.absorb, 0, 1);
+  const minAbsorb = r.numOr(a, 'minAbsorb', 'armor', d.minAbsorb, 0, 1);
+  if (minAbsorb > absorb) r.fail('armor.minAbsorb', 'absorb 以下である必要があります');
+  return {
+    absorb,
+    minAbsorb,
+    swatIssue: r.numOr(a, 'swatIssue', 'armor', d.swatIssue, 0, 500),
+    suspectVest: r.numOr(a, 'suspectVest', 'armor', d.suspectVest, 0, 500),
+  };
+}
+
 function readOptiwand(r: Reader, o: Record<string, unknown>): OptiwandConfig {
   if (o.optiwand === undefined) return { ...DEFAULT_OPTIWAND };
   const w = r.obj(o.optiwand, 'optiwand');
@@ -1485,6 +1508,7 @@ export function validatePlayerConfig(raw: unknown, source = 'player'): PlayerCon
       radius: perMode(fs, 'radius', 'footstep', 0, 200),
     },
     wounds: readWounds(r, o),
+    armor: readArmor(r, o),
     optiwand: readOptiwand(r, o),
   };
 }

@@ -263,8 +263,10 @@ class App {
     this.input = new InputManager(this.renderer.domElement);
     this.input.allowAutoPointerLock = false;
     this.player = new PlayerController(this.camera, this.input, this.world.colliders, playerCfg, this.bus, map);
-    // 負傷モデル（被弾で速度低下・照準乱れ）は SWAT モードのみ。容疑者モードの挙動は変えない
+    // 負傷モデル（被弾で速度低下・照準乱れ）は SWAT モードのみ。頭部倍率と防弾チョッキの式は両モード共通
     this.player.woundsEnabled = !suspect;
+    // SWAT 隊員は標準装備として防弾チョッキを着用。容疑者は交渉（人質交換）で入手する
+    if (!suspect) this.player.equipArmor(playerCfg.armor.swatIssue);
     this.audio = acquireSharedAudio();
     this.audio.stopAll();
     this.audio.setMasterVolume(initialSettings.masterVolume);
@@ -542,9 +544,7 @@ class App {
           addPrep: (sec) => sm.addPrep(sec),
           breakdown: () => sm.breakdown(),
           prepSec: () => sm.prepLeft,
-          giveArmor: (pts) => {
-            this.player.armor = Math.max(this.player.armor, pts);
-          },
+          giveArmor: () => this.player.equipArmor(playerCfg.armor.suspectVest),
           hasArmor: () => this.player.armor > 0,
           giveMagazines: (n) => this.weapons.addReserveMagazines(n),
           withdrawSwat: () => team.withdraw(),

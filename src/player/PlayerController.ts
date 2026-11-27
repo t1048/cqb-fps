@@ -49,6 +49,8 @@ export class PlayerController {
   stanceLocked = false;
   /** 負傷モデル（HP 比率による速度低下・照準の乱れ）を有効にするか。SWAT モードのみ true */
   woundsEnabled = false;
+  /** 頭部被弾倍率（wounds.headMultiplier）を適用するか。両モード共通で true（負傷効果とは独立） */
+  headshotsEnabled = true;
   private woundLv: WoundLevel = 0;
   private swayPhase = 0;
   /** 直近の被弾が頭部だったか（HUD/テスト用） */
@@ -86,8 +88,25 @@ export class PlayerController {
     return this.hpValue > 0;
   }
 
-  /** 防弾チョッキの耐久値（0 = 未装着）。被弾の 60% を耐久が尽きるまで肩代わりする */
+  /** 防弾チョッキの残り耐久値（0 = 未装着/破損）。肩代わりできる残りダメージ量 */
   armor = 0;
+  /** 装着したチョッキの新品時耐久値（肩代わり率の劣化計算用） */
+  armorMax = 0;
+
+  /** 防弾チョッキを装着する（既存より耐久が高い場合のみ更新）。 */
+  equipArmor(points: number): void {
+    if (!(points > 0) || points <= this.armor) return;
+    this.armor = points;
+    this.armorMax = Math.max(this.armorMax, points);
+  }
+
+  /** 現在の肩代わり率。耐久残量に比例して absorb → minAbsorb へ劣化する */
+  get armorAbsorb(): number {
+    if (this.armor <= 0) return 0;
+    const a = this.config.armor;
+    const max = Math.max(this.armorMax, this.armor);
+    return a.minAbsorb + (a.absorb - a.minAbsorb) * (this.armor / max);
+  }
 
   /** 現在の負傷レベル（woundsEnabled=false の間は常に 0） */
   get woundLevel(): WoundLevel {
@@ -107,22 +126,23 @@ export class PlayerController {
   }
 
   /**
-   * 被弾。hitY（命中点の高さ）が目線付近なら頭部とみなし wounds.headMultiplier を掛ける（SWAT モードのみ）。
+   * 被弾。hitY（命中点の高さ）が目線付近なら頭部とみなし wounds.headMultiplier を掛ける（両モード共通）。
+   * 胴体への被弾は防弾チョッキが耐久の続く限り armorAbsorb の割合を肩代わりする。
    * 戻り値は残 HP。
    */
   takeDamage(amount: number, hitY?: number): number {
     if (this.disposed || this.hpValue <= 0 || amount <= 0) return this.hpValue;
     const wcfg = this.config.wounds;
     this.lastHitHead = false;
-    if (this.woundsEnabled && isHeadHit(hitY, this.position.y + this.eyeHeight, wcfg.headBand)) {
+    if (this.headshotsEnabled && isHeadHit(hitY, this.position.y + this.eyeHeight, wcfg.headBand)) {
       this.lastHitHead = true;
       amount = applyHeadMultiplier(amount, true, wcfg.headMultiplier);
     }
     if (this.armor > 0) {
       // 頭部は防弾チョッキの対象外
       if (!this.lastHitHead) {
-        const absorbed = Math.min(this.armor, amount * 0.6);
-        this.armor -= absorbed;
+        const absorbed = Math.min(this.armor, amount * this.armorAbsorb);
+        this.armor = Math.max(0, this.armor - absorbed);
         amount -= absorbed;
       }
     }
