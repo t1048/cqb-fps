@@ -9,7 +9,7 @@ const MAX_DT = 0.05;
 const DEFAULT_DOOR_WIDTH = 1.2;
 const MINIMAP_SIZE = 180;
 /** 左上ミニマップ（非拡大時）に表示する自機周辺の範囲（m、一辺） */
-const LOCAL_VIEW_SPAN_M = 30;
+const LOCAL_VIEW_SPAN_M = 20;
 /** 自機周辺表示用の静的レイヤ（マップ全体を拡大描画）の一辺上限（デバイス px） */
 const LOCAL_STATIC_MAX_PX = 4096;
 /** 部屋 floorY を同一階とみなす許容差(m)（ブリーフィングの旧タブ生成と同値） */
