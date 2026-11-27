@@ -1936,15 +1936,17 @@ function fetchJson(url: string): Promise<unknown> {
 
 function loadCachedStatic<T>(path: string, validate: (raw: unknown, source: string) => T): Promise<T> {
   const url = dataUrl(path);
-  const hit = staticConfigCache.get(url) as Promise<T> | undefined;
+  // 同じ JSON を別の検証関数で読む（ai_profiles.json → プロファイル / 警戒度設定）ため、キーに検証関数名を含める
+  const key = `${url}#${validate.name}`;
+  const hit = staticConfigCache.get(key) as Promise<T> | undefined;
   if (hit) return hit;
   const promise = fetchJson(url)
     .then((raw) => validate(raw, url))
     .catch((err: unknown) => {
-      staticConfigCache.delete(url);
+      staticConfigCache.delete(key);
       throw err;
     });
-  staticConfigCache.set(url, promise);
+  staticConfigCache.set(key, promise);
   return promise;
 }
 

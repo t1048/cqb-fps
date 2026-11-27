@@ -39,7 +39,7 @@ const FRAME_CSS = `
 .cqb-wand .rec{position:absolute;right:8px;top:5px;font:bold 11px monospace;color:#ff6a6a;text-shadow:0 0 4px #000}
 .cqb-wand .hint{position:absolute;left:8px;bottom:5px;font:11px monospace;color:rgba(200,255,215,.85);text-shadow:0 0 4px #000}
 .cqb-wand .dep{position:absolute;inset:0;background:#000;transition:opacity .1s}
-.cqb-wand-hint{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);display:none;z-index:5;pointer-events:none;max-width:min(560px,44vw);padding:5px 12px;border-radius:4px;background:rgba(8,18,12,.74);border:1px solid rgba(160,255,190,.4);color:#c9ffd8;font:bold 13px/1.45 sans-serif;text-align:center}
+.cqb-wand-hint{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);display:none;z-index:5;pointer-events:none;max-width:min(560px,44vw);padding:5px 12px;border-radius:4px;background:rgba(8,18,12,.74);border:1px solid rgba(160,255,190,.4);color:#c9ffd8;font:bold 13px/1.45 sans-serif;text-align:center}
 `;
 /** 前方（角越し）カメラのピッチ上下限（度） */
 const FREE_PITCH_LIMIT_DEG = 60;
