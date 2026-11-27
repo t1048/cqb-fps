@@ -189,6 +189,26 @@ export const RESTRAIN_FAKE_AT_MIN = 0.35;
 export const RESTRAIN_FAKE_AT_SPAN = 0.45;
 export const RESTRAIN_GIVEUP_SEC = 45;
 
+/**
+ * ホットスポット学習（見えない位置から撃たれた開口を全隊で共有し、裸でのぞかない）:
+ * 近づいたとみなす距離(m) / 先行照準した隊員が地点に現れた相手へ反応する秒（通常は reactionSec）と、その半径(m)
+ * 閃光・ガス・制圧射撃の待機秒 / 盾待ち・挟撃待ちの上限秒 / 前進（先行照準を維持）秒 / 同じ地点の再対策までの秒
+ * 半開きドアを疑わしいとみなす静止秒・疑わしい地点を捨てる秒
+ */
+export const HOT_APPROACH_DIST = 7.5;
+export const HOT_PREAIM_REACT_SEC = 0.15;
+export const HOT_PREAIM_RADIUS = 2.8;
+export const HOT_FLASH_WAIT_SEC = 2.4;
+export const HOT_GAS_WAIT_SEC = 4.0;
+export const HOT_SUPPRESS_SEC = 3.0;
+export const HOT_SHIELD_MAX_SEC = 8;
+export const HOT_PINCER_MAX_SEC = 14;
+export const HOT_ADVANCE_SEC = 7;
+export const HOT_REUSE_SEC = 25;
+export const HOT_DOOR_STABLE_SEC = 1.0;
+export const HOT_BLIND_TEAM_SEC = 1.2;
+export const HOT_SUSPECT_NEAR = 4.5;
+
 export const NAMES = ['アルファ', 'ブラボー', 'チャーリー', 'デルタ', 'エコー', 'フォックス'];
 
 export const CAMP_GAS_THRESHOLD_SEC = 20;

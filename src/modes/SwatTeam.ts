@@ -61,6 +61,7 @@ import {
 } from './swat/swatHelpers';
 import { SwatHunter } from './swat/SwatHunter';
 import { SwatObstacles } from './swat/swatObstacles';
+import { SwatHotSpotCoordinator } from './swat/swatHotSpots';
 import { SwatRestraint } from './swat/swatRestraint';
 import { SwatRoutePlanner, type RoutePlan } from './swat/swatRoutePlanner';
 import { SwatTacticsCoordinator } from './swat/swatTacticsCoordinator';
@@ -185,6 +186,7 @@ export class SwatTeam implements SwatTeamHost {
   private readonly tactics: SwatTacticsCoordinator;
   private readonly routePlanner: SwatRoutePlanner;
   private readonly restraint: SwatRestraint;
+  private readonly hotSpots: SwatHotSpotCoordinator;
   private readonly downListeners: ((pos: Vec3, byPlayer: boolean) => void)[] = [];
 
   constructor(private readonly d: SwatTeamDeps) {
@@ -321,6 +323,31 @@ export class SwatTeam implements SwatTeamHost {
       queueRadio: (h, text, voice) => this.queueRadio(h, text, voice),
     });
 
+    this.hotSpots = new SwatHotSpotCoordinator({
+      d: this.d,
+      rooms: this.rooms,
+      hunters: this.hunters,
+      get clock() {
+        return self.clock;
+      },
+      get currentPressure() {
+        return self.currentPressure;
+      },
+      get lastSightingAge() {
+        return self.lastSightingAge;
+      },
+      doorById: (id) => this.doorById(id),
+      portals: () => this.entry.portals(),
+      roomName: (pos) => this.coverage.roomName(pos),
+      flashAvailable: () => this.tactics.flashAvailable(),
+      gasAvailable: () => this.tactics.gasAvailable(),
+      throwFlashAtSpot: (by, target) => this.tactics.throwFlashAtSpot(by, target),
+      throwGasAtSpot: (by, target) => this.tactics.throwGasAtSpot(by, target),
+      suppress: (by, at) => this.tactics.suppress(by, at),
+      radio: (h, text, voice, force) => this.radio(h, text, voice, force),
+      queueRadio: (h, text, voice) => this.queueRadio(h, text, voice),
+    });
+
     const spawns = resolveSwatSpawns(d.spawns, d.count, d.colliders);
     for (let i = 0; i < spawns.length; i++) {
       const idNum = this.nextHunterId++;
@@ -352,7 +379,11 @@ export class SwatTeam implements SwatTeamHost {
         if (!h || !h.alive) return;
         const p = d.player.position;
         const from = { x: p.x, y: p.y, z: p.z };
-        if (h.takeHit(e.damage, from)) {
+        // 被弾者がまだ射手を見ていなかったか（のぞき撃ち・隙間撃ちの学習用。takeHit が状態を変える前に取る）
+        const victimSaw = h.sees || (h.state === 'engage' && h.lostSec < 0.8);
+        const downed = h.takeHit(e.damage, from);
+        this.hotSpots.onOfficerShot(h, from, downed, victimSaw);
+        if (downed) {
           d.weapons.removeTarget(h);
           this.kills++;
           this.tactics.onManDown(h);
@@ -484,6 +515,15 @@ export class SwatTeam implements SwatTeamHost {
     return this.hunters.length;
   }
 
+  /** ホットスポット学習の記憶と実施した対策の履歴（テスト・デバッグ用） */
+  get hotSpotMemory(): SwatHotSpotCoordinator['memory'] {
+    return this.hotSpots.memory;
+  }
+
+  get hotSpotTacticLog(): readonly string[] {
+    return this.hotSpots.tacticLog;
+  }
+
   /** 投降した味方容疑者の拘束（統計・テスト用） */
   get restraintStats(): { cuffed: number; betrayed: number; active: number } {
     return { cuffed: this.restraint.cuffed, betrayed: this.restraint.betrayed, active: this.restraint.activeJobs };
@@ -610,6 +650,7 @@ export class SwatTeam implements SwatTeamHost {
       this.entry.updateEntryGroups(dt);
       this.tactics.updateAntiCamping(dt);
       this.restraint.update(dt);
+      this.hotSpots.update(dt);
     }
     for (const h of this.hunters) h.update(dt);
     this.tactics.updatePincerRefresh();
@@ -925,6 +966,7 @@ export class SwatTeam implements SwatTeamHost {
     for (const u of this.unsubs) u();
     this.unsubs.length = 0;
     this.tactics.dispose();
+    this.hotSpots.dispose();
     this.radioQueue.length = 0;
     this.radioSpeakGap = 0;
     this.entry.dispose();

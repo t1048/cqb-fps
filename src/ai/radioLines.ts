@@ -388,6 +388,42 @@ export const RESTRAIN_DONE: readonly RadioLine[] = [
   ['容疑者を拘束。クリア、続行する。', 'He is in cuffs. Continuing the sweep.'],
 ];
 
+/** 見えない位置から撃たれた: 射手の位置と開口を全隊に共有（ホットスポット） */
+export const HOT_SPOT_DOOR: readonly RadioLine[] = [
+  ['ドアの隙間から撃たれた！あの隙間は覗くな！', 'Shot through the door gap! Do not peek it!'],
+  ['{room}のドアだ！隙間から撃ってくる、気を付けろ！', 'Shooter behind the {roomEn} door! He is firing through the gap!'],
+];
+export const HOT_SPOT_STAIR: readonly RadioLine[] = [
+  ['階段の上から撃たれた！階段は盾が先頭だ！', 'Shot from the stairwell! Shield leads on the stairs!'],
+  ['階段室に潜んでいる！直接上るな！', 'He is in the stairwell! Do not climb blind!'],
+];
+export const HOT_SPOT_WINDOW: readonly RadioLine[] = [
+  ['窓口から撃たれた！あそこに潜んでいる！', 'Shot through the window opening! He is right there!'],
+  ['室内の窓口だ！狙われている、覗くな！', 'Pass-through window! He is covering it!'],
+];
+export const HOT_SPOT_OPEN: readonly RadioLine[] = [
+  ['見えない位置から撃たれた！{room}だ、警戒しろ！', 'Shot from an angle we cannot see! {roomEn}, watch it!'],
+];
+export const HOT_PREAIM: readonly RadioLine[] = [
+  ['隙間に照準を合わせたまま進め！', 'Keep your sights on the gap as you move!'],
+  ['パイを切って進む。隙間から目を離すな。', 'Slice the pie. Eyes on the gap.'],
+];
+export const HOT_SUPPRESS: readonly RadioLine[] = [
+  ['制圧射撃！ドアの隙間を撃ち込め！', 'Suppressing fire on the gap!'],
+  ['隙間に撃ち込んで頭を下げさせろ！', 'Hammer the gap. Keep his head down!'],
+];
+export const HOT_SHIELD: readonly RadioLine[] = [
+  ['盾が先頭、全員その後ろにスタック！', 'Shield up front. Everyone stack behind him!'],
+  ['盾持ちが前へ。続け、後ろから援護。', 'Shield first. Stay behind him and cover.'],
+];
+export const HOT_STAIR_FLASH: readonly RadioLine[] = [
+  ['階段室へ閃光弾を投げ込む！上る前に目を潰せ！', 'Flashing the stairwell before we climb!'],
+  ['閃光弾を階段へ！爆発するまで上るな！', 'Bang up the stairs! Hold until it pops!'],
+];
+export const HOT_KICK: readonly RadioLine[] = [
+  ['半開きのドアだ。蹴り開ける、警戒！', 'Door cracked open. Kicking it wide, cover!'],
+];
+
 export const CIVILIAN_SECURE: readonly RadioLine[] = [
   ['民間人を確保した。', 'Civilian secure.'],
   ['民間人は安全だ。', 'Civilian is safe.'],

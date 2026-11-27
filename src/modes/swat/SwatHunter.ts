@@ -82,6 +82,8 @@ import {
   GOAL_TIMEOUT_SEC,
   HEADING_MIN_SPEED,
   HEADING_TAU,
+  HOT_PREAIM_RADIUS,
+  HOT_PREAIM_REACT_SEC,
   HUNT_SPEED,
   LOOK_HOLD_SEC,
   NAV_SMOOTH,
@@ -185,6 +187,9 @@ export class SwatHunter implements HitTarget {
   suppressCd = 0;
   readonly combat: CombatParams;
   disarmDoor: Door | null = null;
+  /** ホットスポット学習: 開口の手前で対策が効くまで止まる / 開口へ先行照準する（チーム時計の期限つき） */
+  hotHold: { until: number; aim: Vec3 } | null = null;
+  preAim: { pos: Vec3; until: number } | null = null;
   /** 投降した味方容疑者の拘束: 対象と役割（cuff = 手錠をかける / cover = 見張り） */
   restrainTarget: RestrainTarget | null = null;
   restrainRole: 'cuff' | 'cover' = 'cuff';
@@ -507,6 +512,15 @@ export class SwatHunter implements HitTarget {
     ) {
       this.team.checkTraps(this);
     }
+    // ホットスポット: 開口への対策（閃光・制圧・盾の先行）が効くまで、のぞく位置に出ずに開口を狙って待つ
+    if (this.hotHold && (this.state === 'sweep' || this.state === 'hunt')) {
+      if (this.team.clock >= this.hotHold.until) this.hotHold = null;
+      else {
+        this.body.faceToward(this.hotHold.aim.x, this.hotHold.aim.z, 5 * dt);
+        this.updateReadyPose();
+        return;
+      }
+    }
     switch (this.state) {
       case 'stack':
         this.updateStack(dt);
@@ -538,6 +552,13 @@ export class SwatHunter implements HitTarget {
       case 'sweep':
         this.updateSweep(dt);
         break;
+    }
+    // 先行照準（パイ切り）: 動きながらも開口の方へ視線を向け続ける
+    if (this.preAim && (this.state === 'sweep' || this.state === 'hunt')) {
+      if (this.team.clock >= this.preAim.until) this.preAim = null;
+      else if (Math.hypot(this.preAim.pos.x - this.body.px, this.preAim.pos.z - this.body.pz) < 10) {
+        this.body.faceToward(this.preAim.pos.x, this.preAim.pos.z, 3.2 * dt);
+      }
     }
     this.updateReadyPose();
     const moved = Math.hypot(this.body.px - this.lastStepX, this.body.pz - this.lastStepZ);
@@ -879,8 +900,17 @@ export class SwatHunter implements HitTarget {
       this.acquiring = true;
       this.spotTimer += dt;
       // 手錠をかけている最中は対象に正対して注意が割かれ、気付くのが遅れる
-      // 手錠をかけている最中は対象に正対して注意が割かれ、気付くのが遅れる
-      const react = this.team.reactionSec + (this.state === 'restrain' && this.restrainRole === 'cuff' ? RESTRAIN_REACT_PENALTY : 0);
+      let react = this.team.reactionSec + (this.state === 'restrain' && this.restrainRole === 'cuff' ? RESTRAIN_REACT_PENALTY : 0);
+      // 先行照準した開口に現れた相手には反応が速い（パイ切り・対策済みの接近）
+      const pa = this.preAim;
+      if (
+        pa &&
+        this.team.clock < pa.until &&
+        Math.hypot(threat.x - pa.pos.x, threat.z - pa.pos.z) < HOT_PREAIM_RADIUS &&
+        Math.abs(p.position.y - pa.pos.y) < 1.8
+      ) {
+        react = Math.min(react, HOT_PREAIM_REACT_SEC);
+      }
       if (this.spotTimer < react) return;
       this.spotTimer = 0;
       this.known = { x: threat.x, y: p.position.y, z: threat.z };
