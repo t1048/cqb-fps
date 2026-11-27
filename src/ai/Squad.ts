@@ -185,6 +185,7 @@ export class SquadSystem implements SquadContext {
   private readonly unsubs: (() => void)[] = [];
   private readonly livingAlliesBuf: (AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean })[] = [];
   private readonly coverEyeTmp = new THREE.Vector3();
+  private readonly sightGazeTmp = new THREE.Vector3();
   private readonly labelChestTmp: Vec3 = { x: 0, y: 0, z: 0 };
   readonly menu: CommandMenu;
 
@@ -551,6 +552,28 @@ export class SquadSystem implements SquadContext {
       }
     }
     return n;
+  }
+
+  /**
+   * ミニマップ用: いずれかの生存隊員の視界（前方コーン＋視線）に point が入っているか。
+   * 判定は制圧セルの可視判定（squadClearing）と同じ前方コーン（cos≒0.45）に揃える。
+   */
+  allySeesPoint(point: Vec3, maxDist = 30): boolean {
+    const eye = this.coverEyeTmp;
+    const dir = this.sightGazeTmp;
+    for (const a of this.allies) {
+      if (a.down || a.blindLeft > 0) continue;
+      a.body.eye(eye);
+      const dx = point.x - eye.x;
+      const dz = point.z - eye.z;
+      const hDist = Math.hypot(dx, dz);
+      if (hDist > maxDist || Math.abs(point.y - eye.y) > 2.2) continue;
+      a.body.gaze(dir);
+      const fLen = Math.hypot(dir.x, dir.z) || 1;
+      if (hDist > 0.5 && dx * dir.x + dz * dir.z < hDist * fLen * 0.45) continue;
+      if (hasLineOfSight(this.colliders, eye, point)) return true;
+    }
+    return false;
   }
 
   /** 視線が通る生存隊員の情報一覧（敵AI知覚・射撃ターゲット用）。 */

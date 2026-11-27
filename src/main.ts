@@ -7,7 +7,7 @@ import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
 import { DataLoader } from './core/DataLoader';
 import type { AIProfile, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SquadConfig, StageEntry, SuspectAlertConfig, Vec3, WeaponDef } from './core/types';
-import { CivilianState, createGameEventBus, type GameEventBus } from './core/events';
+import { CivilianState, SuspectState, createGameEventBus, type GameEventBus } from './core/events';
 import type { Civilian } from './ai/Civilian';
 import { AudioEngine } from './core/Audio';
 import { AudioBridge } from './core/AudioBridge';
@@ -69,6 +69,10 @@ import { SuspectAllyDirector } from './modes/SuspectAllies';
 type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'paused' | 'ended';
 
 const EMPTY_COVERAGE: readonly Cell[] = [];
+/** ミニマップの敵赤点: 最後に確認してから濃いまま残す秒数 */
+const ENEMY_DOT_HOLD_SEC = 2.5;
+/** ミニマップの敵赤点: 保持後にフェードアウトする秒数 */
+const ENEMY_DOT_FADE_SEC = 1.5;
 
 let sharedRenderer: THREE.WebGLRenderer | null = null;
 let sharedEnvTex: THREE.Texture | null = null;
@@ -128,6 +132,8 @@ class App {
   private lastReloadP = -1;
   private readonly replyProjScratch = new THREE.Vector3();
   private readonly replyEyeScratch = new THREE.Vector3();
+  private readonly minimapEyeScratch = new THREE.Vector3();
+  private readonly enemySightings = new Map<string, { x: number; y: number; z: number; t: number }>();
   private readonly scene = new THREE.Scene();
   private readonly equipmentScene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -349,6 +355,10 @@ class App {
     this.scene.add(this.avatar.root);
     this.subtitle = new Subtitle(document.body);
     if (!suspect) {
+      // オプティワンド（プレイヤー）・ミラー確認（隊員）で見つけた容疑者もミニマップに一時表示
+      this.scoutIntel.onContact = (c) => {
+        if (c.kind === 'suspect') this.recordEnemySighting(c.id, c.x, c.y, c.z);
+      };
       this.optiwand = new Optiwand({
         player: this.player,
         input: this.input,
@@ -593,6 +603,7 @@ class App {
       suspect ? undefined : () => this.squad.getMinimapWaypoints(),
       suspect ? undefined : () => this.minimapContacts(),
       suspect ? undefined : () => this.minimapPulses(),
+      suspect ? undefined : () => this.minimapVisibleEnemies(),
     );
     this.minimap.setVisible(false);
 
@@ -1049,11 +1060,61 @@ class App {
     return p ? [p] : [];
   }
 
+  /** ミニマップの敵赤点: 発見から一定時間で消える（最後の確認位置に残り、徐々に薄くなる） */
+  private recordEnemySighting(id: string, x: number, y: number, z: number): void {
+    const now = performance.now() / 1000;
+    const rec = this.enemySightings.get(id);
+    if (rec) {
+      rec.x = x;
+      rec.y = y;
+      rec.z = z;
+      rec.t = now;
+    } else {
+      this.enemySightings.set(id, { x, y, z, t: now });
+    }
+  }
+
+  /**
+   * ミニマップ用: プレイヤー・隊員の視界、オプティワンド/ミラーで確認した容疑者（赤点表示）。
+   * 見えている間は現在位置を追従し、見失うと最後の確認位置で ENEMY_DOT_HOLD_SEC 保持後にフェードして消える。
+   */
+  private minimapVisibleEnemies(): { x: number; y: number; z: number; alpha: number }[] {
+    const eye = this.player.getEyePosition(this.minimapEyeScratch);
+    for (const s of this.entities.suspects.values()) {
+      if (!s.alive || s.state === SuspectState.ARRESTED) {
+        this.enemySightings.delete(s.id);
+        continue;
+      }
+      const chest = s.body.chestPos();
+      const seenByPlayer =
+        Math.hypot(chest.x - eye.x, chest.z - eye.z) <= 40 &&
+        this.player.inCameraView(chest) &&
+        hasLineOfSight(this.world.colliders, eye, chest);
+      if (seenByPlayer || this.squad.allySeesPoint(chest)) {
+        this.recordEnemySighting(s.id, s.body.px, s.body.footY, s.body.pz);
+      }
+    }
+    const now = performance.now() / 1000;
+    const out: { x: number; y: number; z: number; alpha: number }[] = [];
+    for (const [id, rec] of this.enemySightings) {
+      const age = now - rec.t;
+      if (age >= ENEMY_DOT_HOLD_SEC + ENEMY_DOT_FADE_SEC) {
+        this.enemySightings.delete(id);
+        continue;
+      }
+      const alpha = age <= ENEMY_DOT_HOLD_SEC ? 1 : 1 - (age - ENEMY_DOT_HOLD_SEC) / ENEMY_DOT_FADE_SEC;
+      out.push({ x: rec.x, y: rec.y, z: rec.z, alpha });
+    }
+    return out;
+  }
+
   /** ミニマップ用: 偵察で確認した接触（武装容疑者・民間人・非武装） */
   private minimapContacts(): { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] {
     const out: { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] = [];
     for (const c of this.scoutIntel.all()) {
-      out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind === 'civilian' ? 'civilian' : c.armed ? 'threat' : 'unarmed' });
+      // 容疑者は時間で消える赤点（minimapVisibleEnemies）で表示するため、ここでは民間人のみ
+      if (c.kind !== 'civilian') continue;
+      out.push({ x: c.x, y: c.y, z: c.z, kind: 'civilian' });
     }
     return out;
   }

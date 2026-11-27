@@ -111,6 +111,15 @@ export interface FloorPlanContact {
   kind: 'threat' | 'civilian' | 'unarmed';
 }
 
+/** プレイヤー・隊員の視界やオプティワンド等で確認した敵（赤点で表示、時間で消える） */
+export interface FloorPlanEnemy {
+  x: number;
+  y: number;
+  z: number;
+  /** 0〜1。見失ってから時間が経つほど薄くなる（省略時 1） */
+  alpha?: number;
+}
+
 /** 人質処刑の脅迫中に人質の位置で脈打つ警告（progress 0〜1 でカウントダウン） */
 export interface FloorPlanPulse {
   x: number;
@@ -143,6 +152,8 @@ export interface DrawFloorPlanOptions {
   contacts?: readonly FloorPlanContact[];
   /** 警告パルス（人質処刑の脅迫）。time は点滅用の秒 */
   pulses?: readonly FloorPlanPulse[];
+  /** 現在視界内の敵（赤点） */
+  enemies?: readonly FloorPlanEnemy[];
   time?: number;
   /** ドア ID → リアルタイム開閉状態（省略時は静的定義から closed/locked を描画） */
   doors?: ReadonlyMap<string, FloorPlanDoorState>;
@@ -684,6 +695,24 @@ function drawDynamicFloorPlan(
     }
   }
 
+  // 視界内の敵（赤点）
+  if (options.enemies) {
+    const r = compact ? 3.4 : 4.5;
+    for (const e of options.enemies) {
+      if (options.floorY !== undefined && Math.abs(e.y - options.floorY) > 1.4) continue;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, e.alpha ?? 1));
+      ctx.fillStyle = '#ff3b3b';
+      ctx.strokeStyle = '#09121a';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(toX(e.x), toY(e.z), r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // 隊員マーカー
   if (options.allies) {
     for (const ally of options.allies) {
@@ -694,17 +723,26 @@ function drawDynamicFloorPlan(
       const fzDir = -Math.cos(ally.yawRad);
       const heading = Math.atan2(fzDir, fxDir);
       ctx.save();
-      ctx.translate(ax, ay);
-      ctx.rotate(heading);
-      ctx.fillStyle = ally.down ? '#6e7680' : '#f2c14e';
+      if (!ally.down) {
+        // 隊員の視界コーン（緑）
+        const aConeLen = Math.max(10, 1.8 * scale);
+        const aConeHalf = 32 * DEG2RAD;
+        const aGrad = ctx.createRadialGradient(ax, ay, 1.5, ax, ay, aConeLen);
+        aGrad.addColorStop(0, 'rgba(92, 220, 120, 0.36)');
+        aGrad.addColorStop(1, 'rgba(92, 220, 120, 0.02)');
+        ctx.fillStyle = aGrad;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.arc(ax, ay, aConeLen, heading - aConeHalf, heading + aConeHalf);
+        ctx.closePath();
+        ctx.fill();
+      }
+      // 隊員マーカー（緑点、ダウン時は灰色）
+      ctx.fillStyle = ally.down ? '#6e7680' : '#4fdc78';
       ctx.strokeStyle = '#09121a';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.moveTo(5.5, 0);
-      ctx.lineTo(-3.5, -3.5);
-      ctx.lineTo(-1.8, 0);
-      ctx.lineTo(-3.5, 3.5);
-      ctx.closePath();
+      ctx.arc(ax, ay, compact ? 3.4 : 4.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
@@ -714,7 +752,7 @@ function drawDynamicFloorPlan(
       ctx.font = compact ? 'bold 8px sans-serif' : 'bold 11px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillStyle = ally.down ? '#8a94a0' : '#f8dc88';
+      ctx.fillStyle = ally.down ? '#8a94a0' : '#9cf0b4';
       ctx.fillText(ally.name.slice(0, 1), ax, ay + 5);
       ctx.restore();
     }
@@ -790,7 +828,7 @@ export function drawFloorPlan(
 
 /**
  * 画面左上のリアルタイム戦術ミニマップ。
- * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
+ * プレイヤー位置・向き、ドアの開閉/施錠状態、隊員（緑点＋視界）、プレイヤー・隊員・オプティワンドで確認した敵（赤点、一定時間で消える）を表示する。
  * プレイ中は M キーで「左上ミニマップ（自機周辺のみ・名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
  */
 /** ミニマップの再描画間隔（秒）。約 15 Hz */
@@ -831,6 +869,7 @@ export class Minimap {
     private readonly getWaypoints?: () => readonly FloorPlanWaypoint[],
     private readonly getContacts?: () => readonly FloorPlanContact[],
     private readonly getPulses?: () => readonly FloorPlanPulse[],
+    private readonly getEnemies?: () => readonly FloorPlanEnemy[],
   ) {
     this.floorLevels = collectFloorLevels(map);
 
@@ -1056,6 +1095,7 @@ export class Minimap {
       waypoints: this.getWaypoints?.(),
       contacts: this.getContacts?.(),
       pulses: this.getPulses?.(),
+      enemies: this.getEnemies?.(),
       time: performance.now() / 1000,
       player: this.playerState,
     });

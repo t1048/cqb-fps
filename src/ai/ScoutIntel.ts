@@ -27,6 +27,8 @@ export class ScoutIntel {
   private readonly rooms = new Map<string, RoomIntel>();
   /** 変更のたびに増える（キャッシュ無効化用） */
   version = 0;
+  /** 接触が報告されるたびに呼ばれる（ミニマップの一時的な敵表示用） */
+  onContact: ((contact: ScoutContact, source: 'player' | 'ally') => void) | null = null;
 
   private ensure(roomId: string, source: 'player' | 'ally'): RoomIntel {
     let r = this.rooms.get(roomId);
@@ -49,6 +51,7 @@ export class ScoutIntel {
     r.scouted = true;
     r.contacts.set(contact.id, { ...contact });
     this.version++;
+    this.onContact?.(contact, source);
   }
 
   isScouted(roomId: string | null | undefined): boolean {
