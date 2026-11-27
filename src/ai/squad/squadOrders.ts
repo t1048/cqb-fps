@@ -12,6 +12,7 @@ import {
   ACK_RESTRAIN_SEARCH,
   MODE_DYNAMIC,
   MODE_SLOW,
+  UNSCOUTED_ROOM,
   doorAck,
   pickRadio,
 } from '../radioLines';
@@ -25,6 +26,7 @@ import {
 } from './squadTypes';
 import { approachSign, computeMoveSlots } from './squadMovement';
 import { assignPortalGroup, findRoomAcrossDoor } from './squadEntry';
+import { applyScoutPreAim, doorKnowledge, startMirror } from './squadScout';
 import { findNearestActionableId } from './squadClearing';
 
 const ORDER_I18N_KEY: Record<SquadOrder, string> = {
@@ -99,30 +101,90 @@ export function handleShortcuts(ctx: SquadContext): void {
 
   if (ctx.input.wasPressed('quickOrder')) {
     const orderCtx = ctx.menu.resolveContext(ctx.selectedElement);
-    executeOrder(ctx, pickQuickOrder(ctx, orderCtx), orderCtx);
+    const info = quickOrderInfo(ctx, orderCtx);
+    executeOrder(ctx, info.order, orderCtx);
+    if (info.unscoutedStack) {
+      // 向こう側が未確認のままドアに付くだけ（突入は 2 度目の Z まで待つ）。確認手段を匂わせる
+      const lead = activeTargets(ctx, orderCtx.element)[0];
+      if (lead) {
+        const [ja, en] = pickRadio(UNSCOUTED_ROOM);
+        ctx.emitRadio(lead, ja, en);
+      }
+    }
   }
 }
 
-/** Z キーで発令される指示を状況から決定する（実行と HUD 表示で共通）。 */
-export function pickQuickOrder(ctx: SquadContext, orderCtx: OrderContext): SquadOrder {
-  if (orderCtx.restrainTarget) return 'restrain';
+export interface QuickOrderInfo {
+  order: SquadOrder;
+  /** ドア/エリア対象の向こう側を把握しているか（対象がドア/エリアでなければ null） */
+  scouted: boolean | null;
+  /** 既知の脅威数 */
+  threats: number;
+  /** 未確認のドアへ「整列だけ」を選んだ（案内無線を出す） */
+  unscoutedStack: boolean;
+  /** すでにスタック済みか */
+  stacked: boolean;
+}
+
+/** 突入系の指示を、偵察情報（ScoutIntel）に基づいて選ぶ。 */
+function entryOrderFor(ctx: SquadContext, known: { scouted: boolean; threats: number }, locked: boolean): SquadOrder {
+  if (locked) return 'breachClear';
+  if (!known.scouted) return 'clear'; // 未確認: 強行（閃光なし）。リスクはプレイヤーが負う
+  if (known.threats === 0) return 'clear'; // 確認済み・空: 静かに入る
+  if (ctx.flashesLeft > 0) return 'flashClear';
+  if (ctx.gasLeft > 0) return 'gasClear';
+  return 'clear';
+}
+
+/**
+ * Z キーで発令される指示とその根拠を状況から決定する（実行と HUD 表示で共通）。
+ * - 未確認のドア: 1 回目の Z は整列のみ（向こう側は未確認と報告）。整列済みで Z をもう一度押すと素の clear（閃光なし）。
+ * - 確認済みのドア: 既知の脅威があれば閃光/ガス突入、空なら静かな clear。整列から一度で実行。
+ */
+export function quickOrderInfo(ctx: SquadContext, orderCtx: OrderContext): QuickOrderInfo {
+  const none = { scouted: null, threats: 0, unscoutedStack: false, stacked: false } as const;
+  if (orderCtx.restrainTarget) return { ...none, order: 'restrain' };
   if (orderCtx.door) {
+    const door = orderCtx.door;
     const targets = activeTargets(ctx, orderCtx.element);
-    const alreadyStacked =
+    const stacked =
       targets.length > 0 &&
       targets.every(
         (a) =>
           a.order === 'stack' &&
-          a.door === orderCtx.door &&
+          a.door === door &&
           a.stackPos !== null &&
           Math.hypot(a.body.px - a.stackPos.x, a.body.pz - a.stackPos.z) <= 0.65,
       );
-    if (alreadyStacked) return orderCtx.door.locked ? 'breachClear' : 'clear';
-    return 'stack';
+    const k = doorKnowledge(ctx, door);
+    const threats = k.threats.length;
+    if (k.scouted) {
+      return { order: entryOrderFor(ctx, { scouted: true, threats }, door.locked), scouted: true, threats, unscoutedStack: false, stacked };
+    }
+    if (stacked) {
+      return { order: entryOrderFor(ctx, { scouted: false, threats: 0 }, door.locked), scouted: false, threats: 0, unscoutedStack: false, stacked };
+    }
+    return { order: 'stack', scouted: false, threats: 0, unscoutedStack: true, stacked: false };
   }
-  if (orderCtx.areaTarget) return 'clear';
-  if (orderCtx.groundPoint) return 'move';
-  return 'hold';
+  if (orderCtx.areaTarget) {
+    const room = orderCtx.areaTarget.room;
+    const scouted = ctx.intel.isScouted(room.id);
+    const threats = ctx.intel.threatsIn(room.id).length;
+    return {
+      order: scouted && threats > 0 ? entryOrderFor(ctx, { scouted, threats }, false) : 'clear',
+      scouted,
+      threats,
+      unscoutedStack: false,
+      stacked: false,
+    };
+  }
+  if (orderCtx.groundPoint) return { ...none, order: 'move' };
+  return { ...none, order: 'hold' };
+}
+
+/** Z キーで発令される指示（後方互換。根拠が要るときは quickOrderInfo）。 */
+export function pickQuickOrder(ctx: SquadContext, orderCtx: OrderContext): SquadOrder {
+  return quickOrderInfo(ctx, orderCtx).order;
 }
 
 /** 画面下部に出す「Z : 〜〜」の文言。指示不可の状況では空文字。 */
@@ -133,8 +195,13 @@ export function quickOrderHint(ctx: SquadContext, dt: number): string {
   if (ctx.disposed || activeTargets(ctx, ctx.selectedElement).length === 0) {
     ctx.quickHintCache = '';
   } else {
-    const order = pickQuickOrder(ctx, ctx.menu.resolveContext(ctx.selectedElement));
-    ctx.quickHintCache = `Z : ${orderLabelText(ctx.cfg, order)}`;
+    const info = quickOrderInfo(ctx, ctx.menu.resolveContext(ctx.selectedElement));
+    let note = '';
+    if (info.scouted === false) note = info.stacked ? t('（未確認・危険）', ' (unscouted, risky)') : t('（未確認）', ' (unscouted)');
+    else if (info.scouted === true) {
+      note = info.threats > 0 ? t(`（確認済・敵${info.threats}）`, ` (scouted, ${info.threats} hostile)`) : t('（確認済・空）', ' (scouted, empty)');
+    }
+    ctx.quickHintCache = `Z : ${orderLabelText(ctx.cfg, info.order)}${note}`;
   }
   return ctx.quickHintCache;
 }
@@ -178,7 +245,8 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     order === 'breachClear' ||
     order === 'c2Clear' ||
     order === 'gasClear' ||
-    order === 'pieDoor';
+    order === 'pieDoor' ||
+    order === 'mirror';
   let portal: EntryPortal | null = null;
   let targetRoom: RoomDef | null = null;
   if (isDoorOrder) {
@@ -215,8 +283,21 @@ export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: Ord
     }
   }
 
+  if (order === 'mirror') {
+    if (!portal || !orderCtx.door) {
+      ctx.ack = t('ミラー確認はドアを見て実行します', 'Look at a door to mirror it');
+      ctx.ackLeft = 1.4;
+      return;
+    }
+    // 全員がスタックし、先頭の 1 名が数秒静止してドア下をミラー確認する
+    const lead = assignPortalGroup(ctx, targets, portal, targetRoom, 'stack');
+    startMirror(ctx, lead);
+    return;
+  }
+
   if (isDoorOrder && portal) {
     const lead = assignPortalGroup(ctx, targets, portal, targetRoom, order);
+    if (order !== 'stack' && order !== 'pieDoor') applyScoutPreAim(ctx, targets, portal, targetRoom);
     const alreadyOpen = !portal.door || portal.door.angle >= ctx.cfg.doorOpenAngle;
     const [jaText, enText] = pickRadio(doorAck(order, alreadyOpen));
     ctx.emitRadio(lead, jaText, enText);
@@ -365,6 +446,8 @@ export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
   ally.stealthEntry = false;
   ally.flashRetryCd = 0;
   ally.sweepRetryCd = 0;
+  ally.mirrorLeft = 0;
+  ally.mirrorStarted = false;
   ally.body.setPose('stand');
   ally.body.setLean(0);
 }

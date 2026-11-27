@@ -636,6 +636,7 @@ export class CommandMenu {
       add('c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
       add('breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
       add('pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
+      add('mirror', t('ミラー確認（ドア下を隊員が確認・約4秒）', 'Mirror Under Door (Ally Wand, ~4s)'), true);
     } else if (ctx.areaTarget) {
       add('clear', t('突入＆クリア（2名突入制圧）', 'Breach & Clear (2-Man Entry)'), true);
       add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);

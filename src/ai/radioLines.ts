@@ -516,6 +516,20 @@ export const BLAST_WARN: readonly RadioLine[] = [
   ['ドアが炸裂した。他の扉も疑え。', 'A door just blew. Treat every door as rigged!'],
 ];
 
+/** Z で未確認のドアに整列だけ行うときの申告 */
+export const UNSCOUTED_ROOM: readonly RadioLine[] = [
+  ['向こう側は未確認です。', 'Room behind is unknown.'],
+  ['中の状況が分かりません。確認が必要です。', 'No eyes on the room. Need a recon.'],
+  ['室内は未確認。このまま入るのは危険です。', 'Room is unconfirmed. Going in blind is risky.'],
+];
+
+/** ミラー確認の開始 */
+export const MIRROR_START: readonly RadioLine[] = [
+  ['ミラーでドア下を確認する。', 'Mirroring under the door.'],
+  ['ワンドを差し込む。少し待て。', 'Wand going under. Hold on.'],
+  ['ドアの下から中を見る。', 'Checking under the door.'],
+];
+
 export const RESCAN = DRONE_RESCAN;
 
 export {
