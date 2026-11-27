@@ -261,7 +261,7 @@ export function quickOrderHint(ctx: SquadContext, dt: number): string {
     if (info.busy === 'check') text = t('チェック中…', 'Checking door...');
     else if (info.busy === 'disarm') text = t('トラップ解除中…', 'Disarming trap...');
     else if (info.busy === 'entry') text = t('突入中', 'Entering');
-    else if (info.stage === 'stack') text = `Z : ${t('スタック', 'Stack Up')}${t('（次: チェック→オープン&クリア）', ' (next: check → open & clear)')}`;
+    else if (info.stage === 'stack') text = `Z : ${t('スタック＆ドアチェック', 'Stack Up & Check Door')}${t('（次: オープン&クリア）', ' (next: open & clear)')}`;
     else if (info.stage === 'check') text = `Z : ${t('ドアチェック（罠・施錠）', 'Check Door (Trap & Lock)')}`;
     else if (info.stage === 'entry') {
       const trap = info.trapKnown ? t('（罠発見: 解除してから開ける）', ' (trap found: disarm first)') : '';
@@ -292,7 +292,16 @@ export function updateMarkers(ctx: SquadContext): void {
   ctx.menu.updateActiveMarkers(markers);
 }
 
-export function executeOrder(ctx: SquadContext, order: SquadOrder, orderCtx: OrderContext): void {
+export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx: OrderContext): void {
+  // 閉じた未チェックのドアへのスタック指示は、同時にドアチェック（罠・施錠）も行う（指示の手数を減らしテンポを保つ）。
+  // check は全員スタック → 先頭がチェックなので、スタック位置に着いた時点でそのままチェックが始まる。
+  const order: SquadOrder =
+    requested === 'stack' &&
+    orderCtx.door &&
+    orderCtx.door.angle < ctx.cfg.doorOpenAngle &&
+    !ctx.doorChecks.has(orderCtx.door.id)
+      ? 'check'
+      : requested;
   const targets = activeTargets(ctx, orderCtx.element);
   if (targets.length === 0) {
     ctx.ack = t('指示可能な生存隊員がいません', 'No living officers available');
