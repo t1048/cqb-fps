@@ -42,6 +42,8 @@ import { TextureLibrary } from './world/Materials';
 import { motifById } from './world/Motif';
 import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
+import { Optiwand } from './player/Optiwand';
+import { ScoutIntel } from './ai/ScoutIntel';
 import { SquadSystem, type Cell } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
 import { applyMissionRoster } from './rules/MissionRoster';
@@ -168,6 +170,9 @@ class App {
   private readonly viewModel: ViewModel;
   private readonly avatar: PlayerAvatar;
   private readonly squad: SquadSystem;
+  /** オプティワンド（SWAT モードのみ）。偵察情報は隊と共有する */
+  private readonly optiwand: Optiwand | null = null;
+  private readonly scoutIntel = new ScoutIntel();
   private readonly mapId: string;
   private phase: AppPhase = 'briefing';
 
@@ -297,7 +302,7 @@ class App {
       { range: flashDef?.range ?? 8, blindSec: flashDef?.throwable?.blindMaxSec ?? 2 },
       map.rooms,
       playerCfg.arrest,
-      { flashbang: this.flashbang, tearGas: this.tearGas },
+      { flashbang: this.flashbang, tearGas: this.tearGas, intel: this.scoutIntel },
     );
     this.entities.attachSquad(this.squad, squadCfg.presenceBonusPerAlly);
     this.scene.add(this.squad.root);
@@ -316,6 +321,24 @@ class App {
     this.avatar = new PlayerAvatar(this.textures);
     this.scene.add(this.avatar.root);
     this.subtitle = new Subtitle(document.body);
+    if (!suspect) {
+      this.optiwand = new Optiwand({
+        player: this.player,
+        input: this.input,
+        colliders: this.world.colliders,
+        cfg: playerCfg.optiwand,
+        doorThickness: doorCfg.thickness,
+        doors: this.doors,
+        entities: this.entities,
+        rooms: map.rooms,
+        intel: this.scoutIntel,
+        bus: this.bus,
+        subtitle: this.subtitle,
+        weapons: this.weapons,
+        host: document.body,
+        hideDuringRender: [this.avatar.root],
+      });
+    }
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {
       const reply =
         from === 'SURRENDER' && to === 'ENGAGE'
@@ -488,6 +511,10 @@ class App {
       suspect ? undefined : this.squad,
       motif ? { id: motif.id, label: motif.label, color: motif.accentCss } : undefined,
     );
+    if (this.optiwand) {
+      const wand = this.optiwand;
+      this.hud.toolLabel = () => wand.toolLabel();
+    }
     this.minimap = new Minimap(
       document.body,
       map,
@@ -496,6 +523,7 @@ class App {
       suspect ? EMPTY_COVERAGE : this.squad.coverage,
       suspect ? undefined : () => this.squad.getMinimapAllies(),
       suspect ? undefined : () => this.squad.getMinimapWaypoints(),
+      suspect ? undefined : () => this.minimapContacts(),
     );
     this.minimap.setVisible(false);
 
@@ -702,6 +730,7 @@ class App {
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.briefingScreen.hide();
     this.minimap.setVisible(false);
+    this.optiwand?.setEquipped(false);
     this.suspectMission?.setVisible(false);
     this.fortify?.setVisible(false);
     // 途中まで見たツアーは既読扱い（毎回出ると煩わしいため）
@@ -731,6 +760,7 @@ class App {
     this.interaction.update(dt);
     this.doors.update(dt);
     this.world.update(dt, this.camera.position);
+    this.optiwand?.update(dt); // フラッシュバンより先（構え切替・射撃抑止の優先順を保つ）
     this.flashbang.update(dt);
     this.tearGas.update(dt);
     this.weapons.update(dt);
@@ -743,6 +773,7 @@ class App {
     this.fortify?.update(dt);
     const viewStyle = this.flashbang.equipped ? 'flashbang' : this.weapons.weapon.id;
     this.viewModel.setStyle(viewStyle);
+    this.viewModel.root.visible = !this.optiwand?.equipped;
     const reloadP = this.flashbang.equipped ? null : this.weapons.reloadProgress;
     this.viewModel.update(dt, this.player.isMoving, reloadP, this.weapons.reloadFromEmpty);
     this.playReloadCues(reloadP);
@@ -849,7 +880,17 @@ class App {
       this.renderer.autoClear = false;
       this.renderer.clearDepth();
       this.renderer.render(this.equipmentScene, this.viewModel.camera);
+      this.optiwand?.render(this.renderer, this.scene);
     }
+  }
+
+  /** ミニマップ用: 偵察で確認した接触（武装容疑者・民間人・非武装） */
+  private minimapContacts(): { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] {
+    const out: { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] = [];
+    for (const c of this.scoutIntel.all()) {
+      out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind === 'civilian' ? 'civilian' : c.armed ? 'threat' : 'unarmed' });
+    }
+    return out;
   }
 
   private onResize = (): void => {
@@ -911,6 +952,7 @@ class App {
     this.negotiationPhase.dispose();
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.hud.dispose();
+    this.optiwand?.dispose();
     this.flashbang.dispose();
     this.flashOverlay.dispose();
     this.squad.dispose();

@@ -61,6 +61,12 @@ export class WeaponSystem {
   private disposed = false;
   /** true の間は発射・リロードを無効化（フラッシュバン構え中など）。 */
   suppressFire = false;
+  /** 別の装備（オプティワンド等）が射撃・リロードを塞いでいるか。フラッシュバンの suppressFire とは独立 */
+  externalFireBlock = false;
+
+  private get fireBlocked(): boolean {
+    return this.suppressFire || this.externalFireBlock;
+  }
 
   constructor(
     private readonly player: PlayerController,
@@ -187,13 +193,13 @@ export class WeaponSystem {
           this.ammo.set(w.id, this.ammoInMagazine + take);
         }
       }
-    } else if (!this.suppressFire && this.input.wasPressed('reload') && this.ammoInMagazine < w.magazineSize && this.canReload(w)) {
+    } else if (!this.fireBlocked && this.input.wasPressed('reload') && this.ammoInMagazine < w.magazineSize && this.canReload(w)) {
       this.startReload(w);
     }
 
     // 連射
     this.cooldown = Math.max(0, this.cooldown - dt);
-    if (!this.suppressFire && this.input.isPointerLocked && this.input.isMouseDown(0) && this.reloadLeft <= 0 && this.cooldown <= 0) {
+    if (!this.fireBlocked && this.input.isPointerLocked && this.input.isMouseDown(0) && this.reloadLeft <= 0 && this.cooldown <= 0) {
       if (this.ammoInMagazine > 0) {
         this.fire();
         this.cooldown = 1 / w.fireRate;

@@ -15,6 +15,7 @@ export type Action =
   | 'slot1'
   | 'slot2'
   | 'slot3'
+  | 'slot4'
   | 'orderMenu'
   | 'toggleEntryMode'
   | 'quickOrder'
@@ -41,6 +42,8 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   slot1: ['Digit1'],
   slot2: ['Digit2'],
   slot3: ['Digit3'],
+  // オプティワンド（鏡/ファイバースコープ）の構え/解除
+  slot4: ['Digit4'],
   orderMenu: [],
   toggleEntryMode: ['Tab'],
   quickOrder: ['KeyZ'],

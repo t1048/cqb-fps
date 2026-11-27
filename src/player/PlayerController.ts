@@ -204,7 +204,8 @@ export class PlayerController {
     this.mode = this.crouching ? 'crouch' : this.input.isDown('walk') ? 'quiet' : 'run';
 
     const len = Math.hypot(fwd, right);
-    this.moving = len > 0;
+    // 外部要因で移動不可（ドア下ワンド展開中など）のときは歩行扱いにせず足音も出さない
+    this.moving = len > 0 && this.externalMoveScale > 0;
     if (this.moving) {
       const speed = cfg.speeds[this.mode] * this.speedMultiplier * this.externalMoveScale * this.woundSpeedMul;
       const sin = Math.sin(this.yaw);
