@@ -392,9 +392,14 @@ export function updateRoomCoverHold(ctx: SquadContext, ally: AllyUnit, dt: numbe
   ally.progress = t('壁カバー・投降勧告中', 'Cover / Calling Surrender');
 
   const dist = Math.hypot(hold.hide.x - ally.body.px, hold.hide.z - ally.body.pz);
+  const exposedAtCurrent = hasLineOfSight(
+    ctx.colliders,
+    { x: hold.threatPos.x, y: hold.threatPos.y + 1.35, z: hold.threatPos.z },
+    from,
+  );
   if (ally.settled) {
-    if (dist > 0.35) ally.settled = false;
-  } else if (dist <= 0.25) {
+    if (dist > 0.35 || (exposedAtCurrent && dist > 0.08)) ally.settled = false;
+  } else if (dist <= (exposedAtCurrent ? 0.08 : 0.25)) {
     ally.settled = true;
   }
   if (!ally.settled && isPointInRoom(hold.hide.x, hold.hide.z, floorY, room, 0.1)) {

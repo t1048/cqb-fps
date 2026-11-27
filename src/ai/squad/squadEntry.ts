@@ -770,6 +770,7 @@ export function updateStackingPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       ally.entryPlan?.rank ?? ally.roleIndex,
       ally.entryPlan?.side ?? -1,
     );
+    ally.body.faceToward(stackLook.x, stackLook.z, Math.PI * 2 * dt);
     ally.body.aimAt(stackLook.x, stackLook.y, stackLook.z, dt, Math.PI * 2 * dt);
   }
   // ミラー確認中の隊員はスタック位置で静止してドア下を確認する（終わるまで他の動作をしない）
@@ -806,6 +807,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       ally.entryPlan?.rank ?? ally.roleIndex,
       ally.entryPlan?.side ?? -1,
     );
+    body.faceToward(stackLook.x, stackLook.z, Math.PI * 2 * dt);
     body.aimAt(stackLook.x, stackLook.y, stackLook.z, dt, Math.PI * 2 * dt);
   }
 

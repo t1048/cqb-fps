@@ -41,8 +41,10 @@ export function layoutStackSlots(
     return lastResort;
   };
 
-  const left1 = pt(-off, 0.62);
-  const right1 = pt(off, 0.62);
+  const left1Cand = pt(-off, 0.5);
+  const left1 = ok(left1Cand) ? left1Cand : pt(-off, 0.62);
+  const right1Cand = pt(off, 0.5);
+  const right1 = ok(right1Cand) ? right1Cand : pt(off, 0.62);
   const leftOk = ok(left1);
   const rightOk = ok(right1);
   const center1 = pickFallback([pt(0, 0.9), pt(0, 0.65), pt(0, 1.25), pt(0, 0.45)], pt(0, 0.65));
@@ -58,17 +60,16 @@ export function layoutStackSlots(
   if (leftOk && rightOk) {
     chosen.push(left1, right1);
   } else if (leftOk) {
-    chosen.push(left1, pickFallback([pt(-off, 1.38), pt(-off * 0.4, 1.25), center1], left1));
+    chosen.push(left1, pickFallback([pt(-off - 0.88, 0.62), pt(-off, 1.38), pt(-off * 0.4, 1.25), center1], left1));
   } else if (rightOk) {
-    chosen.push(right1, pickFallback([pt(off, 1.38), pt(off * 0.4, 1.25), center1], right1));
+    chosen.push(right1, pickFallback([pt(off + 0.88, 0.62), pt(off, 1.38), pt(off * 0.4, 1.25), center1], right1));
   } else {
     chosen.push(center1, pickFallback([pt(0, 1.65), pt(0, 1.3), center1], center1));
   }
 
-  // stacking が歩くのをやめる距離は 0.34。その円の中にいても personalSpace 未満にならない間隔。
-  const arrive = 0.34;
-  const gap = personalSpace + arrive * 2;
-  const minSep = Math.max(personalSpace, arrive * 2);
+  // 固定位置フェーズの分離閾値は FIXED_OVERLAP (0.42m)。壁際にコンパクトに詰めつつ重なりを防ぐ間隔。
+  const gap = Math.max(personalSpace + 0.2, 0.88);
+  const minSep = Math.max(personalSpace, 0.68);
   const separated = (p: StackSlot, min: number): boolean =>
     chosen.every((c) => Math.hypot(p.x - c.x, p.z - c.z) >= min - 1e-3);
 
@@ -87,14 +88,25 @@ export function layoutStackSlots(
     return [0, -1, 1];
   };
 
-  const maxStep = Math.ceil((n * gap) / 0.3) + 4;
+  const maxStep = Math.ceil((n * gap) / 0.25) + 4;
   while (chosen.length < n) {
     const cands: StackSlot[] = [];
     for (const sign of sideOrder(chosen.length)) {
+      if (sign !== 0) {
+        // 壁沿いカバー優先（ドア射線外）。back は 1 列目 (0.50/0.62) より大きくして rank=0 先頭を保証
+        for (let step = 1; step <= 4; step++) {
+          cands.push(pt(sign * (off + step * 0.45), 0.64 + step * 0.08));
+        }
+      }
       for (let step = 1; step <= maxStep; step++) {
-        const back = 0.62 + step * 0.3;
+        const back = 0.62 + step * 0.25;
         cands.push(pt(sign * off, back));
-        if (sign !== 0) cands.push(pt(sign * off * 0.5, back));
+      }
+      if (sign !== 0) {
+        for (let step = 1; step <= maxStep; step++) {
+          const back = 0.62 + step * 0.25;
+          cands.push(pt(sign * off * 0.5, back));
+        }
       }
     }
     const pick = (min: number, mustStand: boolean): StackSlot | null => {

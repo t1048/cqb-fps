@@ -507,4 +507,31 @@ describe('SquadSystem CQB entry & motion smoothness (§6)', () => {
       h.cleanup();
     }
   });
+
+  it('when stacked (4 members), all bodies face toward the doorway (dot > 0.8)', () => {
+    const h = createTwoRoomHarness();
+    try {
+      h.issueDoorOrder('stack');
+      for (let i = 0; i < 160; i++) {
+        h.tick(0.05);
+        if (h.internal.allies.every((a) => a.phase === 'stacking' && a.settled)) break;
+      }
+      expect(h.internal.allies.every((a) => a.phase === 'stacking' && a.settled)).toBe(true);
+      // Let body rotation settle cleanly at the stack position
+      h.step(1.0, 0.05);
+
+      const portal = h.internal.allies[0]!.entryPortal!;
+      for (const a of h.internal.allies) {
+        const fx = -Math.sin(a.body.yawRad);
+        const fz = -Math.cos(a.body.yawRad);
+        const dx = portal.centerX - a.body.px;
+        const dz = portal.centerZ - a.body.pz;
+        const d = Math.hypot(dx, dz) || 1;
+        const dot = (fx * dx + fz * dz) / d;
+        expect(dot).toBeGreaterThan(0.8);
+      }
+    } finally {
+      h.cleanup();
+    }
+  });
 });

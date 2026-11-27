@@ -614,7 +614,7 @@ export class SwatHunter implements HitTarget {
     this.body.setReadyPose(low ? 'low' : 'high');
   }
 
-  /** スタック待機中のセクター警戒方向を向く（3 名以上なら最後尾が後方警戒） */
+  /** スタック待機中のセクター警戒方向を向く（全員ドア開口部を警戒） */
   private faceStackSector(dt: number, door: Door | null): void {
     const group = this.entryGroup;
     if (group?.cqb) {

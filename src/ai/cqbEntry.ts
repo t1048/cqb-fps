@@ -456,26 +456,21 @@ export function shouldUseLowReady(
 /**
  * スタック・ドア準備中のセクター視線点を算出する。
  * - 先頭 (rank === 0): ドア開口部中央を注視
- * - 最後尾 (groupSize >= 3 かつ order === groupSize - 1): 後方警戒（リアセキュリティ）
- * - 中間: ドア開口の自サイド外縁〜側方をカバー
+ * - 後続 (rank >= 1、最後尾含む): ドア開口の反対側エッジ〜斜め前方をカバー（ドアに背を向けない）
  */
 export function computeStackLookPoint(
   portal: CqbPortal,
-  order: number,
-  groupSize: number,
+  _order: number,
+  _groupSize: number,
   rank: number,
   side: -1 | 1,
   lookHeight = 1.38,
 ): Vec3 {
   const y = portal.center.y + lookHeight;
-  if (groupSize >= 3 && order === groupSize - 1) {
-    // 最後尾は廊下後方・背後を警戒
-    return fromPortalFrame(portal, side * 0.4, -4.5, y);
-  }
   if (rank === 0) {
     return fromPortalFrame(portal, 0, 0.25, y);
   }
-  // 中間員はドア開口の反対側エッジ〜斜め前方をカバー
+  // 後続員はドア開口の反対側エッジ〜斜め前方をカバー
   return fromPortalFrame(portal, -side * Math.max(0.55, portal.width * 0.45), 0.15, y);
 }
 

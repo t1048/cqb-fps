@@ -134,10 +134,15 @@ describe('shouldUseLowReady', () => {
 });
 
 describe('computeStackLookPoint', () => {
-  it('has rear-most member (order=3 of groupSize=4) look behind the portal (v < -2)', () => {
-    const look = computeStackLookPoint(portal, 3, 4, 1, 1);
-    const frame = toPortalFrame(portal, look);
-    expect(frame.v).toBeLessThan(-2);
+  it('has rear-most member (order=3 of groupSize=4, order=2 of groupSize=3) look toward doorway (v > 0)', () => {
+    for (const [order, groupSize] of [
+      [3, 4],
+      [2, 3],
+    ] as const) {
+      const look = computeStackLookPoint(portal, order, groupSize, 1, 1);
+      const frame = toPortalFrame(portal, look);
+      expect(frame.v).toBeGreaterThan(0);
+    }
   });
 
   it('has point man (rank=0, order=0) look at the doorway (v >= 0)', () => {

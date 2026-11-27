@@ -191,6 +191,22 @@ describe('cqbEntry.planEntry', () => {
     expect(ranks.map((r) => r.rank).sort()).toEqual([0, 1, 2]);
     expect(ranks.map((r) => r.order).sort()).toEqual([0, 1, 2]);
   });
+
+  it('3-4 member stack hugs wall compactly (back < 1.5m) with >= minSep spacing', () => {
+    for (const count of [3, 4]) {
+      const slots = layoutStackSlots(SP, count, 0.48, 0.68, outsideStandable);
+      expect(slots).toHaveLength(count);
+      for (const s of slots) {
+        const frame = toPortalFrame(portal, s);
+        expect(-frame.v).toBeLessThan(1.5);
+      }
+      for (let i = 0; i < slots.length; i++) {
+        for (let j = i + 1; j < slots.length; j++) {
+          expect(Math.hypot(slots[i]!.x - slots[j]!.x, slots[i]!.z - slots[j]!.z)).toBeGreaterThanOrEqual(0.68 - 1e-3);
+        }
+      }
+    }
+  });
 });
 
 describe('HumanoidBody smoothing', () => {
