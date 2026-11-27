@@ -8,6 +8,10 @@ const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
 const DEFAULT_DOOR_WIDTH = 1.2;
 const MINIMAP_SIZE = 180;
+/** 左上ミニマップ（非拡大時）に表示する自機周辺の範囲（m、一辺） */
+const LOCAL_VIEW_SPAN_M = 20;
+/** 自機周辺表示用の静的レイヤ（マップ全体を拡大描画）の一辺上限（デバイス px） */
+const LOCAL_STATIC_MAX_PX = 4096;
 /** 部屋 floorY を同一階とみなす許容差(m)（ブリーフィングの旧タブ生成と同値） */
 const FLOOR_GROUP_TOLERANCE = 1.5;
 /** 階切替のヒステリシス幅(m)。隣接階の中点を この半分だけ越えるまで現在階を保持する */
@@ -107,6 +111,15 @@ export interface FloorPlanContact {
   kind: 'threat' | 'civilian' | 'unarmed';
 }
 
+/** プレイヤー・隊員の視界やオプティワンド等で確認した敵（赤点で表示、時間で消える） */
+export interface FloorPlanEnemy {
+  x: number;
+  y: number;
+  z: number;
+  /** 0〜1。見失ってから時間が経つほど薄くなる（省略時 1） */
+  alpha?: number;
+}
+
 /** 人質処刑の脅迫中に人質の位置で脈打つ警告（progress 0〜1 でカウントダウン） */
 export interface FloorPlanPulse {
   x: number;
@@ -139,6 +152,8 @@ export interface DrawFloorPlanOptions {
   contacts?: readonly FloorPlanContact[];
   /** 警告パルス（人質処刑の脅迫）。time は点滅用の秒 */
   pulses?: readonly FloorPlanPulse[];
+  /** 現在視界内の敵（赤点） */
+  enemies?: readonly FloorPlanEnemy[];
   time?: number;
   /** ドア ID → リアルタイム開閉状態（省略時は静的定義から closed/locked を描画） */
   doors?: ReadonlyMap<string, FloorPlanDoorState>;
@@ -229,6 +244,31 @@ function computePlanTransform(map: MapData, cw: number, ch: number, pad: number)
     scale,
     toX: (wx: number): number => offsetX + (wx - bounds.minX) * scale,
     toY: (wz: number): number => offsetY + (wz - bounds.minZ) * scale,
+  };
+}
+
+/** 自機中心のローカル表示用の座標変換（scale 固定、(cx, cz) をビュー中央へ置く）。 */
+function computeCenteredTransform(cw: number, ch: number, scale: number, cx: number, cz: number): PlanTransform {
+  return {
+    cw,
+    ch,
+    scale,
+    toX: (wx: number): number => cw / 2 + (wx - cx) * scale,
+    toY: (wz: number): number => ch / 2 + (wz - cz) * scale,
+  };
+}
+
+/** マップ全体を指定 scale で描くための静的レイヤ用座標変換（左上に pad の余白）。 */
+function computeFullScaleTransform(map: MapData, scale: number, pad: number): PlanTransform {
+  const bounds = computeMapBounds(map);
+  const cw = Math.ceil(Math.max(0.1, bounds.maxX - bounds.minX) * scale + pad * 2);
+  const ch = Math.ceil(Math.max(0.1, bounds.maxZ - bounds.minZ) * scale + pad * 2);
+  return {
+    cw,
+    ch,
+    scale,
+    toX: (wx: number): number => pad + (wx - bounds.minX) * scale,
+    toY: (wz: number): number => pad + (wz - bounds.minZ) * scale,
   };
 }
 
@@ -655,6 +695,24 @@ function drawDynamicFloorPlan(
     }
   }
 
+  // 視界内の敵（赤点）
+  if (options.enemies) {
+    const r = compact ? 3.4 : 4.5;
+    for (const e of options.enemies) {
+      if (options.floorY !== undefined && Math.abs(e.y - options.floorY) > 1.4) continue;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, e.alpha ?? 1));
+      ctx.fillStyle = '#ff3b3b';
+      ctx.strokeStyle = '#09121a';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(toX(e.x), toY(e.z), r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // 隊員マーカー
   if (options.allies) {
     for (const ally of options.allies) {
@@ -665,17 +723,26 @@ function drawDynamicFloorPlan(
       const fzDir = -Math.cos(ally.yawRad);
       const heading = Math.atan2(fzDir, fxDir);
       ctx.save();
-      ctx.translate(ax, ay);
-      ctx.rotate(heading);
-      ctx.fillStyle = ally.down ? '#6e7680' : '#f2c14e';
+      if (!ally.down) {
+        // 隊員の視界コーン（緑）
+        const aConeLen = Math.max(10, 1.8 * scale);
+        const aConeHalf = 32 * DEG2RAD;
+        const aGrad = ctx.createRadialGradient(ax, ay, 1.5, ax, ay, aConeLen);
+        aGrad.addColorStop(0, 'rgba(92, 220, 120, 0.36)');
+        aGrad.addColorStop(1, 'rgba(92, 220, 120, 0.02)');
+        ctx.fillStyle = aGrad;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.arc(ax, ay, aConeLen, heading - aConeHalf, heading + aConeHalf);
+        ctx.closePath();
+        ctx.fill();
+      }
+      // 隊員マーカー（緑点、ダウン時は灰色）
+      ctx.fillStyle = ally.down ? '#6e7680' : '#4fdc78';
       ctx.strokeStyle = '#09121a';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.moveTo(5.5, 0);
-      ctx.lineTo(-3.5, -3.5);
-      ctx.lineTo(-1.8, 0);
-      ctx.lineTo(-3.5, 3.5);
-      ctx.closePath();
+      ctx.arc(ax, ay, compact ? 3.4 : 4.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
@@ -685,7 +752,7 @@ function drawDynamicFloorPlan(
       ctx.font = compact ? 'bold 8px sans-serif' : 'bold 11px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillStyle = ally.down ? '#8a94a0' : '#f8dc88';
+      ctx.fillStyle = ally.down ? '#8a94a0' : '#9cf0b4';
       ctx.fillText(ally.name.slice(0, 1), ax, ay + 5);
       ctx.restore();
     }
@@ -761,8 +828,8 @@ export function drawFloorPlan(
 
 /**
  * 画面左上のリアルタイム戦術ミニマップ。
- * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
- * プレイ中は M キーで「左上ミニマップ（名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
+ * プレイヤー位置・向き、ドアの開閉/施錠状態、隊員（緑点＋視界）、プレイヤー・隊員・オプティワンドで確認した敵（赤点、一定時間で消える）を表示する。
+ * プレイ中は M キーで「左上ミニマップ（自機周辺のみ・名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
  */
 /** ミニマップの再描画間隔（秒）。約 15 Hz */
 const REDRAW_INTERVAL = 1 / 15;
@@ -775,6 +842,7 @@ export class Minimap {
   private staticCtx: CanvasRenderingContext2D | null = null;
   private staticKey = '';
   private staticXf: PlanTransform | null = null;
+  private staticDpr = 1;
   private readonly doorStates = new Map<string, FloorPlanDoorState>();
   private readonly playerState: FloorPlanPlayerState = { x: 0, z: 0, yawRad: 0 };
   private currentDpr = 1;
@@ -801,6 +869,7 @@ export class Minimap {
     private readonly getWaypoints?: () => readonly FloorPlanWaypoint[],
     private readonly getContacts?: () => readonly FloorPlanContact[],
     private readonly getPulses?: () => readonly FloorPlanPulse[],
+    private readonly getEnemies?: () => readonly FloorPlanEnemy[],
   ) {
     this.floorLevels = collectFloorLevels(map);
 
@@ -901,23 +970,38 @@ export class Minimap {
     this.render();
   }
 
+  /** 左上ミニマップの縮尺（px/m）。自機周辺 LOCAL_VIEW_SPAN_M 四方を表示する */
+  private localScale(): number {
+    return Math.min(this.viewW, this.viewH) / LOCAL_VIEW_SPAN_M;
+  }
+
+  /**
+   * 静的レイヤ（間取り）をオフスクリーンに描いてキャッシュする。
+   * 拡大時はビューに全体をフィット、非拡大時はマップ全体を固定縮尺で描き、描画時に自機周辺を切り出す。
+   */
   private ensureStaticLayer(floorY: number): PlanTransform {
     const pad = this.expanded ? 24 : 10;
     const key = `${floorY}|${this.viewW}|${this.viewH}|${this.expanded ? 1 : 0}|${getLocale()}`;
     if (key === this.staticKey && this.staticXf) return this.staticXf;
 
-    const xf = computePlanTransform(this.map, this.viewW, this.viewH, pad);
+    const xf = this.expanded
+      ? computePlanTransform(this.map, this.viewW, this.viewH, pad)
+      : computeFullScaleTransform(this.map, this.localScale(), pad);
     this.staticXf = xf;
     this.staticCanvas ??= document.createElement('canvas');
     this.staticCtx ??= this.staticCanvas.getContext('2d');
-    this.staticCanvas.width = this.canvas.width;
-    this.staticCanvas.height = this.canvas.height;
+    const sdpr = this.expanded
+      ? this.currentDpr
+      : Math.min(this.currentDpr, LOCAL_STATIC_MAX_PX / Math.max(xf.cw, xf.ch));
+    this.staticDpr = sdpr;
+    this.staticCanvas.width = Math.max(1, Math.round(xf.cw * sdpr));
+    this.staticCanvas.height = Math.max(1, Math.round(xf.ch * sdpr));
     if (this.staticCtx) {
       this.staticCtx.save();
-      this.staticCtx.setTransform(this.currentDpr, 0, 0, this.currentDpr, 0, 0);
+      this.staticCtx.setTransform(sdpr, 0, 0, sdpr, 0, 0);
       drawStaticFloorPlan(this.staticCtx, this.map, xf, {
-        width: this.viewW,
-        height: this.viewH,
+        width: xf.cw,
+        height: xf.ch,
         padding: pad,
         showRoomLabels: this.expanded,
         showSpawn: false,
@@ -953,17 +1037,40 @@ export class Minimap {
     }
     const floor = resolveActiveFloor(this.player.position.y, this.floorLevels, this.activeFloorY);
     this.activeFloorY = floor.floorY;
-    const xf = this.ensureStaticLayer(floor.floorY);
+    const staticXf = this.ensureStaticLayer(floor.floorY);
     const pad = this.expanded ? 24 : 10;
     this.playerState.x = this.player.position.x;
     this.playerState.z = this.player.position.z;
     this.playerState.yawRad = this.player.yawRad;
+    // 非拡大時は自機を中心に据えた変換で動的レイヤを描く
+    const xf = this.expanded
+      ? staticXf
+      : computeCenteredTransform(this.viewW, this.viewH, this.localScale(), this.playerState.x, this.playerState.z);
 
     ctx.save();
     ctx.setTransform(this.currentDpr, 0, 0, this.currentDpr, 0, 0);
     if (this.staticCanvas && this.staticCtx && typeof ctx.drawImage === 'function') {
       ctx.clearRect(0, 0, this.viewW, this.viewH);
-      ctx.drawImage(this.staticCanvas, 0, 0, this.viewW, this.viewH);
+      if (this.expanded) {
+        ctx.drawImage(this.staticCanvas, 0, 0, this.viewW, this.viewH);
+      } else {
+        // 静的レイヤから自機周辺のビュー分だけを切り出す（範囲外はクリップして描画位置を補正）
+        const sd = this.staticDpr;
+        let sx = (staticXf.toX(this.playerState.x) - this.viewW / 2) * sd;
+        let sy = (staticXf.toY(this.playerState.z) - this.viewH / 2) * sd;
+        let sw = this.viewW * sd;
+        let sh = this.viewH * sd;
+        let dx = 0;
+        let dy = 0;
+        const k = 1 / sd;
+        if (sx < 0) { dx = -sx * k; sw += sx; sx = 0; }
+        if (sy < 0) { dy = -sy * k; sh += sy; sy = 0; }
+        sw = Math.min(sw, this.staticCanvas.width - sx);
+        sh = Math.min(sh, this.staticCanvas.height - sy);
+        if (sw > 0 && sh > 0) {
+          ctx.drawImage(this.staticCanvas, sx, sy, sw, sh, dx, dy, sw * k, sh * k);
+        }
+      }
     } else {
       drawStaticFloorPlan(ctx, this.map, xf, {
         width: this.viewW,
@@ -988,6 +1095,7 @@ export class Minimap {
       waypoints: this.getWaypoints?.(),
       contacts: this.getContacts?.(),
       pulses: this.getPulses?.(),
+      enemies: this.getEnemies?.(),
       time: performance.now() / 1000,
       player: this.playerState,
     });
