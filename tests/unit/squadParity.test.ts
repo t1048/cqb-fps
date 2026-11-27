@@ -300,6 +300,7 @@ function makeStubInput(): InputManager {
     isOrderMenuOpen: false,
     onOrderMenu: undefined,
     wasPressed: () => false,
+    wasMousePressed: () => false,
     isDown: () => false,
   } as unknown as InputManager;
 }

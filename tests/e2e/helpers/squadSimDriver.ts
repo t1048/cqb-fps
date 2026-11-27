@@ -366,6 +366,7 @@ export function createSquadHeadlessInput(): SquadHeadlessInput {
     isOrderMenuOpen: false,
     suppressSquadShortcuts: false,
     onOrderMenu: undefined as ((event: OrderMenuEvent, value: number) => void) | undefined,
+    wasMousePressed: () => false,
     wasPressed(k: string) {
       return pressed.has(k);
     },
