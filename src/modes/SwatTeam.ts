@@ -199,9 +199,11 @@ export class SwatTeam implements SwatTeamHost {
     const ctx: CombatContext = {
       player: d.player,
       colliders: d.colliders,
-      playerDamage: (dmg, from, shooter) => {
-        const hp = d.player.takeDamage(dmg);
-        d.bus.emit('playerHit', { shooter, damage: dmg, from, hp });
+      playerDamage: (dmg, from, shooter, hitY) => {
+        const before = d.player.hp;
+        const hp = d.player.takeDamage(dmg, hitY);
+        const dealt = before !== undefined && before > hp ? before - hp : dmg;
+        d.bus.emit('playerHit', { shooter, damage: dealt, from, hp, head: d.player.lastHitHead === true });
       },
       doors: d.doors,
       bounds: d.bounds,

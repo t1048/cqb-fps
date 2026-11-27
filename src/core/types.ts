@@ -948,10 +948,28 @@ export interface PlayerConfig {
     interval: Record<MoveMode, number>;
     radius: Record<MoveMode, number>;
   };
-  /** 負傷モデル（SWAT モードのみ有効） */
+  /** 負傷モデル（速度低下・照準の乱れは SWAT モードのみ。頭部倍率は両モード共通） */
   wounds: WoundsConfig;
+  /** 防弾チョッキ（両モード共通の装甲モデル） */
+  armor: ArmorConfig;
   /** オプティワンド（鏡/ファイバースコープ型カメラ） */
   optiwand: OptiwandConfig;
+}
+
+/**
+ * 防弾チョッキ（player.json の armor）。耐久値は「肩代わりできる総ダメージ量」で、
+ * 有効 HP ≒ maxHp + 耐久値。肩代わり率は耐久残量に比例して absorb → minAbsorb へ劣化する。
+ * 頭部は対象外。
+ */
+export interface ArmorConfig {
+  /** 新品時の肩代わり率 (0..1) */
+  absorb: number;
+  /** 耐久がほぼ尽きた時の肩代わり率 (0..absorb) */
+  minAbsorb: number;
+  /** SWAT モードでプレイヤーが標準装備する耐久値 */
+  swatIssue: number;
+  /** 容疑者モードで交渉（人質交換）により得る耐久値 */
+  suspectVest: number;
 }
 
 /** 負傷モデル（player.json の wounds）。HP 比率・倍率・度は無次元/度。 */

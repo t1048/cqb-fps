@@ -22,7 +22,8 @@ export interface SuspectNegotiationContext {
   /** 交渉決裂: 準備時間を短縮して即突入 */
   breakdown(): void;
   prepSec(): number;
-  giveArmor(points: number): void;
+  /** 防弾チョッキを渡す（耐久値は player.json の armor.suspectVest） */
+  giveArmor(): void;
   hasArmor(): boolean;
   giveMagazines(n: number): void;
   /** 突入班を 1 名下げさせる。成功で true */
@@ -216,7 +217,7 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       run: () =>
         trade(
           t('防弾チョッキ', 'Body Armor'),
-          () => ctx.giveArmor(70),
+          () => ctx.giveArmor(),
           +8,
           t(
             '交渉人「……いいだろう。玄関前に置く。人質を先に出せ」',

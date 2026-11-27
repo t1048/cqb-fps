@@ -25,6 +25,12 @@
     "spreadAddDeg": [1.2, 2.6],
     "swayDeg": [0.12, 0.3]
   },
+  "armor": {
+    "absorb": 0.6,
+    "minAbsorb": 0.35,
+    "swatIssue": 50,
+    "suspectVest": 50
+  },
   "optiwand": {
     "deploySec": 0.4,
     "reach": 0.6,

@@ -104,14 +104,58 @@ describe('プレイヤー: 頭部被弾倍率と負傷', () => {
     expect(events.map((e) => e.level)).toEqual([1, 2]);
   });
 
-  it('woundsEnabled=false（容疑者モード）では倍率も負傷効果も無い', () => {
+  it('woundsEnabled=false（容疑者モード）でも頭部倍率は掛かるが、負傷効果は無い', () => {
     const { p, events } = makePlayer(false);
     p.takeDamage(14, p.getEyePosition().y);
-    expect(p.hp).toBeCloseTo(86);
-    p.takeDamage(60, 0.9);
+    expect(p.lastHitHead).toBe(true);
+    expect(p.hp).toBeCloseTo(100 - 14 * playerCfg.wounds.headMultiplier);
+    p.takeDamage(30, 0.9);
     expect(p.woundLevel).toBe(0);
     expect(p.woundSpeedMul).toBe(1);
     expect(events).toHaveLength(0);
+  });
+});
+
+describe('プレイヤー: 防弾チョッキ（両モード共通モデル）', () => {
+  /** 胴体へ一定ダメージを撃ち込み続け、倒れるまでの総ダメージ（有効 HP）を求める */
+  function effectiveHp(armor: number, woundsEnabled: boolean, shot = 13): number {
+    const { p } = makePlayer(woundsEnabled);
+    p.equipArmor(armor);
+    let total = 0;
+    while (p.alive && total < 10000) {
+      p.takeDamage(shot, 0.9);
+      total += shot;
+    }
+    return total;
+  }
+
+  it('有効 HP ≒ maxHp + 耐久値（肩代わり総量は耐久値ちょうど）', () => {
+    const a = playerCfg.armor.swatIssue;
+    const ehp = effectiveHp(a, true, 1);
+    expect(ehp).toBeGreaterThanOrEqual(playerCfg.maxHp + a - 1);
+    expect(ehp).toBeLessThanOrEqual(playerCfg.maxHp + a + 1);
+  });
+
+  it('SWAT 標準装備と容疑者の交渉チョッキで有効 HP 差が 20% 以内', () => {
+    const swat = effectiveHp(playerCfg.armor.swatIssue, true);
+    const suspect = effectiveHp(playerCfg.armor.suspectVest, false);
+    expect(Math.abs(swat - suspect) / Math.max(swat, suspect)).toBeLessThanOrEqual(0.2);
+  });
+
+  it('肩代わり率は耐久残量に応じて absorb → minAbsorb へ劣化する', () => {
+    const { p } = makePlayer();
+    p.equipArmor(50);
+    expect(p.armorAbsorb).toBeCloseTo(playerCfg.armor.absorb);
+    p.takeDamage(40, 0.9);
+    expect(p.armorAbsorb).toBeLessThan(playerCfg.armor.absorb);
+    expect(p.armorAbsorb).toBeGreaterThanOrEqual(playerCfg.armor.minAbsorb);
+  });
+
+  it('equipArmor は既存より低い耐久では上書きしない', () => {
+    const { p } = makePlayer();
+    p.equipArmor(50);
+    p.equipArmor(20);
+    expect(p.armor).toBe(50);
   });
 });
 
