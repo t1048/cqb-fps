@@ -4,6 +4,7 @@ import type { PerceptionConfig, Vec3 } from '../core/types';
 import { hasLineOfSight } from '../weapons/Flashbang';
 import type { Collider } from '../world/WorldBuilder';
 import type { AllyTarget } from './EngageBehavior';
+import { inPreAimCone } from './Ambush';
 import type { Suspect } from './Suspect';
 
 /** 知覚が参照するプレイヤー情報（リーン込みの目の位置・足元位置・しゃがみ） */
@@ -197,7 +198,17 @@ export class Perception {
         this.seen.set(s.id, Math.max(0, t - dt));
         continue;
       }
-      const need = s.profile.reactionTime * (alert ? v.alertReactionMultiplier : 1);
+      let need = s.profile.reactionTime * (alert ? v.alertReactionMultiplier : 1);
+      if (s.isAmbushReady) {
+        // 待ち伏せ中（pre-aim）: 入口方向の円錐内に入った入室者へは極短の反応時間で発砲に移る
+        const cone = s.ambushCone;
+        if (
+          bestDist <= cone.maxDist &&
+          inPreAimCone({ x: fx, z: fz }, { x: sx, z: sz }, { x: spottedX, z: spottedZ }, cone.coneDeg)
+        ) {
+          need = Math.min(need, s.ambushReactionSec);
+        }
+      }
       const nt = t + dt;
       this.seen.set(s.id, nt);
       if (nt >= need) {

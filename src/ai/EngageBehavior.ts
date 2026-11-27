@@ -881,6 +881,11 @@ export class EngageBehavior {
   private burstLimit: number | null = null;
   private spot: CoverSpot | null = null;
   private peekTarget: XZ | null = null;
+  /** 待ち伏せ（pre-aim）: 次の enter() で遮蔽へ退避せず即射撃する発数（0=無効） */
+  private preAimShots = 0;
+  private preAimSpreadMul = 1;
+  /** 初弾バーストの残り発数（この間は拡散を preAimSpreadMul 倍にする） */
+  private spreadBurstLeft = 0;
   private readonly ray = new THREE.Ray();
   private readonly tmpBox = new THREE.Box3();
   private readonly tmpHit = new THREE.Vector3();
@@ -913,14 +918,28 @@ export class EngageBehavior {
     return this.ammo;
   }
 
+  /**
+   * 待ち伏せ用: 次の enter() で、視認・射程内なら遮蔽へ退避せずその場で shots 発まず撃ち込み、
+   * その間の拡散角を spreadMul 倍にする（ファタルファネルの初弾）。enter() で一度だけ消費される。
+   */
+  armPreAim(shots: number, spreadMul: number): void {
+    this.preAimShots = Math.max(1, Math.floor(shots));
+    this.preAimSpreadMul = spreadMul;
+  }
+
   /** ENGAGE に入った。弾切れなら遮蔽でリロード、そうでなければ遮蔽へ退避→ピーク。 */
   enter(known: Vec3 | null): void {
+    const preAimShots = this.preAimShots;
+    const preAimMul = this.preAimSpreadMul;
+    this.preAimShots = 0;
+    this.preAimSpreadMul = 1;
+    this.spreadBurstLeft = 0;
     this.lostSightSec = 0;
     this.repositionGoal = null;
     this.repositionTimer = 0;
     this.burstLimit = null;
     this.nav?.reset();
-    if (this.opts.immediateFireOnEnter && known && this.ammo > 0 && this.inRange(known)) {
+    if ((this.opts.immediateFireOnEnter || preAimShots > 0) && known && this.ammo > 0 && this.inRange(known)) {
       const selfPos = { x: this.body.px, z: this.body.pz };
       const chestY = this.body.footY + STAND_CHEST;
       const visible =
@@ -936,8 +955,12 @@ export class EngageBehavior {
         this.body.setPose('stand');
         this.body.faceToward(known.x, known.z);
         this.phase = 'peek';
-        const want = Math.max(1, this.opts.immediateFireShots ?? 3);
-        this.burstLimit = Math.min(want, this.p.shotsPerPeek);
+        const want = Math.max(1, preAimShots > 0 ? preAimShots : (this.opts.immediateFireShots ?? 3));
+        this.burstLimit = Math.min(want, Math.max(this.p.shotsPerPeek, preAimShots));
+        if (preAimShots > 0) {
+          this.spreadBurstLeft = this.burstLimit;
+          this.preAimSpreadMul = preAimMul;
+        }
         this.timer = Math.min(this.p.peekSecMax, this.p.fireInterval * (this.burstLimit + 1));
         this.shots = 0;
         this.fireCd = 0;
@@ -1201,7 +1224,9 @@ export class EngageBehavior {
     if (this.shotDir.lengthSq() < 1e-6) return;
     this.shotDir.normalize();
 
-    const spreadRad = this.p.baseSpreadDeg * (Math.PI / 180);
+    const spreadMul = this.spreadBurstLeft > 0 ? this.preAimSpreadMul : 1;
+    if (this.spreadBurstLeft > 0) this.spreadBurstLeft--;
+    const spreadRad = this.p.baseSpreadDeg * spreadMul * (Math.PI / 180);
     const angle = Math.acos(1 - Math.random() * (1 - Math.cos(spreadRad)));
     const around = Math.random() * Math.PI * 2;
     this.localRay.set(
