@@ -8,25 +8,11 @@
       "moraleDamage": 0, "noiseRadius": 40
     },
     {
-      "id": "smg", "name": "SMG", "category": "primary", "slot": 1,
-      "damage": 22, "fireRate": 14, "magazineSize": 30, "reloadTime": 1.9, "range": 35,
-      "hipSpread": 0.6, "adsSpread": 0.6, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 2.0,
-      "recoilPitch": 0.6, "recoilYawRange": 0.4, "recoilRecovery": 7,
-      "moraleDamage": 0, "noiseRadius": 30
-    },
-    {
       "id": "pepperball", "name": "ペッパーボール銃", "category": "nonlethal", "slot": 2,
       "damage": 0, "fireRate": 3, "magazineSize": 12, "reloadTime": 2.5, "range": 25,
       "hipSpread": 0.5, "adsSpread": 0.5, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 2.0,
       "recoilPitch": 0.5, "recoilYawRange": 0.2, "recoilRecovery": 6,
       "moraleDamage": 30, "noiseRadius": 15
-    },
-    {
-      "id": "taser", "name": "テーザー", "category": "nonlethal", "slot": 2,
-      "damage": 0, "fireRate": 0.5, "magazineSize": 1, "reloadTime": 3, "range": 8,
-      "hipSpread": 0.5, "adsSpread": 0.5, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 1.5,
-      "recoilPitch": 0.2, "recoilYawRange": 0.1, "recoilRecovery": 6,
-      "moraleDamage": 65, "noiseRadius": 6
     },
     {
       "id": "machine_pistol", "name": "改造フルオート拳銃", "category": "primary", "slot": 1, "faction": "suspect",

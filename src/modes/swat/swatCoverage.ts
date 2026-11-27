@@ -58,7 +58,7 @@ export class SwatCoverage {
   private readonly cellPtTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private scanBudget = 2;
   private scanCursor = 0;
-  private droneCd = 0;
+  private rescanCd = 0;
   private readonly ray = new THREE.Ray();
   private readonly box = new THREE.Box3();
   private readonly hit = new THREE.Vector3();
@@ -66,7 +66,7 @@ export class SwatCoverage {
   constructor(private readonly host: SwatCoverageHost) {}
 
   tickTimers(dt: number): void {
-    this.droneCd = Math.max(0, this.droneCd - dt);
+    this.rescanCd = Math.max(0, this.rescanCd - dt);
   }
 
   private stallSig = -1;
@@ -277,7 +277,7 @@ export class SwatCoverage {
 
   /**
    * 次に向かう未クリアのマス。最寄りを優先し、他の隊員の目標とは離れた場所を選んで手分けする。
-   * 全マスをクリアしたら再捜索（ドローンの熱源探知で大まかな位置を共有）。
+   * 全マスをクリアしたら再捜索（大まかな位置を共有して再捜索）。
    */
   pickCell(h: SwatHunter): CoverCell | null {
     let cell = this.nearestCell(h);
@@ -287,8 +287,8 @@ export class SwatCoverage {
     for (let i = 0; i < allCells.length; i++) allCells[i]!.seen = false;
     this.cleared.clear();
     if (allCells.every((c) => c.bad)) for (let i = 0; i < allCells.length; i++) allCells[i]!.bad = false;
-    if (this.droneCd <= 0) {
-      this.droneCd = 30;
+    if (this.rescanCd <= 0) {
+      this.rescanCd = 30;
       const p = this.host.d.player.position;
       const a = Math.random() * Math.PI * 2;
       const rr = Math.random() * 4;
@@ -348,7 +348,7 @@ export class SwatCoverage {
   private pursuitSec = 0;
 
   /**
-   * 追撃監視: 交戦も目撃も 15 秒以上途絶えたら、掃討役を（ドローン熱源の大まかな推定で）
+   * 追撃監視: 交戦も目撃も 15 秒以上途絶えたら、掃討役を（大まかな位置の推定で）
    * プレイヤー付近へ向かわせる。奥へ逃げても SWAT が止まらないようにする。
    */
   private watchPursuit(dt: number): void {
@@ -382,7 +382,7 @@ export class SwatCoverage {
   /**
    * 停滞監視（最後の安全網）。掃討の進捗（確認済みマス・クリア部屋・解錠ドア数）が止まり、誰も交戦/ブリーチ中でないなら
    * 段階的に強めていく: ①目標の引き直し（再計画） ②未確認マスへの最寄り施錠ドアをブリーチ
-   * ③ドローン熱源探知 ④プレイヤー位置へ直接押し込み。進捗が出たら段階を戻す。
+   * ③大まかな位置への再捜索 ④プレイヤー位置へ直接押し込み。進捗が出たら段階を戻す。
    */
   private watchStall(dt: number): void {
     this.watchPursuit(dt);

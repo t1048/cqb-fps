@@ -57,10 +57,6 @@ export function reinforceLine(cell: string): RadioLine {
   return pickRadio(REINFORCE, { cell });
 }
 
-export function droneLine(roomName: string): RadioLine {
-  return pickRadio(DRONE, { room: roomName, roomEn: voiceRoom(roomName) });
-}
-
 export function dugInGasLine(roomName: string): RadioLine {
   return pickRadio(DUG_IN_GAS, { room: roomName, roomEn: voiceRoom(roomName) });
 }
@@ -525,15 +521,9 @@ const REINFORCE: readonly RadioLine[] = [
   ['{cell}班が増援だ。突入する。', '{cell} reinforcements, moving in.'],
 ];
 
-const DRONE: readonly RadioLine[] = [
-  ['ドローンが熱源を探知。{room}付近だ。包囲しろ。', 'Drone has a heat signature near {roomEn}. Box it in.'],
-  ['熱源反応、{room}。そこを囲め。', 'Heat near {roomEn}. Surround the area.'],
-  ['ドローン探知。{room}に人がいる。', 'Drone contact. Someone in {roomEn}.'],
-];
-
-const DRONE_RESCAN: readonly RadioLine[] = [
-  ['全区を見たが容疑者はいない。熱源がある。再捜索する。', 'No suspect. Drone has heat. Searching again.'],
-  ['見終わったが熱源が残っている。もう一度見る。', 'Sweep is done. Heat is still up. Going back.'],
+const RESCAN_LINES: readonly RadioLine[] = [
+  ['全区を見たが容疑者はいない。再捜索する。', 'Nobody found. Searching again.'],
+  ['見終わったが、まだどこかにいるはずだ。もう一度見る。', 'Sweep is done. He is still out there. Going back.'],
 ];
 
 const DUG_IN_GAS: readonly RadioLine[] = [
@@ -619,7 +609,7 @@ export const GAS_MASK: readonly RadioLine[] = [
   ['CS投入。マスクを着けて待て。', 'CS deployed. Mask up and wait.'],
 ];
 
-export const RESCAN = DRONE_RESCAN;
+export const RESCAN = RESCAN_LINES;
 
 export {
   ASSAULT_GO,

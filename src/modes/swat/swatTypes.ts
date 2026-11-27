@@ -48,11 +48,6 @@ export const PRESSURE_RAMP_SEC = 95;
 export const PRESSURE_PER_DOWN = 0.12;
 /** 閃光弾の補充間隔(s)。圧力が高いほどクールダウンも短い */
 export const FLASH_REFILL_SEC = 45;
-/** ドローン熱源探知: 隠れ続ける相手の大まかな位置を共有する間隔(s)と誤差半径(m)。圧力 0.3 以上で作動 */
-export const INTEL_INTERVAL_MIN = 16;
-export const INTEL_INTERVAL_MAX = 38;
-export const INTEL_ERROR_MAX = 7;
-export const INTEL_ERROR_MIN = 2.5;
 
 export const DEG2RAD = Math.PI / 180;
 export const VISION_FOV_DEG = 120;
