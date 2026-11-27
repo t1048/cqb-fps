@@ -1056,7 +1056,8 @@ export type ScoreKind =
   | 'nonlethalCivilianHit'
   | 'friendlyFire'
   | 'allyDown'
-  | 'playerInjury';
+  | 'playerInjury'
+  | 'civilianGassed';
 
 export interface RankRule {
   minScore: number;
@@ -1118,7 +1119,11 @@ export type SquadOrder =
   | 'gasClear'
   | 'pieDoor'
   | 'restrain'
-  | 'mirror';
+  | 'mirror'
+  /** ドアのチェック（施錠・ブービートラップ確認）。スタック中の先頭が行う */
+  | 'check'
+  /** ドアのブービートラップ解除（確認済みのトラップ） */
+  | 'disarm';
 
 export type SquadElement = 'gold' | 'alpha' | 'bravo';
 
@@ -1168,8 +1173,56 @@ export interface SquadConfig {
   mirror: MirrorConfig;
   /** 隊員の負傷モデル */
   wounds: AllyWoundsConfig;
+  /** ミッション全体（分隊共有）の閃光弾・CS ガス所持数。補充なし */
+  inventory: SquadInventoryConfig;
+  /** CS ガス投入後、室内にガスが満ちるまで待つ秒数（隊員はマスク装着） */
+  gasWaitSec: number;
+  /** ドアのチェック（Z 2 回目）の設定 */
+  doorCheck: DoorCheckConfig;
+  /** SWAT モードのドア・ブービートラップ設定 */
+  doorTrap: DoorTrapConfig;
   orderLabels: Record<SquadOrder, string>;
   elementLabels: Record<SquadElement, string>;
+}
+
+/** 分隊の携行数（squad.json の inventory）。 */
+export interface SquadInventoryConfig {
+  flashbang: number;
+  gas: number;
+}
+
+/** ドアチェック（squad.json の doorCheck）。 */
+export interface DoorCheckConfig {
+  /** 先頭の隊員がドア際でしゃがんで確認する秒数 */
+  durationSec: number;
+  /** チェックでトラップがあれば見つける確率（見落とすと「トラップ無し」と報告される） */
+  detectChance: number;
+  /** チェックせずに開けようとしたとき、先頭の隊員が仕掛けに気付く確率 */
+  spotChance: number;
+}
+
+/** SWAT モードのドア・ブービートラップ（squad.json の doorTrap）。 */
+export interface DoorTrapConfig {
+  /** 1 マップの最大設置数 */
+  maxCount: number;
+  /** 基礎の設置確率（1 個目を置く確率） */
+  baseChance: number;
+  /** 交渉の警戒度ベースラインがこの値以上なら追加で置く */
+  alertBonusAt: number;
+  /** 追加で置く数 */
+  alertBonus: number;
+  /** プレイヤー開始位置からこの距離以内のドアには仕掛けない（m） */
+  minStartDist: number;
+  /** 解除にかかる秒数 */
+  disarmSec: number;
+  /** 解除失敗（起爆）の確率 */
+  failChance: number;
+  /** 爆風半径（m） */
+  blastRadius: number;
+  /** 爆風の最大ダメージ（中心） */
+  blastDamage: number;
+  /** SWAT 側の誰かがこの距離以内でドアが開くと起爆する（m） */
+  triggerDist: number;
 }
 
 /** 隊員の負傷モデル（squad.json の wounds）。 */
@@ -1205,4 +1258,82 @@ export interface GameData {
   weapons: WeaponDef[];
   aiProfiles: AIProfile[];
   squad: SquadConfig;
+  suspectAlert: SuspectAlertConfig;
+}
+
+/**
+ * 容疑者側の警戒度（ai_profiles.json の suspectAlert）。SWAT モードのみ。
+ * 0〜100 の単一値。閃光弾・銃声・ブリーチ等で上がり、静かな時間で下がる（交渉のベースライン未満には下がらない）。
+ */
+export interface SuspectAlertConfig {
+  gains: {
+    flashbang: number;
+    gunshotBurst: number;
+    breach: number;
+    c2: number;
+    gas: number;
+    suspectDown: number;
+    doorOpen: number;
+    trapBlast: number;
+  };
+  /** 銃声を「別のバースト」とみなす最短間隔（秒） */
+  gunshotBurstGapSec: number;
+  /** 通常のドア開閉音を数える最短間隔（秒） */
+  doorOpenGapSec: number;
+  /** 静かな時間（秒）が続いた後の自然減衰（/秒） */
+  decayPerSec: number;
+  decayDelaySec: number;
+  /** 音源が近い（この距離以内の容疑者がいる）なら 100% */
+  hearNearM: number;
+  /** この距離以上離れていると farFactor まで下がる */
+  hearFarM: number;
+  farFactor: number;
+  /** 別階の容疑者しか居ない場合の倍率 */
+  otherFloorFactor: number;
+  tiers: {
+    /** 巡回・調査が活発になる */
+    patrol: number;
+    /** 待ち伏せ増・遮蔽に隠れる */
+    ambush: number;
+    /** 人質を盾に取る */
+    shield: number;
+    /** 人質処刑の脅迫が起こり得る */
+    execute: number;
+  };
+  effects: {
+    /** patrol 段階: 巡回間隔の倍率 / 巡回確率加算 / 調査確率加算 */
+    patrolIntervalMul: number;
+    patrolChanceAdd: number;
+    investigateAdd: number;
+    /** ambush 段階: 待ち伏せ基礎確率の倍率 / 待ち伏せのない容疑者が遮蔽へ隠れる確率 */
+    ambushChanceMul: number;
+    hideChance: number;
+    /** shield 段階: 人質を探して盾にする距離(m) / 人質部屋へ向かう確率 */
+    shieldRange: number;
+    hostageRoomChance: number;
+    /** 警告コールの士気低下倍率（段階ごとに乗算。1 = そのまま） */
+    complianceMul: { patrol: number; ambush: number; shield: number; execute: number };
+  };
+  baseline: {
+    /** 交渉前の初期ベースライン */
+    start: number;
+    tensionWeight: number;
+    ultimatum: number;
+    trustWeight: number;
+    brokenBonus: number;
+    max: number;
+  };
+  execution: {
+    /** 警戒度が execute 段階以上のまま続く必要がある秒数 */
+    sustainSec: number;
+    /** 交渉の緊張がこの値以上（または閃光弾 repeatedFlashes 回以上）で解禁 */
+    tensionMin: number;
+    repeatedFlashes: number;
+    countdownSec: number;
+    cooldownSec: number;
+    /** 脅迫中に警戒度がこの値を下回ると取りやめる */
+    cancelBelow: number;
+    /** 脅迫中の警告コール 1 回あたり、容疑者が従って投降する確率 */
+    warnComplyChance: number;
+  };
 }

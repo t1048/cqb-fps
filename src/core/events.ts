@@ -38,7 +38,8 @@ export type RoeViolationKind =
   | 'nonlethalCivilianHit'
   | 'friendlyFire'
   | 'allyDown'
-  | 'playerInjury';
+  | 'playerInjury'
+  | 'civilianGassed';
 
 export interface GameEvents {
   noise: { pos: Vec3; radius: number; kind: NoiseKind; source?: NoiseSource };
@@ -99,6 +100,24 @@ export interface GameEvents {
   playerCough: { pos: Vec3 };
   /** SWAT 隊員の重い戦術ブーツ足音（AI の onNoise 自己反応を避けるため独立イベント） */
   swatFootstep: { pos: Vec3; heavy: boolean };
+  /** 民間人が CS ガスを浴びて行動不能になった（RoE: 不適切なガス使用） */
+  civilianGassed: { id: string };
+  /** ドアのブービートラップが起爆した（SWAT モード） */
+  doorTrapDetonated: { doorId: string; pos: Vec3 };
+  /**
+   * 人質処刑の脅迫（SWAT モード）。start=脅迫開始（カウントダウン開始）, prevented=阻止された, executed=処刑された。
+   * pos は脅迫している容疑者の位置、roomId は人質のいる部屋（ミニマップ用）。
+   */
+  hostageThreat: {
+    phase: 'start' | 'prevented' | 'executed';
+    suspectId: string;
+    civilianId: string;
+    roomId: string | null;
+    pos: Vec3;
+    countdownSec: number;
+    /** prevented の理由 */
+    reason?: 'reached' | 'complied' | 'calmed' | 'resolved';
+  };
 }
 
 export type GameEventBus = EventBus<GameEvents>;

@@ -1,4 +1,4 @@
-import { tickMirror } from './squadScout';
+import { rollTrapSpot, tickCheck, tickDisarm, tickMirror } from './squadScout';
 import * as THREE from 'three';
 import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
@@ -13,6 +13,7 @@ import {
   FLASH_GO,
   GAS,
   GAS_GO,
+  GAS_MASK,
   MOVE_IN,
   QUIET_ENTRY,
   STACKED_READY,
@@ -554,6 +555,7 @@ export function throwFlashbangIntoRoom(ctx: SquadContext, thrower: AllyUnit, por
   }
 
   // Legacy fallback when gadgets.flashbang is omitted
+  ctx.flashesLeft = Math.max(0, ctx.flashesLeft - 1);
   const end = new THREE.Vector3(target.x, target.y, target.z);
   const mesh = new THREE.Mesh(ctx.flashGeo, ctx.flashMat);
   mesh.position.copy(start);
@@ -649,12 +651,27 @@ export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos:
   return true;
 }
 
+/** 民間人（生存・未避難）が pos の近く（同じ階）にいるか */
+function civilianNear(ctx: SquadContext, pos: Vec3, dist: number): boolean {
+  for (const c of ctx.entities.civilians.values()) {
+    if (!c.alive || c.evacuated) continue;
+    if (Math.abs(c.body.footY - pos.y) > 1.5) continue;
+    if (Math.hypot(c.body.px - pos.x, c.body.pz - pos.z) <= dist) return true;
+  }
+  return false;
+}
+
+/** 自律ガス投擲を控える、民間人との距離(m) */
+const AUTONOMOUS_GAS_CIVILIAN_SAFE_DIST = 6;
+
 export function tryAutonomousGas(ctx: SquadContext): void {
   if (!ctx.tearGas || ctx.gasLeft <= 0 || ctx.gasCd > 0 || ctx.gasRetryCd > 0) return;
   let attempted = false;
   for (const ally of ctx.allies) {
     if (ally.down || ally.blindLeft > 0 || ally.sees) continue;
     if (!ally.known || ally.lostSec < 2.2) continue;
+    // 民間人が近くにいる（ガスで行動不能・減点になる）なら、自律ではガスを撃ち込まない
+    if (civilianNear(ctx, ally.known, AUTONOMOUS_GAS_CIVILIAN_SAFE_DIST)) continue;
     attempted = true;
     const eye = ally.body.eye(throwEyeTmp);
     const origin: Vec3 = { x: eye.x, y: eye.y, z: eye.z };
@@ -714,6 +731,8 @@ export function beginC2Sequence(ctx: SquadContext, lead: AllyUnit, portal: Entry
 
 export function detonateC2(ctx: SquadContext, lead: AllyUnit, portal: EntryPortal, door: Door): void {
   const side = lead.c2Side;
+  // C2 の爆風はドアのブービートラップを安全に吹き飛ばす
+  ctx.traps?.destroy(door.id);
   door.breachExplosive(lead.body.px, lead.body.pz);
   const blastDir: Vec3 = { x: -door.normalX * side, y: 0, z: -door.normalZ * side };
   const doorCenter: Vec3 = { x: door.centerX, y: door.sillY + 1.0, z: door.centerZ };
@@ -843,6 +862,9 @@ export function updateStackingPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   }
   // ミラー確認中の隊員はスタック位置で静止してドア下を確認する（終わるまで他の動作をしない）
   if (ally.mirrorLeft > 0 && tickMirror(ctx, ally, dt)) return;
+  // ドアチェック（施錠・トラップ）/ 確認済みトラップの解除: 先頭の隊員がドア際でしゃがんで作業する
+  if (ally.checkLeft > 0 && tickCheck(ctx, ally, dt)) return;
+  if ((ally.disarmLeft > 0 || ally.disarmStarted) && tickDisarm(ctx, ally, dt)) return;
   // door_prep への遷移はグループ単位（updatePortalGroups）。個人のタイムアウトで先走らない
   const g = ctx.portalGroups.get(portal.id);
   ally.stackWaitTimer = g?.waitT ?? 0;
@@ -887,6 +909,21 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       ally.phase = 'hold';
       ally.watchYaw = ally.body.yawRad;
       return;
+    }
+
+    // ブービートラップ: 確認済み（またはその場で気付いた）なら解除してから開ける。未発見のまま開けると起爆する
+    const usesC2 = ally.order === 'c2Clear' || (ally.order === 'breachClear' && door.locked);
+    if (
+      isDoorLead &&
+      !usesC2 &&
+      ctx.traps?.isRigged(door.id) &&
+      !door.isMoving &&
+      door.angle < ctx.cfg.doorOpenAngle
+    ) {
+      if (!ctx.traps.isDiscovered(door.id)) rollTrapSpot(ctx, ally, door);
+      if (ctx.traps.isDiscovered(door.id) && tickDisarm(ctx, ally, dt)) return;
+    } else if (!isDoorLead && ctx.traps?.isRigged(door.id) && ctx.traps.isDiscovered(door.id) && door.angle < ctx.cfg.doorOpenAngle) {
+      ally.progress = t('トラップ解除を援護中', 'Covering Disarm');
     }
 
     // C2 爆破ブリーチ（c2Clear 指示、または施錠ドアへの breachClear）
@@ -1020,10 +1057,12 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       if (!u.down && u.entryPortal?.id === portal.id && u.order === 'gasClear') {
         u.gassed = true;
         u.phase = 'gas_wait';
-        u.phaseTimer = 1.65;
-        u.progress = t('CSガス投入・待機', 'Deploying CS Gas');
+        u.phaseTimer = ctx.cfg.gasWaitSec;
+        u.progress = t('CSガス投入・マスク装着', 'Deploying CS Gas · Masking Up');
       }
     }
+    const [maskJa, maskEn] = pickRadio(GAS_MASK);
+    ctx.emitRadio(ally, maskJa, maskEn);
     return;
   }
 
@@ -1196,7 +1235,7 @@ export function updateGasWaitPhase(ctx: SquadContext, ally: AllyUnit, dt: number
     ally.body.aimAt(portal.centerX, portal.sillY + 1.38, portal.centerZ, dt, Math.PI * 2 * dt);
   }
   ally.phaseTimer -= dt;
-  ally.progress = t('CSガス展開待ち', 'Waiting for Gas');
+  ally.progress = t('マスク装着・CSガス展開待ち', 'Masked Up · Waiting for Gas');
   if (ally.phaseTimer <= 0) {
     ally.phase = 'entering';
     ally.phaseTimer = 0;

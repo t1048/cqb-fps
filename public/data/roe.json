@@ -10,7 +10,8 @@
     "nonlethalCivilianHit": -25,
     "friendlyFire": -50,
     "allyDown": -40,
-    "playerInjury": -15
+    "playerInjury": -15,
+    "civilianGassed": -10
   },
   "labels": {
     "arrest": "容疑者を現行犯逮捕",
@@ -23,7 +24,8 @@
     "nonlethalCivilianHit": "民間人への非致死性誤射(RoE違反)",
     "friendlyFire": "隊員への誤射(RoE違反)",
     "allyDown": "隊員が戦闘不能（不用意な突入）",
-    "playerInjury": "被弾・負傷（不用意な行動）"
+    "playerInjury": "被弾・負傷（不用意な行動）",
+    "civilianGassed": "民間人にCSガスを浴びせた（ガスは容疑者のみの部屋で）"
   },
   "violationOncePerTarget": true,
   "hostileStates": ["ENGAGE", "HOSTAGE_SHIELD"],

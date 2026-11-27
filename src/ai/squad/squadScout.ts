@@ -1,16 +1,24 @@
 import * as THREE from 'three';
 import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
-import type { SquadElement, MirrorConfig, RoomDef, Vec3 } from '../../core/types';
+import type { MirrorConfig, RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
 import type { Collider } from '../../world/WorldBuilder';
 import { contactCallout } from '../../player/optiwandGeometry';
-import { MIRROR_START, pickRadio } from '../radioLines';
+import {
+  CHECK_START,
+  DISARM_START,
+  MIRROR_START,
+  TRAP_CLEAR,
+  TRAP_FAIL,
+  TRAP_SPOT,
+  checkResultLine,
+  pickRadio,
+} from '../radioLines';
 import type { ScoutContact } from '../ScoutIntel';
 import { findRoomAcrossDoor } from './squadEntry';
 import { approachSign } from './squadMovement';
-import { finishMirrorEntry } from './squadOrders';
 import type { AllyUnit, EntryPortal, SquadContext } from './squadTypes';
 
 const DEG2RAD = Math.PI / 180;
@@ -143,11 +151,10 @@ export function scanMirrorContacts(inp: MirrorScanInput): MirrorScanResult {
   return { seen, missed };
 }
 
-/** ミラー確認の開始（スタック位置に着いてから経過を数える）。 */
-export function startMirror(ctx: SquadContext, ally: AllyUnit, then: { element: SquadElement } | null = null): void {
+/** ミラー確認の開始（スタック位置に着いてから経過を数える）。右クリックメニューから選んだときだけ行う。 */
+export function startMirror(ctx: SquadContext, ally: AllyUnit): void {
   ally.mirrorLeft = ctx.cfg.mirror.durationSec;
   ally.mirrorStarted = false;
-  ally.mirrorThen = then;
 }
 
 /** スタック位置に着いている隊員のミラー確認を進める。確認が終われば報告して false を返す。 */
@@ -169,11 +176,112 @@ export function tickMirror(ctx: SquadContext, ally: AllyUnit, dt: number): boole
   ally.progress = t('ミラー確認中', 'Mirroring Door');
   if (ally.mirrorLeft > 0) return true;
   ally.body.setPose('stand');
-  const then = ally.mirrorThen;
-  ally.mirrorThen = null;
   resolveMirror(ctx, ally, door);
-  if (then) finishMirrorEntry(ctx, door, then.element);
   return false;
+}
+
+function roll(ctx: SquadContext): number {
+  return (ctx.rand ?? Math.random)();
+}
+
+/** ドアチェックの開始（スタック位置に着いてから経過を数える）。先頭の 1 名がドア際で確認する。 */
+export function startCheck(ctx: SquadContext, ally: AllyUnit): void {
+  ally.checkLeft = ctx.cfg.doorCheck.durationSec;
+  ally.checkStarted = false;
+}
+
+/**
+ * ドアチェックの進行。ドア際でしゃがんで施錠とブービートラップ用ワイヤを確認する（床下カメラは使わない）。
+ * 終わると「施錠/未施錠」「トラップ有り/無し」を報告し、結果を ctx.doorChecks に記録する。確認中は true。
+ * トラップは detectChance の確率で発見する（見落とすと「トラップ無し」と報告される）。
+ */
+export function tickCheck(ctx: SquadContext, ally: AllyUnit, dt: number): boolean {
+  if (ally.checkLeft <= 0) return false;
+  const door = ally.door;
+  if (!door) {
+    ally.checkLeft = 0;
+    return false;
+  }
+  if (!ally.checkStarted) {
+    ally.checkStarted = true;
+    const [ja, en] = pickRadio(CHECK_START);
+    ctx.emitRadio(ally, ja, en);
+  }
+  ally.checkLeft = Math.max(0, ally.checkLeft - dt);
+  ally.body.setPose('crouch');
+  ally.body.aimAt(door.centerX + door.axisX * door.width * 0.35, door.sillY + 0.95, door.centerZ + door.axisZ * door.width * 0.35, dt, Math.PI * 2 * dt);
+  ally.progress = t('ドアチェック中（施錠・トラップ）', 'Checking Door (Lock & Trap)');
+  if (ally.checkLeft > 0) return true;
+  ally.checkStarted = false;
+  ally.body.setPose('stand');
+  const rigged = ctx.traps?.isRigged(door.id) === true;
+  const found = rigged && (ctx.traps?.isDiscovered(door.id) === true || roll(ctx) < ctx.cfg.doorCheck.detectChance);
+  if (found) ctx.traps?.discover(door.id);
+  ctx.doorChecks.set(door.id, { locked: door.locked, trapFound: found, time: ctx.simTime });
+  const [ja, en] = checkResultLine(door.locked, found);
+  ctx.emitRadio(ally, ja, en);
+  ctx.ack = t(
+    `ドアチェック: ${door.locked ? '施錠' : '未施錠'} / ${found ? 'トラップ有り' : 'トラップ無し'}`,
+    `Door check: ${door.locked ? 'Locked' : 'Unlocked'} / ${found ? 'Trap found' : 'No trap'}`,
+  );
+  ctx.ackLeft = 3.5;
+  return false;
+}
+
+/** 確認済みのトラップの解除を始める（スタック位置に着いてから経過を数える）。 */
+export function startDisarm(ctx: SquadContext, ally: AllyUnit): void {
+  ally.disarmLeft = ctx.cfg.doorTrap.disarmSec;
+  ally.disarmStarted = false;
+}
+
+/**
+ * トラップ解除の進行（先頭の隊員がドア際にしゃがんで数秒作業）。作業中は true。
+ * 終了時に failChance で失敗（起爆）。成功ならトラップは除去される。
+ * 未発見の仕掛けに「気付いた」ときの処理もここ（door_prep から）で共有する。
+ */
+export function tickDisarm(ctx: SquadContext, ally: AllyUnit, dt: number): boolean {
+  const door = ally.door ?? ally.entryPortal?.door ?? null;
+  if (!door || !ctx.traps?.isRigged(door.id)) {
+    ally.disarmLeft = 0;
+    ally.disarmStarted = false;
+    return false;
+  }
+  if (!ally.disarmStarted) {
+    ally.disarmStarted = true;
+    if (ally.disarmLeft <= 0) ally.disarmLeft = ctx.cfg.doorTrap.disarmSec;
+    const [ja, en] = pickRadio(DISARM_START);
+    ctx.emitRadio(ally, ja, en);
+  }
+  ally.disarmLeft = Math.max(0, ally.disarmLeft - dt);
+  ally.body.setPose('crouch');
+  ally.body.aimAt(door.centerX + door.axisX * door.width * 0.35, door.sillY + 0.95, door.centerZ + door.axisZ * door.width * 0.35, dt, Math.PI * 2 * dt);
+  ally.progress = t('トラップ解除中', 'Disarming Trap');
+  if (ally.disarmLeft > 0) return true;
+  ally.disarmStarted = false;
+  ally.body.setPose('stand');
+  if (roll(ctx) < ctx.cfg.doorTrap.failChance) {
+    const [ja, en] = pickRadio(TRAP_FAIL);
+    ctx.emitRadio(ally, ja, en);
+    ctx.traps.detonate(door.id);
+  } else {
+    ctx.traps.disarm(door.id);
+    const [ja, en] = pickRadio(TRAP_CLEAR);
+    ctx.emitRadio(ally, ja, en);
+    ctx.ack = t('トラップを解除した', 'Trap disarmed');
+    ctx.ackLeft = 2.5;
+  }
+  return false;
+}
+
+/** 開けようとした先頭の隊員が、チェックなしでも仕掛けに気付くことがある（1 ドア 1 回判定）。気付いたら true。 */
+export function rollTrapSpot(ctx: SquadContext, ally: AllyUnit, door: Door): boolean {
+  if (!ctx.traps?.isRigged(door.id) || ctx.trapSpotRolled.has(door.id)) return false;
+  ctx.trapSpotRolled.add(door.id);
+  if (roll(ctx) >= ctx.cfg.doorCheck.spotChance) return false;
+  ctx.traps.discover(door.id);
+  const [ja, en] = pickRadio(TRAP_SPOT);
+  ctx.emitRadio(ally, ja, en);
+  return true;
 }
 
 function resolveMirror(ctx: SquadContext, ally: AllyUnit, door: Door): void {

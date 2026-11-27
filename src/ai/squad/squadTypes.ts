@@ -35,6 +35,7 @@ import type { EntityManager } from '../EntityManager';
 import type { TacticalOptics } from '../TacticalOptics';
 import type { FlankDoorSample, FlashDoorSample } from '../SwatTactics';
 import type { ScoutIntel } from '../ScoutIntel';
+import type { DoorTrapSystem } from '../../world/DoorTraps';
 
 export const MAX_DT = 0.05;
 /** 追従隊列の列間隔（m） */
@@ -43,8 +44,6 @@ export const FOLLOW_ROW_GAP = 0.9;
 export const ENGAGE_LOST_SEC = 6.0;
 /** 自律フラッシュのチームクールダウン（秒） */
 export const FLASH_TEAM_COOLDOWN = 14.0;
-/** 自律フラッシュの補充間隔（秒） */
-export const FLASH_REFILL_SEC = 45.0;
 /** 自律CSガスのチームクールダウン（秒） */
 export const GAS_TEAM_COOLDOWN = 24.0;
 /** 挟撃ピンサーのチームクールダウン（秒） */
@@ -284,10 +283,21 @@ export interface AllyUnit extends HitTarget {
   /** ミラー確認の残り秒（>0 の間、スタック位置で静止してドア下を確認する） */
   mirrorLeft: number;
   mirrorStarted: boolean;
-  /** Z 由来のミラー確認: 終了後に結果に応じた突入へ自動で移る（対象チーム）。null=確認だけ */
-  mirrorThen: { element: SquadElement } | null;
+  /** ドアチェック（施錠・トラップ確認）の残り秒（>0 の間、ドア際でしゃがんで確認する） */
+  checkLeft: number;
+  checkStarted: boolean;
+  /** トラップ解除の残り秒 / 作業を始めたか */
+  disarmLeft: number;
+  disarmStarted: boolean;
   readonly targetWrapper: AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean };
   label: AIDebugLabel;
+}
+
+/** ドアチェックの結果（先頭の隊員の申告。トラップを見落とすと false になり得る） */
+export interface DoorCheckResult {
+  locked: boolean;
+  trapFound: boolean;
+  time: number;
 }
 
 /** 同一ポータルにスタックするグループ（スタック待ち・突入順の共有状態） */
@@ -365,6 +375,14 @@ export interface SquadContext {
   readonly windows: readonly WindowDef[];
   /** 偵察情報（オプティワンド/ミラーで確認した部屋・接触） */
   readonly intel: ScoutIntel;
+  /** ドアのブービートラップ（SWAT モード。無ければ null） */
+  readonly traps: DoorTrapSystem | null;
+  /** ドアチェック済みのドア ID → 結果 */
+  readonly doorChecks: Map<string, DoorCheckResult>;
+  /** 開けようとして「気付き判定」を済ませたドア（1 ドア 1 回） */
+  readonly trapSpotRolled: Set<string>;
+  /** 乱数（テスト用に差し替え可能。未指定は Math.random） */
+  rand?: () => number;
 
   readonly root: THREE.Group;
   readonly coverage: Cell[];
@@ -396,7 +414,6 @@ export interface SquadContext {
   burstLife: number;
   flashesLeft: number;
   flashCd: number;
-  flashRefill: number;
   gasLeft: number;
   gasCd: number;
   gasRetryCd: number;

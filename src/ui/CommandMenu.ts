@@ -59,6 +59,13 @@ export interface ActiveMarker {
   label: string;
 }
 
+/** メニューが参照する分隊の装備状況（残数が 0 の手榴弾系の項目を無効化する） */
+export interface MenuGearProvider {
+  gear(): { flash: number; gas: number };
+  /** そのドアのブービートラップを発見済み（未解除）か */
+  trapKnown(doorId: string): boolean;
+}
+
 interface MenuItem {
   num: number;
   order: SquadOrder | null;
@@ -171,6 +178,7 @@ export class CommandMenu {
   private readonly mats: THREE.Material[] = [];
 
   private items: MenuItem[] = [];
+  private gearProvider: MenuGearProvider | null = null;
   private offsetPx = 0;
   private selectedIdx = 0;
   private open = false;
@@ -609,12 +617,24 @@ export class CommandMenu {
     return { x: gx, y: bestY, z: gz, dist: bestT, yawRad: this.player.yawRad };
   }
 
+  /** 分隊の装備状況の参照元を設定する（SWAT モードの SquadSystem が設定）。 */
+  setGearProvider(p: MenuGearProvider | null): void {
+    this.gearProvider = p;
+  }
+
   private buildMenuItems(ctx: OrderContext): MenuItem[] {
     const out: MenuItem[] = [];
     let nextNum = 1;
     const add = (order: SquadOrder | null, label: string, enabled = true) => {
-      out.push({ num: order === null ? 0 : nextNum++, order, label, enabled });
+      // 数字キーは 1〜9 まで。それ以降の項目はスクロール/クリックで選ぶ（num = -1）
+      out.push({ num: order === null ? 0 : nextNum <= 9 ? nextNum++ : -1, order, label, enabled });
     };
+    const gear = this.gearProvider?.gear() ?? null;
+    const flashOk = gear === null || gear.flash > 0;
+    const gasOk = gear === null || gear.gas > 0;
+    const flashLabel = (base: string): string =>
+      gear ? `${base} ${t(`[残 ${gear.flash}]`, `[${gear.flash} left]`)}` : base;
+    const gasLabel = (base: string): string => (gear ? `${base} ${t(`[残 ${gear.gas}]`, `[${gear.gas} left]`)}` : base);
 
     if (ctx.restrainTarget) {
       add(
@@ -624,6 +644,10 @@ export class CommandMenu {
       );
     } else if (ctx.door) {
       add('stack', t('スタックアップ（扉脇で待機）', 'Stack Up (Hold by Door)'), true);
+      add('check', t('ドアチェック（施錠・トラップ確認）', 'Check Door (Lock & Trap)'), true);
+      if (this.gearProvider?.trapKnown(ctx.door.id)) {
+        add('disarm', t('トラップ解除（確認済み・数秒）', 'Disarm Trap (Found, a few sec)'), true);
+      }
       add(
         'clear',
         ctx.door.locked
@@ -631,16 +655,16 @@ export class CommandMenu {
           : t('オープン＆クリア（2名突入制圧）', 'Open & Clear (2-Man Entry)'),
         true,
       );
-      add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);
-      add('gasClear', t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)'), true);
+      add('flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
+      add('gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
       add('c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
       add('breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
       add('pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
       add('mirror', t('ミラー確認（ドア下を隊員が確認・約4秒）', 'Mirror Under Door (Ally Wand, ~4s)'), true);
     } else if (ctx.areaTarget) {
       add('clear', t('突入＆クリア（2名突入制圧）', 'Breach & Clear (2-Man Entry)'), true);
-      add('flashClear', t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)'), true);
-      add('gasClear', t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)'), true);
+      add('flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
+      add('gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
       add('stack', t('スタックアップ（入口脇で待機）', 'Stack Up (Hold by Entry)'), true);
       if (ctx.groundPoint) {
         add(
@@ -711,7 +735,7 @@ export class CommandMenu {
       row.className = 'cqb-cmd-row' + (i === this.selectedIdx ? ' active' : '') + (item.enabled ? '' : ' disabled');
       const num = document.createElement('span');
       num.className = 'cqb-cmd-num';
-      num.textContent = item.order === null ? 'ESC' : String(item.num);
+      num.textContent = item.order === null ? 'ESC' : item.num > 0 ? String(item.num) : '·';
       const lbl = document.createElement('span');
       lbl.textContent = item.label;
       row.append(num, lbl);
