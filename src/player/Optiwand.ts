@@ -418,9 +418,10 @@ export class Optiwand {
     hide.forEach((o, i) => (o.visible = prevVis[i]!));
 
     renderer.getSize(this.sizeTmp);
-    const w = Math.round(this.sizeTmp.x * this.d.cfg.viewWidthRatio);
+    const w = Math.min(360, Math.round(this.sizeTmp.x * this.d.cfg.viewWidthRatio));
     const h = Math.round((w * this.rt.height) / this.rt.width);
-    const left = 16;
+    // 左上のミニマップ・右上の目標パネルと重ならないよう上端中央に置く
+    const left = Math.max(16, Math.round((this.sizeTmp.x - w) / 2));
     const top = 16;
     this.frame.style.display = 'block';
     this.frame.style.left = `${left}px`;
