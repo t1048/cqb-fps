@@ -19,6 +19,7 @@ import { TearGas } from './weapons/TearGas';
 import { FlashOverlay } from './ui/FlashOverlay';
 import { Subtitle } from './ui/Subtitle';
 import { Arrest } from './player/Arrest';
+import { PlayerDoorWork } from './player/PlayerDoorWork';
 import { WarningCall } from './player/WarningCall';
 import { EntityManager } from './ai/EntityManager';
 import { Hud } from './ui/Hud';
@@ -153,6 +154,7 @@ class App {
   private pendingReply = '';
   private readonly warningCall: WarningCall | null = null;
   private readonly arrest: Arrest | null = null;
+  private readonly doorWork: PlayerDoorWork | null = null;
   private readonly entities: EntityManager;
   private readonly hud: Hud;
   private readonly minimap: Minimap;
@@ -397,6 +399,21 @@ class App {
     if (!suspect) {
       this.warningCall = new WarningCall(playerCfg.warning, this.player, this.bus, this.subtitle, this.input);
       this.arrest = new Arrest(playerCfg.arrest, this.player, this.entities, this.bus, this.interaction);
+      if (this.doorTraps) {
+        this.doorWork = new PlayerDoorWork({
+          player: this.player,
+          input: this.input,
+          interaction: this.interaction,
+          doors: this.doors,
+          traps: this.doorTraps,
+          entities: this.entities,
+          bus: this.bus,
+          subtitle: this.subtitle,
+          root: this.scene,
+          check: squadCfg.doorCheck,
+          trap: squadCfg.doorTrap,
+        });
+      }
       // 容疑者側の警戒度（閃光弾・銃声・ブリーチ等で上がる）と、高警戒時の人質処刑の脅迫
       this.suspectAlert = new SuspectAlert(
         suspectAlertCfg,
@@ -866,6 +883,7 @@ class App {
     this.syncDynamicShadows();
     this.avatar.update(this.player);
     this.arrest?.update(dt);
+    this.doorWork?.update(dt);
     this.warningCall?.update(dt);
     this.subtitle.update(dt);
     this.hud.update(dt);
@@ -1190,6 +1208,7 @@ class App {
     this.avatar.dispose();
     this.entities.dispose();
     this.arrest?.dispose();
+    this.doorWork?.dispose();
     this.warningCall?.dispose();
     this.subtitle.dispose();
     this.weapons.dispose();

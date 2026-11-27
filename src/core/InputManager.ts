@@ -11,6 +11,7 @@ export type Action =
   | 'interact'
   | 'warningCall'
   | 'breach'
+  | 'c2'
   | 'reload'
   | 'slot1'
   | 'slot2'
@@ -38,6 +39,8 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   interact: ['KeyF'],
   warningCall: ['Space'],
   breach: ['KeyG'],
+  // C2 爆薬の設置（SWAT モード。ドアを狙って押し続ける）
+  c2: ['KeyB'],
   reload: ['KeyR'],
   slot1: ['Digit1'],
   slot2: ['Digit2'],
