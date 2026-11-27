@@ -89,6 +89,9 @@ import {
   PIE_STEP_HOLD_SEC,
   PIE_TIMEOUT_SEC,
   PORTAL_BLOCK_SEC,
+  ROUTE_BREACH_WAIT_SEC,
+  ROUTE_CHECK_SEC,
+  SKIP_DOOR_TTL_SEC,
   SCAN_AMP,
   SCAN_IDLE_SEC,
   SCAN_RATE,
@@ -180,6 +183,11 @@ export class SwatHunter implements HitTarget {
   disarmSec = 0;
   readonly checkedTraps = new Set<string>();
   private readonly skipDoors = new Set<string>();
+  /** ブリーチに失敗した扉を再び候補に戻すまでの残り秒 */
+  private readonly skipDoorLeft = new Map<string, number>();
+  /** 経路計画（施錠ドア越しの目標）の再確認までの秒・他隊員のブリーチ待ちの累計秒 */
+  private routeCheckCd = Math.random() * ROUTE_CHECK_SEC;
+  private routeWaitSec = 0;
   /** 行き詰まった外壁入口 → 残り除外秒 */
   private readonly blockedPortals = new Map<string, number>();
   private blockedCount = 0;
@@ -468,6 +476,7 @@ export class SwatHunter implements HitTarget {
     this.blockedWindow = Math.max(0, this.blockedWindow - dt);
     if (this.blockedWindow <= 0) this.blockedCount = 0;
     this.tickBlockedPortals(dt);
+    this.tickSkipDoors(dt);
     if (this.state === 'staging') return;
     if (this.blindLeft > 0) {
       this.blindLeft = Math.max(0, this.blindLeft - dt);
@@ -1012,6 +1021,7 @@ export class SwatHunter implements HitTarget {
         this.entryRouteId = null;
         this.nav.reset();
       }
+      if (!this.sees && this.checkBlockedRoute(goal, dt) === true) return;
       const res = this.nav.step(goal, speed, dt, {
         canOpenDoors: true,
         canUseStairs: true,
@@ -1079,6 +1089,13 @@ export class SwatHunter implements HitTarget {
       this.nav.reset();
     }
     this.team.tryFlash(this, t);
+    const blockedRoute = this.checkBlockedRoute(t, dt);
+    if (blockedRoute === true) return;
+    if (blockedRoute === 'unreachable') {
+      this.huntTarget = null;
+      this.setState('sweep');
+      return;
+    }
     const res = this.nav.step(t, this.combat.moveSpeed * HUNT_SPEED, dt, {
       canOpenDoors: true,
       canUseStairs: true,
@@ -1165,6 +1182,76 @@ export class SwatHunter implements HitTarget {
       this.noteEntryBlocked(route.entryId);
       if (door) this.tryBeginBreach(route.dest, door.id);
     }
+  }
+
+  /** 停滞時の再計画: 掃討目標・ブリーチ失敗扉・入口の除外・経路待ちをすべて引き直す */
+  resetPlanning(): void {
+    this.skipDoors.clear();
+    this.skipDoorLeft.clear();
+    this.blockedPortals.clear();
+    this.routeWaitSec = 0;
+    this.routeCheckCd = 0;
+    this.goalCell = null;
+    this.goalTime = 0;
+    this.entryPhase = null;
+    this.entryRouteId = null;
+    this.huntingFlank = false;
+    if (this.state === 'hunt') {
+      this.huntTarget = null;
+      this.setState('sweep');
+    } else if (!this.nav.onStair) this.nav.reset();
+  }
+
+  private skipDoor(id: string): void {
+    this.skipDoors.add(id);
+    this.skipDoorLeft.set(id, SKIP_DOOR_TTL_SEC);
+  }
+
+  private tickSkipDoors(dt: number): void {
+    if (this.skipDoorLeft.size === 0) return;
+    for (const [id, left] of this.skipDoorLeft) {
+      if (left - dt <= 0) {
+        this.skipDoorLeft.delete(id);
+        this.skipDoors.delete(id);
+      } else this.skipDoorLeft.set(id, left - dt);
+    }
+  }
+
+  /**
+   * 目標が施錠ドアの向こうで、歩いては届かないとき、経路上で最初の施錠ドアをブリーチしに行く。
+   * 戻り値 true = このフレームの移動は不要（ブリーチへ遷移した / 他隊員のブリーチ待ち）。
+   * 'unreachable' = 施錠ドアを開けても届かない（呼び出し側が目標を諦める）。
+   */
+  private checkBlockedRoute(goal: Vec3, dt: number): boolean | 'unreachable' {
+    this.routeCheckCd -= dt;
+    if (this.routeCheckCd > 0) return this.routeWaitSec > 0 && this.routeWaitSec < ROUTE_BREACH_WAIT_SEC ? this.waitingForBreach(dt) : false;
+    this.routeCheckCd = ROUTE_CHECK_SEC + Math.random() * 0.4;
+    const plan = this.team.planRoute({ x: this.body.px, y: this.body.footY, z: this.body.pz }, goal, this.skipDoors);
+    if (plan.reachable) {
+      this.routeWaitSec = 0;
+      return false;
+    }
+    if (!plan.door) return 'unreachable';
+    if (this.team.isDoorBeingBreached(plan.door.id, this)) {
+      // 別の隊員が蹴破っている最中: 近くで待つ（長すぎれば諦めて別の動きに戻る）
+      this.routeWaitSec = Math.max(this.routeWaitSec, 0.01);
+      return this.waitingForBreach(dt);
+    }
+    if (this.tryBeginBreach(goal, plan.door.id)) {
+      this.routeWaitSec = 0;
+      return true;
+    }
+    return false;
+  }
+
+  private waitingForBreach(dt: number): boolean {
+    this.routeWaitSec += dt;
+    if (this.routeWaitSec >= ROUTE_BREACH_WAIT_SEC) {
+      this.routeWaitSec = 0;
+      return false;
+    }
+    this.scanAround(dt, this.scanBaseYaw);
+    return true;
   }
 
   private tickBlockedPortals(dt: number): void {
@@ -1305,6 +1392,13 @@ export class SwatHunter implements HitTarget {
       this.entryPhase = null;
       this.entryRouteId = null;
       this.nav.reset();
+    }
+    const blockedRoute = this.checkBlockedRoute(goal, dt);
+    if (blockedRoute === true) return;
+    if (blockedRoute === 'unreachable') {
+      this.team.markBad(cell);
+      this.goalCell = null;
+      return;
     }
     const res = this.nav.step(goal, this.combat.moveSpeed * SWEEP_SPEED, dt, {
       canOpenDoors: true,
@@ -1490,7 +1584,7 @@ export class SwatHunter implements HitTarget {
         this.setState(this.huntTarget ? 'hunt' : 'sweep');
       }
     } else if (res === 'blocked' || this.stateTime > 20) {
-      this.skipDoors.add(door.id);
+      this.skipDoor(door.id);
       this.clearBreachState();
       this.setState('sweep');
     }
@@ -1525,7 +1619,7 @@ export class SwatHunter implements HitTarget {
         this.body.setPose('crouch');
         this.team.onC2PlantStart(this, door);
       } else if (res === 'blocked' || this.stateTime > 20) {
-        this.skipDoors.add(door.id);
+        this.skipDoor(door.id);
         this.clearBreachState();
         this.setState('sweep');
       }

@@ -25,6 +25,7 @@ import type { Collider } from '../../world/WorldBuilder';
 import type { FlashOverlay } from '../../ui/FlashOverlay';
 import type { Subtitle } from '../../ui/Subtitle';
 import type { SwatHunter } from './SwatHunter';
+import type { RoutePlan } from './swatRoutePlanner';
 
 /**
  * 容疑者モードの SWAT 戦闘パラメータ（基準値は SwatProfile.ts）。
@@ -160,6 +161,19 @@ export const PORTAL_BLOCK_SEC = 8;
 export const ROUTE_CACHE_TTL = 1;
 export const ROUTE_CACHE_MAX = 6;
 export const ENTRY_WALK_RADIUS = 0.3;
+
+/** 施錠ドアを考慮した経路計画: 結果キャッシュ秒・ドア判定半径(m)・歩行半径(m)・各隊員の再計画間隔(s)・ブリーチ失敗扉の除外秒・他隊員のブリーチ待ちの上限秒 */
+export const ROUTE_PLAN_CACHE_SEC = 1.2;
+export const ROUTE_PLAN_DOOR_RADIUS = 0.95;
+export const ROUTE_WALK_RADIUS = 0.3;
+export const ROUTE_CHECK_SEC = 1.0;
+export const SKIP_DOOR_TTL_SEC = 25;
+export const ROUTE_BREACH_WAIT_SEC = 10;
+
+/** 停滞監視: 段階ごとに無進捗がこの秒数続いたら次の打開策（再計画 / 施錠ドアのブリーチ / ドローン / 直接押し込み）。最終段階は繰り返す */
+export const STALL_LEVEL_SEC = [8, 14, 20, 28] as const;
+/** 交戦・ブリーチなどで進行中とみなす間、無進捗秒をこの値で頭打ちにする */
+export const STALL_BUSY_CAP_SEC = 4;
 
 export const NAMES = ['アルファ', 'ブラボー', 'チャーリー', 'デルタ', 'エコー', 'フォックス'];
 
@@ -327,6 +341,7 @@ export interface SwatTeamHost {
   markBad(c: CoverCell): void;
   markSeenAround(x: number, z: number, y: number, radius: number): void;
   sameIndoorRoom(x: number, z: number, y: number, goal: Vec3): boolean;
+  planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan;
   trapHeld(door: Door): boolean;
   isDoorBeingBreached(doorId: string, exclude?: SwatHunter): boolean;
   findLockedDoor(h: SwatHunter, goal: Vec3, skip: ReadonlySet<string>): Door | null;

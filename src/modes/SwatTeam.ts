@@ -61,6 +61,7 @@ import {
 } from './swat/swatHelpers';
 import { SwatHunter } from './swat/SwatHunter';
 import { SwatObstacles } from './swat/swatObstacles';
+import { SwatRoutePlanner, type RoutePlan } from './swat/swatRoutePlanner';
 import { SwatTacticsCoordinator } from './swat/swatTacticsCoordinator';
 import {
   BARRICADE_SHOOT_RANGE,
@@ -181,6 +182,7 @@ export class SwatTeam implements SwatTeamHost {
   private readonly entry: SwatEntryCoordinator;
   private readonly obstacles: SwatObstacles;
   private readonly tactics: SwatTacticsCoordinator;
+  private readonly routePlanner: SwatRoutePlanner;
 
   constructor(private readonly d: SwatTeamDeps) {
     this.root.name = 'swatTeam';
@@ -203,6 +205,7 @@ export class SwatTeam implements SwatTeamHost {
       allies: d.suspects,
     };
     this.combatCtx = ctx;
+    this.routePlanner = new SwatRoutePlanner(d);
 
     const self = this;
     this.coverage = new SwatCoverage({
@@ -217,6 +220,7 @@ export class SwatTeam implements SwatTeamHost {
       },
       portals: () => this.entry.portals(),
       doorById: (id) => this.doorById(id),
+      planRoute: (from, goal, skip) => this.routePlanner.plan(from, goal, skip),
       radio: (h, text, voice, force) => this.radio(h, text, voice, force),
     });
 
@@ -480,6 +484,11 @@ export class SwatTeam implements SwatTeamHost {
     return this.entry.clock;
   }
 
+  /** 掃討の進捗（確認済みマス・クリア済み部屋・全マス）。 */
+  get sweepProgress(): { seen: number; cleared: number; total: number; rooms: number } {
+    return this.coverage.progress();
+  }
+
   // ---------- 公開 Facade メソッド ----------
 
   checkReinforcements(holdLeftSec: number): boolean {
@@ -550,6 +559,7 @@ export class SwatTeam implements SwatTeamHost {
     this.radioCd = Math.max(0, this.radioCd - dt);
     this.radioSpeakGap = Math.max(0, this.radioSpeakGap - dt);
     this.tactics.tickTimers(dt);
+    this.routePlanner.tick(dt);
     this.coverage.tickTimers(dt);
     this.obstacles.tickTimers(dt);
     this.entry.tickClock(dt);
@@ -759,6 +769,11 @@ export class SwatTeam implements SwatTeamHost {
 
   isDoorBeingBreached(doorId: string, exclude?: SwatHunter): boolean {
     return this.hunters.some((h) => h !== exclude && h.alive && h.state === 'breach' && h.breachDoorId === doorId);
+  }
+
+  /** 目標が施錠ドアの向こうか（歩いて届くか）。届かなければ最初に破るべき施錠ドアを返す */
+  planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan {
+    return this.routePlanner.plan(from, goal, skip);
   }
 
   findLockedDoor(h: SwatHunter, goal: Vec3, skip: ReadonlySet<string>): Door | null {
