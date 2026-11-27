@@ -1,6 +1,5 @@
 import { rollTrapSpot, tickCheck, tickDisarm, tickMirror } from './squadScout';
 import * as THREE from 'three';
-import { SuspectState } from '../../core/events';
 import { t } from '../../core/i18n';
 import {
   BREACH_IN,
@@ -9,7 +8,6 @@ import {
   CHECK_FROM_DOOR,
   CRACK_DOOR,
   DOOR_LOCKED,
-  FLASH,
   FLASH_GO,
   GAS,
   GAS_GO,
@@ -49,7 +47,6 @@ import {
   SWAT_C2_URGENT_AT_SEC,
   SWAT_C2_URGENT_BEEP_INTERVAL,
   SWAT_FLASH_MAX_DIST,
-  SWAT_FLASH_MIN_DIST,
   SWAT_GAS_MAX_DIST,
 } from '../SwatProfile';
 import {
@@ -65,7 +62,6 @@ import {
   ENTRY_STALL_SEC,
   ENTRY_TIMEOUT_SEC,
   ENTRY_WP_ARRIVE,
-  FLASH_TEAM_COOLDOWN,
   PIE_SPEED_MUL,
   PIE_STEP_HOLD_SEC,
   PIE_TIMEOUT_SEC,
@@ -612,43 +608,6 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
   ctx.gasLeft = Math.max(0, ctx.gasLeft - 1);
   const [gasJa, gasEn] = pickRadio(GAS);
   ctx.emitRadio(thrower, gasJa, gasEn);
-}
-
-export function tryAutonomousFlash(ctx: SquadContext, ally: AllyUnit, targetPos: Vec3): boolean {
-  if (!ctx.flashbang || ctx.flashesLeft <= 0 || ctx.flashCd > 0 || ally.flashRetryCd > 0) return false;
-  // チーム戦術（squadTactics の Utility 採点）が閃光弾を選んでいるときだけ投げる
-  if (ctx.tactic.current !== 'flash') return false;
-  for (const s of ctx.entities.suspects.values()) {
-    if (
-      s.alive &&
-      s.state === SuspectState.HOSTAGE_SHIELD &&
-      Math.hypot(s.body.px - targetPos.x, s.body.pz - targetPos.z) < 5
-    ) {
-      return false;
-    }
-  }
-  const eye = ally.body.eye(throwEyeTmp);
-  const origin: Vec3 = { x: eye.x, y: eye.y, z: eye.z };
-  const plan = planFlashThrow(
-    origin,
-    targetPos,
-    ctx.doors.doors,
-    ctx.windows,
-    ctx.colliders,
-    ctx.flashbang.gravity,
-    SWAT_FLASH_MIN_DIST,
-    SWAT_FLASH_MAX_DIST,
-  );
-  if (!plan) {
-    ally.flashRetryCd = 0.35;
-    return false;
-  }
-  ctx.flashbang.throwFrom(origin, plan.velocity, ally.id, plan.fuse);
-  ctx.flashesLeft--;
-  ctx.flashCd = FLASH_TEAM_COOLDOWN;
-  const [flashJa, flashEn] = pickRadio(FLASH);
-  ctx.emitRadio(ally, flashJa, flashEn);
-  return true;
 }
 
 export function beginC2Sequence(ctx: SquadContext, lead: AllyUnit, portal: EntryPortal, door: Door): void {

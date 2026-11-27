@@ -16,8 +16,6 @@ import type { PlayerController } from '../../player/PlayerController';
 import type { HitTarget, WeaponSystem } from '../../weapons/WeaponSystem';
 import type { Flashbang } from '../../weapons/Flashbang';
 import type { TearGas } from '../../weapons/TearGas';
-import type { GasIntel } from './squadGas';
-import type { TeamTacticState } from './squadTactics';
 import type { Collider } from '../../world/WorldBuilder';
 import type { StairMark } from '../../world/Walk';
 import type { Door, DoorSystem } from '../../world/Door';
@@ -44,10 +42,6 @@ export const MAX_DT = 0.05;
 export const FOLLOW_ROW_GAP = 0.9;
 /** 交戦喪失後に通常戦術へ復帰する秒数 */
 export const ENGAGE_LOST_SEC = 6.0;
-/** 自律フラッシュのチームクールダウン（秒） */
-export const FLASH_TEAM_COOLDOWN = 14.0;
-/** 自律CSガスのチームクールダウン（秒） */
-export const GAS_TEAM_COOLDOWN = 24.0;
 /** 挟撃ピンサーのチームクールダウン（秒） */
 export const PINCER_TEAM_COOLDOWN = 10.0;
 
@@ -215,8 +209,6 @@ export interface AllyUnit extends HitTarget {
   sees: boolean;
   threat: CombatThreat | null;
   lostSec: number;
-  /** 最後に視認した敵（自律ガス判定用。視認喪失後も保持） */
-  gasIntel: GasIntel | null;
   suppressCd: number;
   pepperTarget: { id: string; pos: Vec3 } | null;
   pepperCd: number;
@@ -282,7 +274,6 @@ export interface AllyUnit extends HitTarget {
   peekDone: boolean;
   /** 今回の突入がステルスモード由来か（速度・足音に反映） */
   stealthEntry: boolean;
-  flashRetryCd: number;
   sweepRetryCd: number;
   /** ミラー確認の残り秒（>0 の間、スタック位置で静止してドア下を確認する） */
   mirrorLeft: number;
@@ -417,14 +408,7 @@ export interface SquadContext {
   postClearAnnounced: boolean;
   burstLife: number;
   flashesLeft: number;
-  flashCd: number;
   gasLeft: number;
-  gasCd: number;
-  gasRetryCd: number;
-  /** チームの誰かが最後に交戦（視認・ペッパー・射線待ち）していた simTime */
-  lastTeamContactT: number;
-  /** チーム戦術ディレクター（Utility AI）の状態 */
-  readonly tactic: TeamTacticState;
   rushCd: number;
   pincerCd: number;
   contactRadioCd: number;

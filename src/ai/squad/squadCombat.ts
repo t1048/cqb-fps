@@ -64,7 +64,6 @@ import {
   type SquadContext,
 } from './squadTypes';
 import { isStandable, navigateTo } from './squadMovement';
-import { tryAutonomousFlash } from './squadEntry';
 
 const hostileTargetsBuf: AllyTarget[] = [];
 const combatFromTmp: Vec3 = { x: 0, y: 0, z: 0 };
@@ -482,7 +481,6 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
     const wasEngaging = ally.engageActive;
     ally.known = { x: best.x, y: best.footY, z: best.z };
     ally.lostSec = 0;
-    ally.gasIntel = { suspectId: best.id, pos: { ...ally.known }, t: ctx.simTime };
     ally.pincerTarget = null;
     ally.body.setReadyPose(SWAT_READY_POSE);
 
@@ -519,7 +517,6 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   }
 
   ally.engaging = ally.sees || ally.pepperTarget !== null || ally.holdingFire;
-  if (ally.engaging) ctx.lastTeamContactT = ctx.simTime;
 
   // 味方射線ブロックが一定時間続いたら左右へ半歩ステップアウトして射線を確保する
   if (ally.holdingFire && !ally.pepperTarget) {
@@ -571,9 +568,6 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
 
   if (!ally.engageActive) {
     if (!ally.sees && !ally.pepperTarget && ally.known) {
-      if (ally.lostSec >= 0.6 && ally.lostSec <= SWAT_SUPPRESS_END_SEC) {
-        tryAutonomousFlash(ctx, ally, ally.known);
-      }
       if (ally.lostSec >= ENGAGE_LOST_SEC) {
         ally.known = null;
         ally.lostSec = 0;
@@ -593,7 +587,7 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   }
   ally.prevEngageLabel = curLabel;
 
-  // 視認喪失時の制圧射撃（ROE 安全: 民間人・味方が射線上のときは撃たない）＋自律フラッシュ
+  // 視認喪失時の制圧射撃（ROE 安全: 民間人・味方が射線上のときは撃たない）
   if (
     !ally.sees &&
     !ally.pepperTarget &&
@@ -601,7 +595,6 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
     ally.lostSec >= SWAT_SUPPRESS_START_SEC &&
     ally.lostSec <= SWAT_SUPPRESS_END_SEC
   ) {
-    if (ally.lostSec >= 0.6) tryAutonomousFlash(ctx, ally, ally.known);
     if (ally.suppressCd <= 0 && ally.engage.ammoLeft > 0 && ally.engage.label !== 'reload') {
       const suppressAim: Vec3 = { x: ally.known.x, y: ally.known.y + 1.15, z: ally.known.z };
       if (!lineBlockedByPerson(ctx, ally, from, suppressAim, '')) {

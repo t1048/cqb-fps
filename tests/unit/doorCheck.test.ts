@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { checkResultLine } from '../../src/ai/radioLines';
 import { executeOrder } from '../../src/ai/squad/squadOrders';
-import { createTeamTacticState } from '../../src/ai/squad/squadTactics';
 import { rollTrapSpot, tickCheck, tickDisarm } from '../../src/ai/squad/squadScout';
 import type { AllyUnit, SquadContext } from '../../src/ai/squad/squadTypes';
 import { validateSquad } from '../../src/core/DataLoader';
@@ -74,7 +73,6 @@ function setup(opts: { trapped?: boolean; locked?: boolean; rand?: number; flash
     ackLeft: 0,
     flashesLeft: opts.flashes ?? 4,
     gasLeft: opts.gas ?? 3,
-    tactic: createTeamTacticState(),
     allies: [ally],
     player: { position: new THREE.Vector3(0, 0, 0) },
     rooms: [],
