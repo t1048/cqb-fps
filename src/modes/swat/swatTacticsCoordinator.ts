@@ -566,6 +566,7 @@ export class SwatTacticsCoordinator {
       ) continue;
       if (h.huntingFlank) continue;
       if (h.leader && h.leader.alive) continue;
+      if (!isPlayerReload && h.isAbandoned(target)) continue; // 届かなかった場所の音に何度も向かわない
       if (this.holdUnclearedRoom(h, target, false)) continue;
       h.huntTarget = target;
       h.setState('hunt');

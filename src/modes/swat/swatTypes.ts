@@ -164,6 +164,9 @@ export const ROUTE_PLAN_DOOR_RADIUS = 0.95;
 export const ROUTE_WALK_RADIUS = 0.3;
 export const ROUTE_CHECK_SEC = 1.0;
 export const SKIP_DOOR_TTL_SEC = 25;
+/** 届かなかった音源・目標を諦め済みとして覚える秒数と、同一視する半径(m) */
+export const ABANDON_TTL_SEC = 20;
+export const ABANDON_RADIUS = 3.5;
 export const ROUTE_BREACH_WAIT_SEC = 10;
 
 /** 停滞監視: 段階ごとに無進捗がこの秒数続いたら次の打開策（再計画 / 施錠ドアのブリーチ / ドローン / 直接押し込み）。最終段階は繰り返す */
