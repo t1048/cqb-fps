@@ -11,7 +11,9 @@ import type { WeaponSystem } from '../weapons/WeaponSystem';
 import type { Door, DoorSystem } from '../world/Door';
 import type { Collider } from '../world/WorldBuilder';
 import {
+  FreeLook,
   WandSpotter,
+  chooseWandViewMode,
   computeDoorPose,
   computeFreePose,
   contactCalloutText,
@@ -37,7 +39,10 @@ const FRAME_CSS = `
 .cqb-wand .rec{position:absolute;right:8px;top:5px;font:bold 11px monospace;color:#ff6a6a;text-shadow:0 0 4px #000}
 .cqb-wand .hint{position:absolute;left:8px;bottom:5px;font:11px monospace;color:rgba(200,255,215,.85);text-shadow:0 0 4px #000}
 .cqb-wand .dep{position:absolute;inset:0;background:#000;transition:opacity .1s}
+.cqb-wand-hint{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);display:none;z-index:5;pointer-events:none;max-width:min(560px,44vw);padding:5px 12px;border-radius:4px;background:rgba(8,18,12,.74);border:1px solid rgba(160,255,190,.4);color:#c9ffd8;font:bold 13px/1.45 sans-serif;text-align:center}
 `;
+/** 前方（角越し）カメラのピッチ上下限（度） */
+const FREE_PITCH_LIMIT_DEG = 60;
 
 const VERT = `
 varying vec2 vUv;
@@ -103,9 +108,12 @@ export interface OptiwandDeps {
 }
 
 /**
- * オプティワンド（細い先端カメラ）。キー 4 で構え、展開後に PiP でカメラ映像を表示する。
- * - ドアを狙って近づくと、先端がドアの向こう側の床すれすれへ回り込み、マウスで首振り（視点は固定）。
- * - それ以外は目線（リーン込み）から前方 reach の位置（壁で止まる）に先端を出し、角越しに覗ける。
+ * オプティワンド（細い先端カメラ）。ホイール押し込み（中クリック）またはキー 4 で構える。
+ * 構えただけではカメラ映像（PiP）は出ない。左クリックを押している間だけ先端を伸ばして映像を表示し、離すと収納する。
+ * 伸ばしている間は移動・視点（マウスはカメラの首振り）・しゃがみ切替を固定する。
+ * - しゃがみ + ドアの前（狙って約 1.5m 以内）で伸ばすと、先端がドアの向こう側の床すれすれへ回り込む。
+ * - それ以外（立ち・ドア以外）は目線（リーン込み）から前方 reach の位置（壁で止まる）に先端を出し、角越しに覗ける。
+ *   向きは伸ばし始めた時点のプレイヤーの向きで、マウスで首振りする。
  * - 映った容疑者・民間人は ScoutIntel に登録し、部屋を「確認済み」にして隊と共有する。
  * - 気付かれる確率あり（正面を向く容疑者が近いとき）。
  * 描画は低解像度の RenderTarget に先端カメラでシーンを描き、魚眼/ノイズのシェーダで画面隅へ合成する。
@@ -128,8 +136,15 @@ export class Optiwand {
   private readonly scTmp = new THREE.Vector4();
   private readonly sizeTmp = new THREE.Vector2();
 
+  private readonly freeLook: FreeLook;
+  private readonly hudHint = document.createElement('div');
+
   private equippedFlag = false;
   private deployT = 0;
+  /** 左クリック長押しでカメラを伸ばしている間 true */
+  private viewingFlag = false;
+  /** 伸ばし始めてからの経過（映像のフェードイン用） */
+  private extendT = 0;
   private lockedDoor: Door | null = null;
   private yawOff = 0;
   private pitch = 5 * DEG2RAD;
@@ -144,6 +159,11 @@ export class Optiwand {
     const [rw, rh] = d.cfg.renderSize;
     this.camera = new THREE.PerspectiveCamera(d.cfg.fovDeg, rw / rh, 0.03, 60);
     this.camera.rotation.order = 'YXZ';
+    this.freeLook = new FreeLook(
+      d.cfg.yawLimitDeg * DEG2RAD,
+      -FREE_PITCH_LIMIT_DEG * DEG2RAD,
+      FREE_PITCH_LIMIT_DEG * DEG2RAD,
+    );
     // 低照度のドア下映像でバンディングしないよう半精度浮動小数（トーンマップは合成パスで掛ける）
     this.rt = new THREE.WebGLRenderTarget(rw, rh, { depthBuffer: true, samples: 0, type: THREE.HalfFloatType });
     this.rt.texture.minFilter = THREE.LinearFilter;
@@ -172,20 +192,27 @@ export class Optiwand {
     this.depEl.className = 'dep';
     this.frame.append(lbl, rec, this.hintEl, this.depEl);
     d.host.appendChild(this.frame);
+    this.hudHint.className = 'cqb-wand-hint';
+    d.host.appendChild(this.hudHint);
   }
 
   get equipped(): boolean {
     return this.equippedFlag;
   }
 
-  /** 展開が完了し映像が出ているか */
+  /** 左クリック長押しでカメラを伸ばしている（映像表示中・移動/視点固定）か */
+  get viewing(): boolean {
+    return this.equippedFlag && this.viewingFlag;
+  }
+
+  /** 伸ばし切って映像が出ているか */
   get active(): boolean {
-    return this.equippedFlag && this.deployT >= this.d.cfg.deploySec;
+    return this.viewing && this.extendT >= this.d.cfg.deploySec;
   }
 
   /** ドア下カメラモードか（視点固定・移動不可） */
   get underDoor(): boolean {
-    return this.equippedFlag && this.lockedDoor !== null;
+    return this.viewing && this.lockedDoor !== null;
   }
 
   get currentPose(): WandPose | null {
@@ -208,11 +235,9 @@ export class Optiwand {
       this.dwell.clear();
       this.d.subtitle.show(t('オプティワンド展開', 'Optiwand deployed'), 0.9);
     } else {
-      this.releaseDoor();
-      this.pose = null;
+      this.stopView();
       this.batch = null;
-      this.frame.style.display = 'none';
-      this.d.player.externalMoveScale = 1;
+      this.hudHint.style.display = 'none';
     }
   }
 
@@ -221,18 +246,71 @@ export class Optiwand {
     this.d.player.lookSink = null;
   }
 
-  private lockDoor(door: Door): void {
-    this.lockedDoor = door;
-    this.yawOff = 0;
-    this.pitch = 6 * DEG2RAD;
-    this.d.player.lookSink = (dx, dy) => {
-      this.yawOff -= dx;
-      this.pitch -= dy;
-      const lim = this.d.cfg.yawLimitDeg * DEG2RAD;
-      this.yawOff = Math.max(-lim, Math.min(lim, this.yawOff));
-      this.pitch = Math.max(this.d.cfg.pitchLimitDeg[0] * DEG2RAD, Math.min(this.d.cfg.pitchLimitDeg[1] * DEG2RAD, this.pitch));
-    };
-    this.d.subtitle.show(t('ドア下カメラ: マウスで首振り', 'Under-door cam: mouse to pan'), 1.4);
+  /** 左クリック長押し開始: ドア下（しゃがみ + ドア前）か前方（角越し）かを決めて先端を伸ばす。 */
+  private startView(eye: THREE.Vector3): void {
+    const { player, cfg } = this.d;
+    const aimed = this.d.doors.aimed(cfg.doorRange + 0.3) ?? this.doorInFront(eye);
+    const mode = chooseWandViewMode(player.isCrouching, aimed, eye, cfg);
+    this.viewingFlag = true;
+    this.extendT = 0;
+    this.spotter.reset();
+    this.dwell.clear();
+    player.stanceLocked = true;
+    if (mode === 'door' && aimed) {
+      this.lockedDoor = aimed;
+      this.yawOff = 0;
+      this.pitch = 6 * DEG2RAD;
+      player.lookSink = (dx, dy) => {
+        this.yawOff -= dx;
+        this.pitch -= dy;
+        const lim = cfg.yawLimitDeg * DEG2RAD;
+        this.yawOff = Math.max(-lim, Math.min(lim, this.yawOff));
+        this.pitch = Math.max(cfg.pitchLimitDeg[0] * DEG2RAD, Math.min(cfg.pitchLimitDeg[1] * DEG2RAD, this.pitch));
+      };
+      this.d.subtitle.show(t('ドア下カメラ: マウスで首振り', 'Under-door cam: mouse to pan'), 1.4);
+    } else {
+      this.lockedDoor = null;
+      this.freeLook.start(player.yawRad, player.pitchRad);
+      player.lookSink = (dx, dy) => this.freeLook.pan(dx, dy);
+    }
+  }
+
+  /**
+   * 照準がドアの合わせ目・枠に外れていても、目の前（正面・戸幅内・doorRange 以内）の閉じたドアを対象にする。
+   * 両開きドアの中央など、狙いにくい位置でもドア下を覗けるようにする。
+   */
+  private doorInFront(eye: THREE.Vector3): Door | null {
+    const { player, cfg } = this.d;
+    const fx = -Math.sin(player.yawRad);
+    const fz = -Math.cos(player.yawRad);
+    let best: Door | null = null;
+    let bestD = Infinity;
+    for (const door of this.d.doors.doors) {
+      if (!doorEligible(door, eye, cfg)) continue;
+      const rx = door.centerX - eye.x;
+      const rz = door.centerZ - eye.z;
+      const depth = Math.abs(rx * door.normalX + rz * door.normalZ); // ドア面までの距離
+      const lateral = Math.abs(rx * door.axisX + rz * door.axisZ); // 戸幅方向のずれ
+      if (depth > cfg.doorRange || lateral > door.width * 0.5) continue;
+      // 正面を向いていること（ドア中心方向と、ドア面に対して 60° 以内）
+      const dist = Math.hypot(rx, rz) || 1;
+      if ((fx * rx + fz * rz) / dist < 0.5 || Math.abs(fx * door.normalX + fz * door.normalZ) < 0.5) continue;
+      if (depth < bestD) {
+        bestD = depth;
+        best = door;
+      }
+    }
+    return best;
+  }
+
+  /** 伸ばしていたカメラを収納し、移動・視点・しゃがみ切替を元に戻す。 */
+  private stopView(): void {
+    this.viewingFlag = false;
+    this.releaseDoor();
+    this.pose = null;
+    this.frame.style.display = 'none';
+    this.d.player.externalMoveScale = 1;
+    this.d.player.stanceLocked = false;
   }
 
   update(rawDt: number): void {
@@ -245,7 +323,7 @@ export class Optiwand {
       return;
     }
     if (!input.isOrderMenuOpen) {
-      if (input.wasPressed('slot4')) this.setEquipped(!this.equippedFlag);
+      if (input.wasPressed('slot4') || input.wasMousePressed(1)) this.setEquipped(!this.equippedFlag);
       else if (
         this.equippedFlag &&
         (input.wasPressed('slot1') || input.wasPressed('slot2') || input.wasPressed('slot3'))
@@ -262,22 +340,32 @@ export class Optiwand {
     this.deployT = Math.min(cfg.deploySec, this.deployT + dt);
     const eye = player.getEyePosition(this.eyeTmp);
 
-    // ドア下カメラの保持/取得
+    // 左クリック長押しの間だけカメラを伸ばす（構え切り替えの展開が終わってから）
+    const wantView = input.isPointerLocked && input.isMouseDown(0) && !input.isOrderMenuOpen;
+    if (this.viewingFlag && !wantView) this.stopView();
+    else if (!this.viewingFlag && wantView && this.deployT >= cfg.deploySec) this.startView(eye);
+
+    if (!this.viewingFlag) {
+      this.updateHint(false);
+      return;
+    }
+
+    // ドア下カメラが使えなくなったら（ドアが開いた・離れた）収納する
     if (this.lockedDoor) {
       const door = this.lockedDoor;
       const dist = Math.hypot(eye.x - door.centerX, eye.z - door.centerZ);
       if (!doorEligible(door, eye, cfg) || dist > cfg.doorRange + door.width * 0.5 + DOOR_HOLD_SLACK) {
-        this.releaseDoor();
+        this.stopView();
+        this.updateHint(false);
+        return;
       }
-    } else if (this.deployT >= cfg.deploySec) {
-      const aimed = this.d.doors.aimed(cfg.doorRange + 0.3);
-      if (aimed && doorEligible(aimed, eye, cfg)) this.lockDoor(aimed);
     }
+    this.extendT = Math.min(cfg.deploySec, this.extendT + dt);
 
     this.pose = this.lockedDoor
       ? computeDoorPose(this.lockedDoor, eye, cfg, this.d.doorThickness, this.yawOff, this.pitch)
-      : computeFreePose(eye, player.yawRad, player.pitchRad, this.d.colliders, cfg);
-    player.externalMoveScale = this.lockedDoor ? 0 : 0.5;
+      : computeFreePose(eye, this.freeLook.yaw, this.freeLook.pitch, this.d.colliders, cfg);
+    player.externalMoveScale = 0;
 
     const p = this.pose;
     this.camera.position.set(p.x, p.y, p.z);
@@ -285,14 +373,30 @@ export class Optiwand {
     this.camera.updateMatrixWorld(true);
 
     this.hintEl.textContent = this.lockedDoor
-      ? t('マウス: 首振り / 4: 収納', 'Mouse: Pan / 4: Stow')
-      : t('ドアに近づいて狙うと下から覗けます', 'Aim at a door to look underneath');
-    this.depEl.style.opacity = String(1 - this.deployT / Math.max(0.001, cfg.deploySec));
+      ? t('マウス: 首振り / 離す: 収納', 'Mouse: Pan / Release: Retract')
+      : t('マウス: 首振り / 離す: 収納（Q/E: リーン）', 'Mouse: Pan / Release: Retract (Q/E: Lean)');
+    this.depEl.style.opacity = String(1 - this.extendT / Math.max(0.001, cfg.deploySec));
+    this.updateHint(true);
 
     if (!this.active) return;
     this.updateSpotting(dt, p);
     this.updateNotices(dt, p);
     this.updateBatch(dt);
+  }
+
+  /** 画面下部の操作ヒント（構え中のみ）。 */
+  private updateHint(viewing: boolean): void {
+    if (!this.equippedFlag) {
+      this.hudHint.style.display = 'none';
+      return;
+    }
+    this.hudHint.textContent = viewing
+      ? t('ワンド展開中: マウスで首振り / 左クリックを離すと収納', 'Wand out: mouse to pan / release LMB to retract')
+      : t(
+          '左クリック長押し: カメラ / しゃがみ+ドア前: ドア下 / 中クリック・4: 武器に戻す',
+          'Hold LMB: camera / Crouch at door: under-door / MMB or 4: switch back',
+        );
+    this.hudHint.style.display = 'block';
   }
 
   private collectSources(): WandContactSource[] {
@@ -404,7 +508,7 @@ export class Optiwand {
 
   /** メイン描画後に PiP を描く。非展開時は何もしない（低コスト）。 */
   render(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
-    if (this.disposed || !this.equippedFlag || !this.pose) return;
+    if (this.disposed || !this.equippedFlag || !this.viewingFlag || !this.pose) return;
     const hide = this.d.hideDuringRender ?? [];
     const prevVis = hide.map((o) => o.visible);
     for (const o of hide) o.visible = false;
@@ -450,11 +554,13 @@ export class Optiwand {
     this.disposed = true;
     this.releaseDoor();
     this.d.player.externalMoveScale = 1;
+    this.d.player.stanceLocked = false;
     this.d.weapons.externalFireBlock = false;
     this.rt.dispose();
     this.quadMat.dispose();
     this.quadGeo.dispose();
     this.frame.remove();
+    this.hudHint.remove();
     this.styleEl.remove();
     this.spotter.reset();
     this.dwell.clear();
