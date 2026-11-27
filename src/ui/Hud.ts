@@ -418,13 +418,13 @@ export class Hud {
 
   private applyStaticLabels(): void {
     this.rosterTitleEl.textContent = t(
-      'SQUAD [右クリック指示 / Z簡易 / X集合 / 4ワンド]',
-      'SQUAD [RMB Order / Z Quick / X Fall In / 4 Wand]',
+      'SQUAD [右クリック指示 / Z簡易 / X集合 / 中クリック・4ワンド]',
+      'SQUAD [RMB Order / Z Quick / X Fall In / MMB·4 Wand]',
     );
     this.objTitleEl.textContent = t('作戦目標 / OBJECTIVES', 'OBJECTIVES');
     this.promptEl.textContent = t(
-      'クリックで開始 — WASD移動 / Shift静音 / C屈み / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4装備 / ESCポーズ',
-      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-4 Gear / ESC Pause',
+      'クリックで開始 — WASD移動 / Shift静音 / C屈み(切替) / Q,Eリーン / 左クリック射撃 / 右クリック部隊指揮 / Zクイック指示 / X集合 / Space警告 / F開閉・拘束 / 1-4・中クリック装備 / ESCポーズ',
+      'Click to Lock Mouse — WASD Move / Shift Walk / C Crouch (Toggle) / Q,E Lean / LMB Fire / RMB Squad Menu / Z Quick Order / X Fall In / Space Shout / F Interact / 1-4 / MMB Gear / ESC Pause',
     );
     if (this.motifChipEl && this.motifInfo) {
       const m = this.motifInfo;
@@ -548,7 +548,7 @@ export class Hud {
       this.hpFillEl.style.width = `${pct}%`;
       this.hpFillEl.style.background = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
     }
-    const stance = this.player.isCrouching ? 'CROUCH' : 'STAND';
+    const stance = this.player.isCrouching ? 'CROUCH [C]' : 'STAND [C]';
     const mode = this.player.moveMode === 'quiet' ? 'QUIET' : this.player.moveMode === 'run' ? 'RUN' : 'CROUCH-WALK';
     const statusText = `${stance} / ${mode}`;
     if (statusText !== this.lastStatusText) {

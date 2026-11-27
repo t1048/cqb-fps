@@ -28,8 +28,8 @@ function getStep(index: number): { title: string; body: string; sub?: string } {
         'Your squad executes the context action shown at the bottom ("Z : ..."). Walk up to a door, look at it, and press <kbd>Z</kbd>. On unscouted doors your squad mirrors under the door first, then enters.',
       ),
       sub: t(
-        '<kbd>4</kbd> オプティワンドで自分で確認すると、ミラーを省いて閃光突入などにすぐ移れます（ミラーは見落とすことも）',
-        'Scout yourself with the <kbd>4</kbd> Optiwand to skip the mirror and go straight to flash entry (the mirror can miss contacts)',
+        '<kbd>4</kbd>／中クリックのオプティワンド（左クリック長押しで映像）で自分で確認すると、ミラーを省いて閃光突入などにすぐ移れます（ミラーは見落とすことも）',
+        'Scout yourself with the <kbd>4</kbd>/MMB Optiwand (hold LMB for the view) to skip the mirror and go straight to flash entry (the mirror can miss contacts)',
       ),
     },
     {
