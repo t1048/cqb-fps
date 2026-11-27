@@ -120,6 +120,32 @@ describe('F10 — Tear Gas (CS Gas) & Anti-Camping', () => {
     gas.dispose();
   });
 
+  it('部屋に投げ込んだガスは一定時間で部屋いっぱいに広がり、家具の裏にも回る（広すぎる部屋は上限まで）', () => {
+    const bus = createGameEventBus();
+    const room = (id: string, x: number, w: number): RoomDef => ({ id, name: id, x, z: 0, width: w, depth: 8 });
+    const furniture: Collider = { kind: 'cover', aabb: { min: { x: 0.5, y: 0, z: -2 }, max: { x: 1.5, y: 1.8, z: 2 } } };
+    const colliders: Collider[] = [makeFloor(-40, -20, 40, 20, 0), furniture];
+    const gas = new TearGas(colliders, bus, 3.0, [room('small', 0, 10), room('huge', 100, 60)]);
+    gas.throwFrom({ x: -4, y: 0.2, z: 0 }, { x: 0, y: 0, z: 0 }, 'p', 0.1);
+    for (let i = 0; i < 4; i++) gas.update(0.05);
+    // 起爆直後は遠い隅にまだ届かない
+    expect(gas.exposureAt({ x: 4.5, y: 1.2, z: 2 })).toBe(0);
+    for (let i = 0; i < 120; i++) gas.update(0.05);
+    // 約 6 秒後: 4.2m 超の奥・家具の裏も満たされる
+    expect(gas.exposureAt({ x: 4.5, y: 1.2, z: 2 })).toBeGreaterThan(0);
+    expect(gas.exposureAt({ x: 2.5, y: 1.2, z: 0 })).toBeGreaterThan(0);
+    // 部屋の外（壁の向こう）へは広がらない
+    expect(gas.exposureAt({ x: 12, y: 1.2, z: 0 })).toBe(0);
+    gas.dispose();
+
+    const big = new TearGas(colliders, bus, 3.0, [room('huge', 0, 60)]);
+    big.throwFrom({ x: 0, y: 0.2, z: 0 }, { x: 0, y: 0, z: 0 }, 'p', 0.1);
+    for (let i = 0; i < 130; i++) big.update(0.05);
+    expect(big.exposureAt({ x: 8, y: 1.2, z: 0 })).toBeGreaterThan(0);
+    expect(big.exposureAt({ x: 20, y: 1.2, z: 0 })).toBe(0);
+    big.dispose();
+  });
+
   it('computeGasDensityAt respects radius, floor height band, and wall occlusion', () => {
     const cloud = {
       pos: { x: 0, y: 0.2, z: 0 },

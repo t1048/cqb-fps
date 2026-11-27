@@ -11,7 +11,6 @@ import {
   PRESS_BY_STEP,
   RUSH_BY_REASON,
   contactInRoom,
-  droneLine,
   dugInGasLine,
   flankLine,
   manDownLine,
@@ -64,10 +63,6 @@ import {
   FLASH_TEAM_CD,
   GAS_TEAM_CD,
   HEARING_MUL,
-  INTEL_ERROR_MAX,
-  INTEL_ERROR_MIN,
-  INTEL_INTERVAL_MAX,
-  INTEL_INTERVAL_MIN,
   NAMES,
   OCCLUDED_MUL,
   PRESSURE_PER_DOWN,
@@ -135,7 +130,6 @@ export class SwatTacticsCoordinator {
   private pressureTick = 0;
   private pressureStep = 0;
   reactionSec = BASE_REACTION_SEC;
-  private intelCd = 0;
   private contactCd = 0;
   private rushCd = 0;
   /** 挟撃・ピンサー機動（F7）の状態 */
@@ -572,6 +566,7 @@ export class SwatTacticsCoordinator {
       ) continue;
       if (h.huntingFlank) continue;
       if (h.leader && h.leader.alive) continue;
+      if (!isPlayerReload && h.isAbandoned(target)) continue; // 届かなかった場所の音に何度も向かわない
       if (this.holdUnclearedRoom(h, target, false)) continue;
       h.huntTarget = target;
       h.setState('hunt');
@@ -959,7 +954,6 @@ export class SwatTacticsCoordinator {
       this.flashRefill = 0;
       if (this.flashesLeft < SWAT_FLASH_CARRY_MAX) this.flashesLeft++;
     }
-    this.updateIntel(dt);
   }
 
   applyPressure(): void {
@@ -996,45 +990,6 @@ export class SwatTacticsCoordinator {
         const [pressJa, pressEn] = pickRadio(pressPool);
         this.host.radio(this.host.firstAlive(), pressJa, pressEn, true);
       }
-    }
-  }
-
-  /**
-   * ドローン熱源探知: 圧力が上がると、誰も交戦していない間でも定期的にプレイヤーの大まかな位置が全隊に共有される。
-   * 誤差は圧力が高いほど小さい。無線が傍受されるので、探知された側にも「来る」ことが分かる。
-   */
-  updateIntel(dt: number): void {
-    this.intelCd -= dt;
-    if (this.pressure < 0.3 || this.intelCd > 0) return;
-    if (this.host.hunters.some((h) => h.alive && (h.state === 'engage' || h.state === 'rush'))) return;
-    this.intelCd = lerp(INTEL_INTERVAL_MAX, INTEL_INTERVAL_MIN, this.pressure);
-    const p = this.host.d.player.position;
-    const a = Math.random() * Math.PI * 2;
-    const err = lerp(INTEL_ERROR_MAX, INTEL_ERROR_MIN, this.pressure) * Math.sqrt(Math.random());
-    const guess = { x: p.x + Math.cos(a) * err, y: p.y, z: p.z + Math.sin(a) * err };
-    let sent = false;
-    for (const h of this.host.hunters) {
-      if (
-        !h.alive ||
-        h.state === 'breach' ||
-        h.state === 'disarm' ||
-        h.state === 'staging' ||
-        h.state === 'stack' ||
-        h.state === 'pie' ||
-        h.state === 'entry' ||
-        h.state === 'restrain' ||
-        h.state === 'rush'
-      ) continue;
-      if (h.leader && h.leader.alive) continue; // 組員はリーダーに追従する
-      h.huntTarget = { ...guess };
-      h.setState('hunt');
-      sent = true;
-    }
-    if (sent) {
-      this.shareSighting(guess);
-      const room = this.host.roomName(guess);
-      const [droneJa, droneEn] = droneLine(room);
-      this.host.radio(this.host.firstAlive(), droneJa, droneEn, true);
     }
   }
 

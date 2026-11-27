@@ -195,6 +195,18 @@ describe('閃光弾・CS ガスの携行数は有限（squad.json の inventory�
     expect(s.ctx.gasLeft).toBe(0);
   });
 
+  it('未チェックの閉じたドアへの stack 指示は check に置き換わる（スタック＋ドアチェック）', () => {
+    const s = setup({ trapped: true });
+    s.ctx.announcedStacks = new Set();
+    s.ctx.announcedRooms = new Set();
+    try {
+      executeOrder(s.ctx, 'stack', orderCtx(s.door));
+    } catch {
+      /* モック文脈ではスタック配置の後段が未対応。ack で置換だけ確認する */
+    }
+    expect(s.ctx.ack).toContain('ドアチェック');
+  });
+
   it('check/disarm はドアが必要。解除対象が無ければ発令されない', () => {
     const s = setup({ trapped: true });
     executeOrder(s.ctx, 'disarm', orderCtx(s.door));

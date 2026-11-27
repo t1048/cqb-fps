@@ -99,6 +99,8 @@ import {
   ROUTE_BREACH_WAIT_SEC,
   ROUTE_CHECK_SEC,
   SKIP_DOOR_TTL_SEC,
+  ABANDON_TTL_SEC,
+  ABANDON_RADIUS,
   SCAN_AMP,
   SCAN_IDLE_SEC,
   SCAN_RATE,
@@ -196,6 +198,7 @@ export class SwatHunter implements HitTarget {
   disarmSec = 0;
   readonly checkedTraps = new Set<string>();
   private readonly skipDoors = new Set<string>();
+  private readonly abandoned: Array<{ x: number; y: number; z: number; left: number }> = [];
   /** ブリーチに失敗した扉を再び候補に戻すまでの残り秒 */
   private readonly skipDoorLeft = new Map<string, number>();
   /** 経路計画（施錠ドア越しの目標）の再確認までの秒・他隊員のブリーチ待ちの累計秒 */
@@ -490,6 +493,7 @@ export class SwatHunter implements HitTarget {
     if (this.blockedWindow <= 0) this.blockedCount = 0;
     this.tickBlockedPortals(dt);
     this.tickSkipDoors(dt);
+    this.tickAbandoned(dt);
     if (this.state === 'staging') return;
     if (this.blindLeft > 0) {
       this.blindLeft = Math.max(0, this.blindLeft - dt);
@@ -1119,6 +1123,7 @@ export class SwatHunter implements HitTarget {
       // 屋外から足音へ直進せず、入口ドアを経由してから追う
       this.followEntry(route, dt, HUNT_SPEED);
       if (this.stateTime > 45) {
+        this.abandonTarget(t);
         this.huntTarget = null;
         this.setState('sweep');
       }
@@ -1136,6 +1141,7 @@ export class SwatHunter implements HitTarget {
     const blockedRoute = this.checkBlockedRoute(t, dt);
     if (blockedRoute === true) return;
     if (blockedRoute === 'unreachable') {
+      this.abandonTarget(t);
       this.huntTarget = null;
       this.setState('sweep');
       return;
@@ -1160,8 +1166,9 @@ export class SwatHunter implements HitTarget {
       }
     }
     if (res !== 'moving' || this.stateTime > 30) {
-      this.huntTarget = null;
       if (res === 'arrived') this.team.markRoomAt(this.body.px, this.body.pz, this.body.footY);
+      else this.abandonTarget(t);
+      this.huntTarget = null;
       this.setState('sweep');
     }
   }
@@ -1192,8 +1199,9 @@ export class SwatHunter implements HitTarget {
     });
     if (res === 'blocked') this.noteBlocked();
     if (res !== 'moving' || this.stateTime > 30) {
-      this.huntTarget = null;
       if (res === 'arrived') this.team.markRoomAt(this.body.px, this.body.pz, this.body.footY);
+      else this.abandonTarget(target);
+      this.huntTarget = null;
       this.setState('sweep');
     }
     return true;
@@ -1305,6 +1313,26 @@ export class SwatHunter implements HitTarget {
       this.huntTarget = null;
       this.setState('sweep');
     } else if (!this.nav.onStair) this.nav.reset();
+  }
+
+  /** 届かなかった/たどり着けなかった目標を一定時間「諦め済み」として覚える（同じ場所の音で何度も無理に向かわない） */
+  abandonTarget(p: Vec3): void {
+    if (this.abandoned.length >= 6) this.abandoned.shift();
+    this.abandoned.push({ x: p.x, y: p.y, z: p.z, left: ABANDON_TTL_SEC });
+  }
+
+  isAbandoned(p: Vec3): boolean {
+    for (const a of this.abandoned) {
+      if (Math.abs(a.y - p.y) < 1.2 && Math.hypot(a.x - p.x, a.z - p.z) < ABANDON_RADIUS) return true;
+    }
+    return false;
+  }
+
+  private tickAbandoned(dt: number): void {
+    for (let i = this.abandoned.length - 1; i >= 0; i--) {
+      this.abandoned[i]!.left -= dt;
+      if (this.abandoned[i]!.left <= 0) this.abandoned.splice(i, 1);
+    }
   }
 
   private skipDoor(id: string): void {
@@ -1617,14 +1645,27 @@ export class SwatHunter implements HitTarget {
     // 同じ部屋の中の点へは扉を蹴らない。入口ドアの指定（preferId）と、別室・屋外からの突入は従来どおり。
     if (!preferId && this.team.sameIndoorRoom(this.body.px, this.body.pz, this.body.footY, goal)) return false;
     const preferred = preferId ? this.team.doorById(preferId) : null;
-    const door =
+    let door: Door | null =
       preferred &&
       preferred.locked &&
       !this.skipDoors.has(preferred.id) &&
       !this.team.trapHeld(preferred) &&
       !this.team.isDoorBeingBreached(preferred.id, this)
         ? preferred
-        : this.team.findLockedDoor(this, goal, this.skipDoors);
+        : null;
+    if (!door) {
+      // 経路計画が「最初に塞いでいる施錠ドア」を知っているときはそれを優先する（近くの無関係な施錠ドアを蹴らない）。
+      // どの施錠ドアを開けても届かない目標へは、ブリーチを繰り返さず諦める。
+      const plan = this.team.planRoute({ x: this.body.px, y: this.body.footY, z: this.body.pz }, goal, this.skipDoors);
+      if (plan.door) {
+        if (this.team.trapHeld(plan.door) || this.team.isDoorBeingBreached(plan.door.id, this)) return false;
+        door = plan.door;
+      } else if (!plan.reachable) {
+        return false;
+      } else {
+        door = this.team.findLockedDoor(this, goal, this.skipDoors);
+      }
+    }
     if (!door || this.team.isDoorBeingBreached(door.id, this)) return false;
     const side = (this.body.px - door.centerX) * door.normalX + (this.body.pz - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
     this.breachDoor = door;
