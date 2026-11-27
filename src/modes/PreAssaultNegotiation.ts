@@ -2,6 +2,8 @@ import type { Civilian } from '../ai/Civilian';
 import type { Suspect } from '../ai/Suspect';
 import { SuspectState } from '../core/events';
 import { t, tRoomName } from '../core/i18n';
+import type { SuspectAlertConfig } from '../core/types';
+import { negotiationAlertBaseline, type NegotiationAlertInfo } from '../ai/SuspectAlert';
 import type { NegotiationLine, NegotiationOption, NegotiationScenario } from '../ui/NegotiationPhase';
 
 const pick = <T>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
@@ -499,6 +501,10 @@ export interface SwatNegotiationContext {
   /** 人質が殺害された（交渉失敗） */
   executeHostage(c: Civilian): void;
   roomName(s: Suspect): string;
+  /** 警戒度の設定（指定時は「突入時の警戒度予測」を表示し、結果を onOutcome で通知する） */
+  alertCfg?: SuspectAlertConfig;
+  /** 交渉の状態が変わるたびに呼ばれる（突入時の警戒度ベースラインと緊張など） */
+  onOutcome?(info: NegotiationAlertInfo, baseline: number): void;
 }
 
 /**
@@ -510,7 +516,12 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
   let trust = 10;
   let turns = 6;
   let broken = false;
+  let ultimatums = 0;
   const results: string[] = [];
+  const alertInfo = (): NegotiationAlertInfo => ({ tension, trust, ultimatums, broken });
+  const alertForecast = (): number => (ctx.alertCfg ? negotiationAlertBaseline(ctx.alertCfg, alertInfo()) : 0);
+  const notifyOutcome = (): void => ctx.onOutcome?.(alertInfo(), alertForecast());
+  notifyOutcome();
 
   const active = (): Suspect[] =>
     ctx.suspects().filter((s) => s.alive && s.state !== SuspectState.SURRENDER && s.state !== SuspectState.ARRESTED);
@@ -520,6 +531,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
     trust = clamp(trust + dTrust, 0, 100);
     if (tension >= 100 && !broken) {
       broken = true;
+      notifyOutcome();
       const h = ctx.hostages()[0];
       if (h) {
         ctx.executeHostage(h);
@@ -547,6 +559,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         },
       ];
     }
+    notifyOutcome();
     return [];
   };
 
@@ -780,6 +793,7 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
       disabledReason: () => null,
       run: () => {
         for (const s of active()) s.adjustMorale(-15);
+        ultimatums++;
         results.push(t('最後通告で犯人の士気低下', 'Ultimatum lowered suspect morale'));
         return [
           {
@@ -840,6 +854,21 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         color: '#7ce2f0',
         hint: t('高いほど解放・投降・情報が成功しやすい', 'Higher trust improves release, surrender & intel odds'),
       },
+      ...(ctx.alertCfg
+        ? [
+            {
+              label: t('突入時の警戒度予測', 'Forecast Alert at Breach'),
+              value: alertForecast(),
+              max: 100,
+              color: alertForecast() < 30 ? '#5cd67d' : alertForecast() < 50 ? '#f2c14e' : '#ff7a45',
+              text: `${alertForecast()}`,
+              hint: t(
+                '突入時点の容疑者の警戒度の下限。威圧・高い緊張で上がり、信頼構築・低い緊張で下がる。高いと待ち伏せ・人質盾・脅迫が起こりやすい',
+                'Starting floor of suspect alert. Intimidation and high tension raise it; trust and calm lower it. High alert means ambushes, human shields and execution threats.',
+              ),
+            },
+          ]
+        : []),
       {
         label: t('人質', 'Hostages'),
         value: ctx.hostages().length,
@@ -861,6 +890,14 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         `結果: ${results.length > 0 ? results.join(' / ') : '特になし'}`,
         `Outcome: ${results.length > 0 ? results.join(' / ') : 'None'}`,
       ),
+      ...(ctx.alertCfg
+        ? [
+            t(
+              `突入時の容疑者の警戒度: ${alertForecast()}（これ未満には下がらない）`,
+              `Suspect alert at breach: ${alertForecast()} (will not drop below this)`,
+            ),
+          ]
+        : []),
     ],
   };
 }

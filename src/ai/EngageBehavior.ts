@@ -5,6 +5,7 @@ import { hasLineOfSight } from '../weapons/Flashbang';
 import type { Door, DoorSystem } from '../world/Door';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { HumanoidBody } from './HumanoidBody';
+import type { AlertView } from './SuspectAlert';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT, type StairMark } from '../world/Walk';
 import { collidersNear, raycastColliders } from '../world/ColliderIndex';
 import {
@@ -81,6 +82,8 @@ export interface CombatContext {
   rooms?: readonly RoomDef[];
   /** true ならプレイヤーを脅威にしない（容疑者モードの味方 NPC。SWAT モードでは未設定） */
   ignorePlayer?: boolean;
+  /** 容疑者側の警戒度（SWAT モードのみ）。未設定/null なら従来どおり */
+  alert?: () => AlertView | null;
 }
 
 export interface XZ {

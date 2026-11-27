@@ -6,7 +6,7 @@ import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
 import { DataLoader } from './core/DataLoader';
-import type { AIProfile, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SquadConfig, StageEntry, WeaponDef } from './core/types';
+import type { AIProfile, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SquadConfig, StageEntry, SuspectAlertConfig, Vec3, WeaponDef } from './core/types';
 import { CivilianState, createGameEventBus, type GameEventBus } from './core/events';
 import type { Civilian } from './ai/Civilian';
 import { AudioEngine } from './core/Audio';
@@ -44,6 +44,9 @@ import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { Optiwand } from './player/Optiwand';
 import { ScoutIntel } from './ai/ScoutIntel';
+import { SuspectAlert, type NegotiationAlertInfo } from './ai/SuspectAlert';
+import { HostageThreat } from './ai/HostageThreat';
+import { DoorTrapSystem, rigCount, type BlastVictim } from './world/DoorTraps';
 import { SquadSystem, type Cell } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
 import { applyMissionRoster } from './rules/MissionRoster';
@@ -175,6 +178,14 @@ class App {
   /** オプティワンド（SWAT モードのみ）。偵察情報は隊と共有する */
   private readonly optiwand: Optiwand | null = null;
   private readonly scoutIntel = new ScoutIntel();
+  /** SWAT モード: ドアのブービートラップ / 容疑者の警戒度 / 人質処刑の脅迫 */
+  private readonly doorTraps: DoorTrapSystem | null = null;
+  private readonly suspectAlert: SuspectAlert | null = null;
+  private readonly hostageThreat: HostageThreat | null = null;
+  private readonly squadCfg: SquadConfig;
+  /** 交渉の結果（突入時の警戒度ベースラインと緊張）。交渉 UI が更新する */
+  private negotiationBaseline = 0;
+  private negotiationInfo: NegotiationAlertInfo = { tension: 0, trust: 0, ultimatums: 0, broken: false };
   private readonly mapId: string;
   private phase: AppPhase = 'briefing';
 
@@ -189,6 +200,7 @@ class App {
     perceptionCfg: PerceptionConfig,
     stages: readonly StageEntry[],
     squadCfg: SquadConfig,
+    suspectAlertCfg: SuspectAlertConfig,
     onSelectStage: (stageId: string) => void,
     onRetry: () => void,
     onRegenerate: (seed?: number) => void,
@@ -198,6 +210,7 @@ class App {
     onToggleReinforcements: (enabled: boolean) => void,
   ) {
     this.mode = mode;
+    this.squadCfg = squadCfg;
     const suspect = mode === 'suspect';
     map = applyMissionRoster(map);
     let swatSpawns: { x: number; y: number; z: number }[] = [];
@@ -287,6 +300,18 @@ class App {
     );
     this.roe.attach(this.entities);
     this.scene.add(this.entities.root);
+    if (!suspect) {
+      this.doorTraps = new DoorTrapSystem({
+        doors: this.doors,
+        bus: this.bus,
+        colliders: this.world.colliders,
+        cfg: squadCfg.doorTrap,
+        swatPositions: () => this.swatSidePositions(),
+        suspectPositions: () => this.suspectPositions(),
+        victims: () => this.trapVictims(),
+      });
+      this.scene.add(this.doorTraps.root);
+    }
     const flashDef = weaponDefs.find((w) => w.id === 'flashbang');
     this.squad = new SquadSystem(
       map.allies,
@@ -304,7 +329,7 @@ class App {
       { range: flashDef?.range ?? 8, blindSec: flashDef?.throwable?.blindMaxSec ?? 2 },
       map.rooms,
       playerCfg.arrest,
-      { flashbang: this.flashbang, tearGas: this.tearGas, intel: this.scoutIntel },
+      { flashbang: this.flashbang, tearGas: this.tearGas, intel: this.scoutIntel, traps: this.doorTraps },
     );
     this.entities.attachSquad(this.squad, squadCfg.presenceBonusPerAlly);
     this.scene.add(this.squad.root);
@@ -362,6 +387,26 @@ class App {
     if (!suspect) {
       this.warningCall = new WarningCall(playerCfg.warning, this.player, this.bus, this.subtitle, this.input);
       this.arrest = new Arrest(playerCfg.arrest, this.player, this.entities, this.bus, this.interaction);
+      // 容疑者側の警戒度（閃光弾・銃声・ブリーチ等で上がる）と、高警戒時の人質処刑の脅迫
+      this.suspectAlert = new SuspectAlert(
+        suspectAlertCfg,
+        () => this.entities.suspects.values(),
+        this.bus,
+        this.negotiationBaseline,
+      );
+      this.entities.attachAlert(this.suspectAlert);
+      this.hostageThreat = new HostageThreat({
+        cfg: suspectAlertCfg,
+        alert: this.suspectAlert,
+        suspects: () => this.entities.suspects.values(),
+        civilians: () => this.entities.civilians.values(),
+        rooms: map.rooms,
+        officers: () => this.swatSidePositions(),
+        bus: this.bus,
+        say: (text, sec) => this.subtitle.show(text, sec),
+        execute: (civilianId, suspectId) => this.executeHostage(civilianId, suspectId),
+        tensionHigh: () => this.negotiationInfo.tension >= suspectAlertCfg.execution.tensionMin,
+      });
     }
     const releaseHostage = (c: Civilian): void => {
       if (c.evacuate()) this.weapons.removeTarget(c);
@@ -490,6 +535,11 @@ class App {
           executeHostage: (c) => {
             if (c.damage(9999)) this.weapons.removeTarget(c);
           },
+          alertCfg: suspectAlertCfg,
+          onOutcome: (info, baseline) => {
+            this.negotiationInfo = info;
+            this.negotiationBaseline = baseline;
+          },
           roomName: (s) => {
             const raw =
               map.rooms.find(
@@ -528,6 +578,11 @@ class App {
       const wand = this.optiwand;
       this.hud.toolLabel = () => wand.toolLabel();
     }
+    if (this.suspectAlert) {
+      const al = this.suspectAlert;
+      const th = this.hostageThreat;
+      this.hud.alertProvider = () => ({ value: al.value, tier: al.tier, threat: th?.isActive === true });
+    }
     this.minimap = new Minimap(
       document.body,
       map,
@@ -537,6 +592,7 @@ class App {
       suspect ? undefined : () => this.squad.getMinimapAllies(),
       suspect ? undefined : () => this.squad.getMinimapWaypoints(),
       suspect ? undefined : () => this.minimapContacts(),
+      suspect ? undefined : () => this.minimapPulses(),
     );
     this.minimap.setVisible(false);
 
@@ -663,6 +719,7 @@ class App {
     this.suspectMission?.setVisible(true);
     this.fortify?.setVisible(true);
     this.squadTour?.setVisible(true);
+    this.beginSwatMission();
     try {
       void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
         // ポインタロックが拒否された場合は通常の画面クリック待機にフォールバック
@@ -778,6 +835,9 @@ class App {
     this.tearGas.update(dt);
     this.weapons.update(dt);
     this.entities.update(dt);
+    this.suspectAlert?.update(dt);
+    this.hostageThreat?.update(dt);
+    this.doorTraps?.update(dt);
     if (this.swatTeam) this.swatTeam.update(dt);
     else this.squad.update(dt);
     this.hostageGrab?.update(dt);
@@ -898,6 +958,97 @@ class App {
     }
   }
 
+  /**
+   * SWAT モードの突入開始: 交渉の結果から容疑者の警戒度ベースラインを確定し、ドアのブービートラップを仕掛ける。
+   * 一度だけ実行する（再開では呼ばれない）。
+   */
+  private swatMissionBegun = false;
+  private beginSwatMission(): void {
+    if (this.swatMissionBegun || !this.suspectAlert || !this.doorTraps) return;
+    this.swatMissionBegun = true;
+    this.suspectAlert.setBaseline(this.negotiationBaseline);
+    const n = rigCount(this.squadCfg.doorTrap, this.negotiationBaseline);
+    const p = this.player.position;
+    this.doorTraps.rig(n, { x: p.x, y: p.y, z: p.z });
+  }
+
+  /** SWAT 側（プレイヤー + 生存隊員）の位置。ドアトラップの起爆判定・人質救出の到達判定に使う。 */
+  private *swatSidePositions(): Generator<{ x: number; z: number; footY: number }> {
+    const p = this.player.position;
+    if (this.player.alive) yield { x: p.x, z: p.z, footY: p.y };
+    for (const a of this.squad.allies) {
+      if (!a.down) yield { x: a.body.px, z: a.body.pz, footY: a.body.footY };
+    }
+  }
+
+  private *suspectPositions(): Generator<{ x: number; z: number; footY: number }> {
+    for (const s of this.entities.suspects.values()) {
+      if (s.alive) yield { x: s.body.px, z: s.body.pz, footY: s.body.footY };
+    }
+  }
+
+  /** ブービートラップの爆風を受ける者（プレイヤー・隊員・民間人・容疑者）。 */
+  private *trapVictims(): Generator<BlastVictim> {
+    if (this.player.alive) {
+      yield {
+        chest: () => {
+          const e = this.player.getEyePosition(this.replyEyeScratch);
+          return { x: e.x, y: e.y - 0.4, z: e.z };
+        },
+        hurt: (dmg, from) => {
+          const hp = this.player.takeDamage(dmg);
+          this.bus.emit('playerHit', { shooter: 'trap', damage: dmg, from, hp });
+          this.player.addViewKick(0.06, (Math.random() - 0.5) * 0.08);
+          this.subtitle.show(t('ブービートラップの爆風を受けた！', 'Caught in a booby trap blast!'), 1.8);
+        },
+      };
+    }
+    yield* this.squad.trapVictims();
+    for (const c of this.entities.civilians.values()) {
+      if (!c.alive || c.evacuated) continue;
+      yield {
+        chest: () => {
+          const ch = c.body.chestPos();
+          return { x: ch.x, y: ch.y, z: ch.z };
+        },
+        hurt: (dmg) => {
+          if (c.damage(dmg)) this.weapons.removeTarget(c);
+        },
+      };
+    }
+    for (const s of this.entities.suspects.values()) {
+      if (!s.alive) continue;
+      yield {
+        chest: () => {
+          const ch = s.body.chestPos();
+          return { x: ch.x, y: ch.y, z: ch.z };
+        },
+        hurt: (dmg, from) => {
+          if (s.takeHit(dmg, from)) this.weapons.removeTarget(s);
+        },
+      };
+    }
+  }
+
+  /** 人質処刑（容疑者が人質を撃つ）。銃声を鳴らす。スコアは通常の人質死亡と同じ（保護加点を失う）。 */
+  private executeHostage(civilianId: string, suspectId: string): void {
+    const civ = this.entities.civilians.get(civilianId);
+    const s = this.entities.suspects.get(suspectId);
+    if (!civ) return;
+    const chest = civ.body.chestPos();
+    const pos: Vec3 = { x: chest.x, y: chest.y, z: chest.z };
+    if (civ.damage(9999)) this.weapons.removeTarget(civ);
+    this.bus.emit('shotFired', { shooter: suspectId, pos });
+    this.bus.emit('noise', { pos, radius: 45, kind: 'gunshot', source: 'suspect' });
+    s?.body.showMuzzleFlash(0.08);
+  }
+
+  /** ミニマップ用: 人質処刑の脅迫中に人質の位置で脈打つ警告 */
+  private minimapPulses(): { x: number; y: number; z: number; progress: number }[] {
+    const p = this.hostageThreat?.pulse();
+    return p ? [p] : [];
+  }
+
   /** ミニマップ用: 偵察で確認した接触（武装容疑者・民間人・非武装） */
   private minimapContacts(): { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] {
     const out: { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] = [];
@@ -961,6 +1112,8 @@ class App {
     this.roe.dispose();
     this.hostageGrab?.dispose();
     this.fortify?.dispose();
+    this.suspectAlert?.dispose();
+    this.doorTraps?.dispose();
     this.pepper?.dispose();
     this.tearGasEffect?.dispose();
     this.tearGas.dispose();
@@ -1068,6 +1221,7 @@ function start(mapId?: string, seed?: number, mode?: GameMode, reinforcements?: 
         data.perception,
         loadedStages,
         data.squad,
+        data.suspectAlert,
         (nextStageId) => start(nextStageId),
         () => start(),
         (nextSeed) => start(targetId, nextSeed ?? randomSeed()),
