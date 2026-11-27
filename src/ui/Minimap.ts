@@ -8,6 +8,10 @@ const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
 const DEFAULT_DOOR_WIDTH = 1.2;
 const MINIMAP_SIZE = 180;
+/** 左上ミニマップ（非拡大時）に表示する自機周辺の範囲（m、一辺） */
+const LOCAL_VIEW_SPAN_M = 30;
+/** 自機周辺表示用の静的レイヤ（マップ全体を拡大描画）の一辺上限（デバイス px） */
+const LOCAL_STATIC_MAX_PX = 4096;
 /** 部屋 floorY を同一階とみなす許容差(m)（ブリーフィングの旧タブ生成と同値） */
 const FLOOR_GROUP_TOLERANCE = 1.5;
 /** 階切替のヒステリシス幅(m)。隣接階の中点を この半分だけ越えるまで現在階を保持する */
@@ -229,6 +233,31 @@ function computePlanTransform(map: MapData, cw: number, ch: number, pad: number)
     scale,
     toX: (wx: number): number => offsetX + (wx - bounds.minX) * scale,
     toY: (wz: number): number => offsetY + (wz - bounds.minZ) * scale,
+  };
+}
+
+/** 自機中心のローカル表示用の座標変換（scale 固定、(cx, cz) をビュー中央へ置く）。 */
+function computeCenteredTransform(cw: number, ch: number, scale: number, cx: number, cz: number): PlanTransform {
+  return {
+    cw,
+    ch,
+    scale,
+    toX: (wx: number): number => cw / 2 + (wx - cx) * scale,
+    toY: (wz: number): number => ch / 2 + (wz - cz) * scale,
+  };
+}
+
+/** マップ全体を指定 scale で描くための静的レイヤ用座標変換（左上に pad の余白）。 */
+function computeFullScaleTransform(map: MapData, scale: number, pad: number): PlanTransform {
+  const bounds = computeMapBounds(map);
+  const cw = Math.ceil(Math.max(0.1, bounds.maxX - bounds.minX) * scale + pad * 2);
+  const ch = Math.ceil(Math.max(0.1, bounds.maxZ - bounds.minZ) * scale + pad * 2);
+  return {
+    cw,
+    ch,
+    scale,
+    toX: (wx: number): number => pad + (wx - bounds.minX) * scale,
+    toY: (wz: number): number => pad + (wz - bounds.minZ) * scale,
   };
 }
 
@@ -762,7 +791,7 @@ export function drawFloorPlan(
 /**
  * 画面左上のリアルタイム戦術ミニマップ。
  * プレイヤー位置・向き、ドアの開閉/施錠状態のみを表示し、未発見の敵・民間人は表示しない。
- * プレイ中は M キーで「左上ミニマップ（名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
+ * プレイ中は M キーで「左上ミニマップ（自機周辺のみ・名前ラベルなし）」⇔「画面一杯の半透明全体マップ（ラベルあり）」を切替。
  */
 /** ミニマップの再描画間隔（秒）。約 15 Hz */
 const REDRAW_INTERVAL = 1 / 15;
@@ -775,6 +804,7 @@ export class Minimap {
   private staticCtx: CanvasRenderingContext2D | null = null;
   private staticKey = '';
   private staticXf: PlanTransform | null = null;
+  private staticDpr = 1;
   private readonly doorStates = new Map<string, FloorPlanDoorState>();
   private readonly playerState: FloorPlanPlayerState = { x: 0, z: 0, yawRad: 0 };
   private currentDpr = 1;
@@ -901,23 +931,38 @@ export class Minimap {
     this.render();
   }
 
+  /** 左上ミニマップの縮尺（px/m）。自機周辺 LOCAL_VIEW_SPAN_M 四方を表示する */
+  private localScale(): number {
+    return Math.min(this.viewW, this.viewH) / LOCAL_VIEW_SPAN_M;
+  }
+
+  /**
+   * 静的レイヤ（間取り）をオフスクリーンに描いてキャッシュする。
+   * 拡大時はビューに全体をフィット、非拡大時はマップ全体を固定縮尺で描き、描画時に自機周辺を切り出す。
+   */
   private ensureStaticLayer(floorY: number): PlanTransform {
     const pad = this.expanded ? 24 : 10;
     const key = `${floorY}|${this.viewW}|${this.viewH}|${this.expanded ? 1 : 0}|${getLocale()}`;
     if (key === this.staticKey && this.staticXf) return this.staticXf;
 
-    const xf = computePlanTransform(this.map, this.viewW, this.viewH, pad);
+    const xf = this.expanded
+      ? computePlanTransform(this.map, this.viewW, this.viewH, pad)
+      : computeFullScaleTransform(this.map, this.localScale(), pad);
     this.staticXf = xf;
     this.staticCanvas ??= document.createElement('canvas');
     this.staticCtx ??= this.staticCanvas.getContext('2d');
-    this.staticCanvas.width = this.canvas.width;
-    this.staticCanvas.height = this.canvas.height;
+    const sdpr = this.expanded
+      ? this.currentDpr
+      : Math.min(this.currentDpr, LOCAL_STATIC_MAX_PX / Math.max(xf.cw, xf.ch));
+    this.staticDpr = sdpr;
+    this.staticCanvas.width = Math.max(1, Math.round(xf.cw * sdpr));
+    this.staticCanvas.height = Math.max(1, Math.round(xf.ch * sdpr));
     if (this.staticCtx) {
       this.staticCtx.save();
-      this.staticCtx.setTransform(this.currentDpr, 0, 0, this.currentDpr, 0, 0);
+      this.staticCtx.setTransform(sdpr, 0, 0, sdpr, 0, 0);
       drawStaticFloorPlan(this.staticCtx, this.map, xf, {
-        width: this.viewW,
-        height: this.viewH,
+        width: xf.cw,
+        height: xf.ch,
         padding: pad,
         showRoomLabels: this.expanded,
         showSpawn: false,
@@ -953,17 +998,40 @@ export class Minimap {
     }
     const floor = resolveActiveFloor(this.player.position.y, this.floorLevels, this.activeFloorY);
     this.activeFloorY = floor.floorY;
-    const xf = this.ensureStaticLayer(floor.floorY);
+    const staticXf = this.ensureStaticLayer(floor.floorY);
     const pad = this.expanded ? 24 : 10;
     this.playerState.x = this.player.position.x;
     this.playerState.z = this.player.position.z;
     this.playerState.yawRad = this.player.yawRad;
+    // 非拡大時は自機を中心に据えた変換で動的レイヤを描く
+    const xf = this.expanded
+      ? staticXf
+      : computeCenteredTransform(this.viewW, this.viewH, this.localScale(), this.playerState.x, this.playerState.z);
 
     ctx.save();
     ctx.setTransform(this.currentDpr, 0, 0, this.currentDpr, 0, 0);
     if (this.staticCanvas && this.staticCtx && typeof ctx.drawImage === 'function') {
       ctx.clearRect(0, 0, this.viewW, this.viewH);
-      ctx.drawImage(this.staticCanvas, 0, 0, this.viewW, this.viewH);
+      if (this.expanded) {
+        ctx.drawImage(this.staticCanvas, 0, 0, this.viewW, this.viewH);
+      } else {
+        // 静的レイヤから自機周辺のビュー分だけを切り出す（範囲外はクリップして描画位置を補正）
+        const sd = this.staticDpr;
+        let sx = (staticXf.toX(this.playerState.x) - this.viewW / 2) * sd;
+        let sy = (staticXf.toY(this.playerState.z) - this.viewH / 2) * sd;
+        let sw = this.viewW * sd;
+        let sh = this.viewH * sd;
+        let dx = 0;
+        let dy = 0;
+        const k = 1 / sd;
+        if (sx < 0) { dx = -sx * k; sw += sx; sx = 0; }
+        if (sy < 0) { dy = -sy * k; sh += sy; sy = 0; }
+        sw = Math.min(sw, this.staticCanvas.width - sx);
+        sh = Math.min(sh, this.staticCanvas.height - sy);
+        if (sw > 0 && sh > 0) {
+          ctx.drawImage(this.staticCanvas, sx, sy, sw, sh, dx, dy, sw * k, sh * k);
+        }
+      }
     } else {
       drawStaticFloorPlan(ctx, this.map, xf, {
         width: this.viewW,
