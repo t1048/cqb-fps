@@ -12,6 +12,7 @@ import {
 } from '../../ai/EngageBehavior';
 import { HumanoidBody } from '../../ai/HumanoidBody';
 import { shieldBlocks } from '../../ai/ShieldGuard';
+import type { RestrainTarget } from '../../ai/restrain';
 import { blockedAtFiltered } from '../../ai/SquadRoute';
 import {
   computeCornerLean,
@@ -89,6 +90,10 @@ import {
   PIE_STEP_HOLD_SEC,
   PIE_TIMEOUT_SEC,
   PORTAL_BLOCK_SEC,
+  RESTRAIN_COVER_DIST,
+  RESTRAIN_GIVEUP_SEC,
+  RESTRAIN_REACH,
+  RESTRAIN_REACT_PENALTY,
   ROUTE_BREACH_WAIT_SEC,
   ROUTE_CHECK_SEC,
   SKIP_DOOR_TTL_SEC,
@@ -180,6 +185,9 @@ export class SwatHunter implements HitTarget {
   suppressCd = 0;
   readonly combat: CombatParams;
   disarmDoor: Door | null = null;
+  /** 投降した味方容疑者の拘束: 対象と役割（cuff = 手錠をかける / cover = 見張り） */
+  restrainTarget: RestrainTarget | null = null;
+  restrainRole: 'cuff' | 'cover' = 'cuff';
   disarmSec = 0;
   readonly checkedTraps = new Set<string>();
   private readonly skipDoors = new Set<string>();
@@ -524,6 +532,9 @@ export class SwatHunter implements HitTarget {
       case 'disarm':
         this.updateDisarm(dt);
         break;
+      case 'restrain':
+        this.updateRestrain(dt);
+        break;
       case 'sweep':
         this.updateSweep(dt);
         break;
@@ -867,7 +878,10 @@ export class SwatHunter implements HitTarget {
       }
       this.acquiring = true;
       this.spotTimer += dt;
-      if (this.spotTimer < this.team.reactionSec) return;
+      // 手錠をかけている最中は対象に正対して注意が割かれ、気付くのが遅れる
+      // 手錠をかけている最中は対象に正対して注意が割かれ、気付くのが遅れる
+      const react = this.team.reactionSec + (this.state === 'restrain' && this.restrainRole === 'cuff' ? RESTRAIN_REACT_PENALTY : 0);
+      if (this.spotTimer < react) return;
       this.spotTimer = 0;
       this.known = { x: threat.x, y: p.position.y, z: threat.z };
       this.team.onContact(this, this.known);
@@ -1181,6 +1195,67 @@ export class SwatHunter implements HitTarget {
       this.noteBlocked();
       this.noteEntryBlocked(route.entryId);
       if (door) this.tryBeginBreach(route.dest, door.id);
+    }
+  }
+
+  /** 投降した味方容疑者の拘束に就く（cuff = 手錠をかける / cover = 見張る） */
+  beginRestrain(target: RestrainTarget, role: 'cuff' | 'cover'): void {
+    this.restrainTarget = target;
+    this.restrainRole = role;
+    this.huntTarget = null;
+    this.setState('restrain');
+  }
+
+  endRestrain(): void {
+    this.restrainTarget = null;
+    this.body.setPose('stand');
+    if (this.state === 'restrain') this.setState('sweep');
+  }
+
+  /** 至近距離の脅威（偽装投降の反撃など）へ即座に交戦する */
+  engageFrom(pos: Vec3): void {
+    if (!this.alive) return;
+    this.known = { x: pos.x, y: pos.y, z: pos.z };
+    this.body.setPose('stand');
+    this.body.faceToward(pos.x, pos.z);
+    this.team.shareSighting(this.known);
+    this.setState('engage');
+  }
+
+  private updateRestrain(dt: number): void {
+    const t = this.restrainTarget;
+    if (!t || !t.alive || !t.surrendered || this.stateTime > RESTRAIN_GIVEUP_SEC) {
+      this.endRestrain();
+      return;
+    }
+    const dx = t.px - this.body.px;
+    const dz = t.pz - this.body.pz;
+    const dist = Math.hypot(dx, dz);
+    const goal = { x: t.px, y: t.footY, z: t.pz };
+    const want = this.restrainRole === 'cuff' ? RESTRAIN_REACH - 0.25 : RESTRAIN_COVER_DIST;
+    if (dist > want || Math.abs(t.footY - this.body.footY) > 0.75) {
+      if (this.checkBlockedRoute(goal, dt) === true) return;
+      const res = this.nav.step(goal, this.combat.moveSpeed * HUNT_SPEED, dt, {
+        canOpenDoors: true,
+        canUseStairs: true,
+        faceTravel: true,
+        arriveDist: want,
+        smooth: NAV_SMOOTH,
+      });
+      if (res === 'blocked') {
+        this.noteBlocked();
+        this.endRestrain();
+      }
+      return;
+    }
+    if (this.restrainRole === 'cuff') {
+      // 対象に正対してかがみ込み、手錠をかける（進行は SwatRestraint が数える）
+      this.body.faceToward(t.px, t.pz, 5 * dt);
+      this.body.setPose('crouch');
+    } else {
+      // 援護役: 対象から外側（部屋の入口側）を向いて見張る
+      const yaw = Math.atan2(dx, dz);
+      this.scanAround(dt, yaw);
     }
   }
 

@@ -61,6 +61,7 @@ import {
 } from './swat/swatHelpers';
 import { SwatHunter } from './swat/SwatHunter';
 import { SwatObstacles } from './swat/swatObstacles';
+import { SwatRestraint } from './swat/swatRestraint';
 import { SwatRoutePlanner, type RoutePlan } from './swat/swatRoutePlanner';
 import { SwatTacticsCoordinator } from './swat/swatTacticsCoordinator';
 import {
@@ -183,6 +184,8 @@ export class SwatTeam implements SwatTeamHost {
   private readonly obstacles: SwatObstacles;
   private readonly tactics: SwatTacticsCoordinator;
   private readonly routePlanner: SwatRoutePlanner;
+  private readonly restraint: SwatRestraint;
+  private readonly downListeners: ((pos: Vec3, byPlayer: boolean) => void)[] = [];
 
   constructor(private readonly d: SwatTeamDeps) {
     this.root.name = 'swatTeam';
@@ -206,6 +209,12 @@ export class SwatTeam implements SwatTeamHost {
     };
     this.combatCtx = ctx;
     this.routePlanner = new SwatRoutePlanner(d);
+    this.restraint = new SwatRestraint({
+      d,
+      hunters: this.hunters,
+      radio: (h, text, voice, force) => this.radio(h, text, voice, force),
+      queueRadio: (h, text, voice) => this.queueRadio(h, text, voice),
+    });
 
     const self = this;
     this.coverage = new SwatCoverage({
@@ -347,6 +356,7 @@ export class SwatTeam implements SwatTeamHost {
           d.weapons.removeTarget(h);
           this.kills++;
           this.tactics.onManDown(h);
+          this.notifyDown(h, true);
         } else {
           this.abortStacking();
           this.shareSighting(from);
@@ -391,6 +401,20 @@ export class SwatTeam implements SwatTeamHost {
         }
       }),
     );
+  }
+
+  /** 隊員がダウンした通知（味方容疑者の士気など）。戻り値は購読解除 */
+  onOfficerDown(cb: (pos: Vec3, byPlayer: boolean) => void): () => void {
+    this.downListeners.push(cb);
+    return () => {
+      const i = this.downListeners.indexOf(cb);
+      if (i >= 0) this.downListeners.splice(i, 1);
+    };
+  }
+
+  private notifyDown(h: SwatHunter, byPlayer: boolean): void {
+    const pos = { x: h.body.px, y: h.body.footY, z: h.body.pz };
+    for (const cb of [...this.downListeners]) cb(pos, byPlayer);
   }
 
   /** 隊員をツーマン／スリーマンセルに組み、組ごとにコールサインを振る */
@@ -458,6 +482,16 @@ export class SwatTeam implements SwatTeamHost {
 
   get total(): number {
     return this.hunters.length;
+  }
+
+  /** 投降した味方容疑者の拘束（統計・テスト用） */
+  get restraintStats(): { cuffed: number; betrayed: number; active: number } {
+    return { cuffed: this.restraint.cuffed, betrayed: this.restraint.betrayed, active: this.restraint.activeJobs };
+  }
+
+  /** 外壁入口（突入口になるドア）の id 一覧 */
+  portalIds(): string[] {
+    return this.entry.portals().map((p) => p.id);
   }
 
   get hasStarted(): boolean {
@@ -575,6 +609,7 @@ export class SwatTeam implements SwatTeamHost {
       this.entry.updateEntryCoordination(dt);
       this.entry.updateEntryGroups(dt);
       this.tactics.updateAntiCamping(dt);
+      this.restraint.update(dt);
     }
     for (const h of this.hunters) h.update(dt);
     this.tactics.updatePincerRefresh();

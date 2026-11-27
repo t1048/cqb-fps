@@ -369,6 +369,25 @@ export const CUFF: readonly RadioLine[] = [
   ['容疑者を拘束した。武器も押さえた。', 'Suspect secured. We have the weapon.'],
 ];
 
+/** 投降した容疑者の拘束に向かう（傍受される。拘束役が無防備になる隙のヒント） */
+export const RESTRAIN_GO: readonly RadioLine[] = [
+  ['容疑者が投降した。拘束に向かう、援護しろ。', 'Suspect surrendering, moving to restrain. Cover me.'],
+  ['投降を確認。手錠をかけに行く。周囲を見ていてくれ。', 'He is giving up. Moving to restrain him. Watch my back.'],
+  ['一人投降した。拘束する、援護を頼む。', 'One suspect on his knees. Moving to restrain. Cover.'],
+];
+
+/** 偽装投降に撃たれた */
+export const RESTRAIN_FAKE: readonly RadioLine[] = [
+  ['投降は偽装だ！武器を持っている！', 'It was a fake surrender! He has a weapon!'],
+  ['撃たれた！偽装投降だ！', 'Shots! He faked it!'],
+];
+
+/** 拘束完了（容疑者モード）。CUFF と別プール: 武器の押収は言わない */
+export const RESTRAIN_DONE: readonly RadioLine[] = [
+  ['拘束した。次へ進む。', 'Suspect cuffed. Moving on.'],
+  ['容疑者を拘束。クリア、続行する。', 'He is in cuffs. Continuing the sweep.'],
+];
+
 export const CIVILIAN_SECURE: readonly RadioLine[] = [
   ['民間人を確保した。', 'Civilian secure.'],
   ['民間人は安全だ。', 'Civilian is safe.'],

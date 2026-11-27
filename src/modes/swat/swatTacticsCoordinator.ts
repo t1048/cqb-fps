@@ -567,7 +567,8 @@ export class SwatTacticsCoordinator {
         h.state === 'stack' ||
         h.state === 'pie' ||
         h.state === 'entry' ||
-        h.state === 'disarm'
+        h.state === 'disarm' ||
+        h.state === 'restrain'
       ) continue;
       if (h.huntingFlank) continue;
       if (h.leader && h.leader.alive) continue;
@@ -961,6 +962,7 @@ export class SwatTacticsCoordinator {
         h.state === 'stack' ||
         h.state === 'pie' ||
         h.state === 'entry' ||
+        h.state === 'restrain' ||
         h.state === 'rush'
       ) continue;
       if (h.leader && h.leader.alive) continue; // 組員はリーダーに追従する

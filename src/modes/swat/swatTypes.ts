@@ -3,6 +3,7 @@ import type { GameEventBus } from '../../core/events';
 import type { AllyTarget } from '../../ai/EngageBehavior';
 import type { HumanoidBody } from '../../ai/HumanoidBody';
 import type { StackSlot } from '../../ai/stackSlots';
+import type { RestrainTarget } from '../../ai/restrain';
 import type { CqbPortal, EntryMode, EntryPlan, EntrySlotRank, FriendlyPos } from '../../ai/cqbEntry';
 import {
   BASE_SHIELD_COMBAT,
@@ -175,6 +176,19 @@ export const STALL_LEVEL_SEC = [8, 14, 20, 28] as const;
 /** 交戦・ブリーチなどで進行中とみなす間、無進捗秒をこの値で頭打ちにする */
 export const STALL_BUSY_CAP_SEC = 4;
 
+/**
+ * 投降した味方容疑者の拘束（容疑者モード）: 手錠をかける隊員は無防備になる。
+ * 接触（手錠を始める）距離・援護役が離れて見張る距離・拘束中の反応遅れ(s)・拘束役を割り当てる最大距離(m)
+ * 偽装投降の反撃が起きる進行度の範囲（拘束時間に対する割合）
+ */
+export const RESTRAIN_REACH = 1.3;
+export const RESTRAIN_COVER_DIST = 3.0;
+export const RESTRAIN_REACT_PENALTY = 0.3;
+export const RESTRAIN_MAX_DIST = 45;
+export const RESTRAIN_FAKE_AT_MIN = 0.35;
+export const RESTRAIN_FAKE_AT_SPAN = 0.45;
+export const RESTRAIN_GIVEUP_SEC = 45;
+
 export const NAMES = ['アルファ', 'ブラボー', 'チャーリー', 'デルタ', 'エコー', 'フォックス'];
 
 export const CAMP_GAS_THRESHOLD_SEC = 20;
@@ -213,6 +227,7 @@ export type HunterState =
   | 'engage'
   | 'rush'
   | 'disarm'
+  | 'restrain'
   | 'down';
 
 /** 同じ入口に積んだ隊員の突入グループ（スタック枠・突入順・突入計画を共有） */
@@ -270,6 +285,8 @@ export interface SwatTeamDeps {
   textures?: TextureLibrary;
   /** 味方容疑者 NPC。未指定ならプレイヤーだけを狙う */
   suspects?: () => readonly AllyTarget[];
+  /** 投降・拘束済みの味方容疑者（SWAT が手錠をかけに行く）。未指定なら拘束しない */
+  restrainables?: () => readonly RestrainTarget[];
   /** 人質の盾が今有効か（人質が暴れている間は無効）。未指定なら常に有効 */
   shieldActive?: () => boolean;
   /** ペッパーボールの命中（プレイヤー本人 / 抱えた人質） */

@@ -7,7 +7,7 @@ import type { HitTarget, WeaponSystem } from '../../../src/weapons/WeaponSystem'
 import { Flashbang } from '../../../src/weapons/Flashbang';
 import { FlashOverlay } from '../../../src/ui/FlashOverlay';
 import { Subtitle } from '../../../src/ui/Subtitle';
-import { SwatTeam, type SwatSpawn } from '../../../src/modes/SwatTeam';
+import { SwatTeam, type SwatSpawn, type SwatTeamDeps } from '../../../src/modes/SwatTeam';
 import type { AABB, Collider } from '../../../src/world/WorldBuilder';
 import { installDomShim, restoreDomShim, type DomShimHandle } from './domShim';
 import { buildHeadlessWorld, loadWeaponsData, type HeadlessWorld } from './headlessWorld';
@@ -223,6 +223,9 @@ export function createSwatHarness(opts: {
   tearGas?: TearGasInstance;
   tearGasFactory?: (colliders: readonly Collider[], bus: GameEventBus, ceilingHeight: number) => TearGasInstance;
   urlSearch?: string;
+  /** 味方容疑者（SWAT の射撃対象）と、拘束対象（投降・拘束済み） */
+  suspects?: SwatTeamDeps['suspects'];
+  restrainables?: SwatTeamDeps['restrainables'];
 }): SwatHarness {
   const dom = installDomShim(opts.urlSearch ?? '');
   const bus = createGameEventBus();
@@ -270,6 +273,8 @@ export function createSwatHarness(opts: {
     reinforcements: opts.reinforcements,
     flashOverlay: overlay,
     tearGas,
+    suspects: opts.suspects,
+    restrainables: opts.restrainables,
   };
 
   const team = new SwatTeam(deps);

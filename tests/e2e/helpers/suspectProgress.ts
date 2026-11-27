@@ -27,6 +27,7 @@ export const DT = 0.05;
 export const STALL_WINDOW_SEC = 20;
 
 const TRACE = !!process.env.PROGRESS_TRACE;
+const LOCK_EXTERIOR = process.env.PROGRESS_LOCK_EXTERIOR !== '0';
 
 function doorsOfRoom(map: MapData, r: RoomDef): string[] {
   const fy = r.floorY ?? 0;
@@ -101,6 +102,7 @@ export interface RunResult {
   reachSec: number | null;
   breached: number;
   lockedAround: number;
+  lockedExterior: number;
   /** 0 = 封鎖・窓なし・階段室でない理想の籠城部屋、大きいほど条件が緩い */
   tier: number;
   longestStall: number;
@@ -163,6 +165,17 @@ export function runSuspectProgress(tpl: Tpl, seed: number): { result: RunResult;
       lockedAround++;
     }
   }
+  // 準備時間にプレイヤーが外壁の入口もすべて施錠したケース（突入口のブリーチが要る）
+  const exteriorIds = new Set(h.team.portalIds());
+  let lockedExterior = 0;
+  if (LOCK_EXTERIOR) {
+    for (const door of h.hw.doorSystem.doors) {
+      if (exteriorIds.has(door.id) && !door.locked) {
+        door.locked = true;
+        lockedExterior++;
+      }
+    }
+  }
   h.team.beginAssault();
   let seeSec: number | null = null;
   let reachSec: number | null = null;
@@ -223,6 +236,7 @@ export function runSuspectProgress(tpl: Tpl, seed: number): { result: RunResult;
       reachSec,
       breached: h.recorder.count('doorBreached'),
       lockedAround,
+      lockedExterior,
       tier,
       longestStall,
       stallAt,
@@ -256,7 +270,7 @@ export function checkSuspectProgress(tpl: Tpl, seed: number, variant = Number(pr
     const r = run.result;
     dispose = run.dispose;
     console.log(
-      `[progress] ${tpl}#${seed} floors=${r.floors} tier=${r.tier} locked=${r.lockedAround} breached=${r.breached} ` +
+      `[progress] ${tpl}#${seed} floors=${r.floors} tier=${r.tier} locked=${r.lockedAround}+${r.lockedExterior}ext breached=${r.breached} ` +
         `see=${r.seeSec?.toFixed(1) ?? 'NONE'}s reach=${r.reachSec?.toFixed(1) ?? 'NONE'}s ` +
         `stall=${r.longestStall.toFixed(1)}s@${r.stallAt.toFixed(0)} cleared=${r.roomsCleared}/${r.roomsTotal} room=${r.roomId}`,
     );

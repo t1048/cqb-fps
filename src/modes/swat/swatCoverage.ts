@@ -305,6 +305,7 @@ export class SwatCoverage {
           x.state === 'entry' ||
           x.state === 'stack' ||
           x.state === 'disarm' ||
+          x.state === 'restrain' ||
           x.state === 'staging' ||
           (x.leader && x.leader.alive)
         ) continue;
@@ -400,7 +401,7 @@ export class SwatCoverage {
     for (const x of this.host.hunters) {
       if (!x.alive) continue;
       // 交戦・ブリーチ・突入手順の最中は進行中とみなす（それぞれ固有のタイムアウトを持つ）
-      if (x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || x.state === 'disarm' || x.state === 'stack' || x.state === 'pie' || x.state === 'entry') {
+      if (x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || x.state === 'disarm' || x.state === 'restrain' || x.state === 'stack' || x.state === 'pie' || x.state === 'entry') {
         this.stallSec = Math.min(this.stallSec, STALL_BUSY_CAP_SEC);
         return;
       }
