@@ -126,6 +126,22 @@ export class SwatObstacles {
     return !!this.traps?.isTrapped(door.id);
   }
 
+  /** 隊員がドアの手前側から、ドア面（爆薬・LED の付く面）を視界に入れているか */
+  private canSeeTrapFace(h: SwatHunter, door: Door): boolean {
+    const side = (h.body.px - door.centerX) * door.normalX + (h.body.pz - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
+    const dx = door.centerX - h.body.px;
+    const dz = door.centerZ - h.body.pz;
+    const d = Math.hypot(dx, dz);
+    if (d > 0.6 && (dx * h.headX + dz * h.headZ) / d < 0.5) return false; // 視線がドアを向いていない
+    const from = { x: h.body.px, y: h.body.footY + 1.5, z: h.body.pz };
+    const face = {
+      x: door.centerX + door.normalX * side * 0.12,
+      y: door.sillY + 0.95,
+      z: door.centerZ + door.normalZ * side * 0.12,
+    };
+    return hasLineOfSight(this.host.d.colliders, from, face);
+  }
+
   /** 隊員の近くの閉じた仕掛けドアに気付くか判定。気付けば解除を始める */
   checkTraps(h: SwatHunter): void {
     const traps = this.traps;
@@ -135,6 +151,8 @@ export class SwatObstacles {
       if (!door || door.angle > 2) continue;
       if (Math.abs(door.sillY - h.body.footY) > 0.75) continue;
       if (Math.hypot(door.centerX - h.body.px, door.centerZ - h.body.pz) > TRAP_SPOT_DIST) continue;
+      // 壁や扉の向こう側からは見えない。ドアの手前側で、ドアの方を向いているときだけ気付ける
+      if (!this.canSeeTrapFace(h, door)) continue;
       const held = this.heldDoors.get(id);
       if (held) {
         if (held.by && held.by.alive && held.by.state === 'disarm') continue;
