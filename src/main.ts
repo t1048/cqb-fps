@@ -286,7 +286,7 @@ class App {
     this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.flashOverlay = new FlashOverlay(document.body);
-    this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight);
+    this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight, map.rooms);
     this.scene.add(this.tearGas.root);
     this.flashbang = new Flashbang(this.player, this.input, this.world.colliders, weaponDefs, this.bus, this.weapons, this.flashOverlay, map.ceilingHeight, this.tearGas);
     this.scene.add(this.flashbang.root);

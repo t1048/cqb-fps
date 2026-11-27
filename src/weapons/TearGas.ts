@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
-import type { Vec3 } from '../core/types';
+import type { RoomDef, Vec3 } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { Collider } from '../world/WorldBuilder';
 import { collidersNear } from '../world/ColliderIndex';
@@ -26,10 +26,27 @@ const GAS_CLOUD_FADE_OUT = 3.0;
 const GAS_VERTICAL_BAND = 2.4;
 const CENTER_BASE_OPACITY = 0.28;
 const RING_BASE_OPACITY = 0.2;
+/** 部屋に投げ込まれたガスが部屋いっぱいに広がるまでの秒数（分隊の「満ちるまで待つ」時間に合わせる） */
+export const GAS_FILL_SEC = 4.5;
+/** 部屋いっぱいに広がるときの最大半径(m)。これより広い部屋は一定の広さまでしか満ちない */
+export const GAS_FILL_MAX_RADIUS = 9;
+/** 起爆直後の広がり半径(m) */
+const GAS_START_RADIUS = 1.6;
+
+/** ガスが満ちる部屋の矩形（XZ） */
+export interface GasRoomRect {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
 
 export interface GasCloudInfo {
   pos: Vec3;
+  /** 現在の広がり半径。部屋内のガスは時間とともに fill 半径まで増える */
   radius: number;
+  /** 起爆した部屋（屋内）。ある場合は部屋の中を家具に遮られず満たす */
+  room?: GasRoomRect;
   remainingSec: number;
   durationSec: number;
   intensity: number;
@@ -53,11 +70,22 @@ interface PuffSpec {
 }
 
 interface GasCloud extends GasCloudInfo {
+  /** 部屋いっぱいに広がったときの半径（部屋なしは radius と同じ） */
+  fillRadius: number;
   elapsedSec: number;
   group: THREE.Group;
   centerMat: THREE.MeshBasicMaterial;
   ringMat: THREE.MeshBasicMaterial;
   puffs: PuffSpec[];
+}
+
+function pointInRoom(room: GasRoomRect, p: Vec3): boolean {
+  return p.x >= room.minX && p.x <= room.maxX && p.z >= room.minZ && p.z <= room.maxZ;
+}
+
+/** 部屋の内側は現在の広がり半径、部屋の外へ漏れる分は従来の半径（開いたドア越し・壁で遮蔽）に抑える */
+function roomRadius(c: GasCloudInfo, p: Vec3): number {
+  return c.room && pointInRoom(c.room, p) ? c.radius : Math.min(c.radius, GAS_CLOUD_RADIUS);
 }
 
 /**
@@ -77,12 +105,20 @@ export function computeGasDensityAt(
     const dy = Math.abs(point.y - c.pos.y);
     if (dy > GAS_VERTICAL_BAND) continue;
     const dist = Math.hypot(point.x - c.pos.x, point.z - c.pos.z);
-    if (dist > c.radius) continue;
+    const r = c.room ? roomRadius(c, point) : c.radius;
+    if (dist > r) continue;
+    if (c.room && pointInRoom(c.room, point)) {
+      // 部屋の中は家具・遮蔽物に関係なくガスが回る（壁・ドアで区切られた部屋が満たされる）
+      const inRoom = 1 - 0.35 * (dist / Math.max(c.radius, 0.1));
+      const v = Math.max(0, Math.min(1, c.intensity * inRoom));
+      if (v > peak) peak = v;
+      continue;
+    }
     if (colliders && colliders.length > 0) {
       const origin: Vec3 = { x: c.pos.x, y: c.pos.y + 0.35, z: c.pos.z };
       if (!hasLineOfSight(colliders, origin, point)) continue;
     }
-    const radial = 1 - 0.55 * (dist / c.radius);
+    const radial = 1 - 0.55 * (dist / r);
     const val = Math.max(0, Math.min(1, c.intensity * radial));
     if (val > peak) peak = val;
   }
@@ -108,6 +144,7 @@ export class TearGas {
     private readonly colliders: readonly Collider[],
     private readonly bus: GameEventBus,
     private readonly ceilingHeight: number,
+    private readonly rooms: readonly RoomDef[] = [],
   ) {
     this.root.name = 'tearGas';
   }
@@ -173,9 +210,11 @@ export class TearGas {
       const fadeIn = Math.min(1, cl.elapsedSec / GAS_CLOUD_FADE_IN);
       const fadeOut = Math.min(1, cl.remainingSec / GAS_CLOUD_FADE_OUT);
       cl.intensity = Math.max(0, Math.min(1, fadeIn * fadeOut));
+      const spread = Math.min(1, cl.elapsedSec / GAS_FILL_SEC);
+      if (cl.room) cl.radius = GAS_START_RADIUS + (cl.fillRadius - GAS_START_RADIUS) * (1 - (1 - spread) * (1 - spread));
       cl.centerMat.opacity = CENTER_BASE_OPACITY * cl.intensity;
       cl.ringMat.opacity = RING_BASE_OPACITY * cl.intensity;
-      const grow = 0.45 + 0.55 * fadeIn;
+      const grow = cl.room ? 0.3 + 0.7 * (1 - (1 - spread) * (1 - spread)) : 0.45 + 0.55 * fadeIn;
       for (let j = 0; j < cl.puffs.length; j++) {
         const pf = cl.puffs[j]!;
         const driftX = Math.sin(cl.elapsedSec * pf.speed + pf.phase) * 0.28;
@@ -363,17 +402,25 @@ export class TearGas {
       depthWrite: false,
     });
 
+    const roomInfo = this.findRoom(pos);
     const puffs: PuffSpec[] = [];
-    const puffCount = 8;
+    const puffCount = roomInfo ? 16 : 8;
     for (let i = 0; i < puffCount; i++) {
       const ang = (i / puffCount) * Math.PI * 2;
-      const ring = i === 0 ? 0 : GAS_CLOUD_RADIUS * (0.28 + (i % 3) * 0.16);
-      const baseOffset = new THREE.Vector3(
-        Math.cos(ang) * ring,
-        0.55 + (i % 3) * 0.32,
-        Math.sin(ang) * ring,
-      );
-      const baseScale = i === 0 ? 1.85 : 1.35 + (i % 2) * 0.35;
+      let ring = i === 0 ? 0 : GAS_CLOUD_RADIUS * (0.28 + (i % 3) * 0.16);
+      let ox = Math.cos(ang) * ring;
+      let oz = Math.sin(ang) * ring;
+      if (roomInfo && i > 0) {
+        // 部屋の矩形いっぱいに散らす（部屋の外へはみ出さないよう clamp）
+        ring = roomInfo.fillRadius * (0.25 + (i % 4) * 0.2);
+        ox = Math.cos(ang) * ring;
+        oz = Math.sin(ang) * ring;
+        const r = roomInfo.room;
+        ox = Math.max(r.minX - pos.x + 0.4, Math.min(r.maxX - pos.x - 0.4, ox));
+        oz = Math.max(r.minZ - pos.z + 0.4, Math.min(r.maxZ - pos.z - 0.4, oz));
+      }
+      const baseOffset = new THREE.Vector3(ox, 0.55 + (i % 3) * 0.32, oz);
+      const baseScale = roomInfo ? (i === 0 ? 2.2 : 1.8 + (i % 2) * 0.4) : i === 0 ? 1.85 : 1.35 + (i % 2) * 0.35;
       const mesh = new THREE.Mesh(this.puffGeo, i === 0 ? centerMat : ringMat);
       mesh.position.copy(baseOffset).multiplyScalar(0.45);
       mesh.scale.setScalar(baseScale * 0.45);
@@ -389,9 +436,12 @@ export class TearGas {
     }
 
     this.root.add(group);
+    const fillRadius = roomInfo ? roomInfo.fillRadius : GAS_CLOUD_RADIUS;
     this.clouds.push({
       pos,
-      radius: GAS_CLOUD_RADIUS,
+      ...(roomInfo ? { room: roomInfo.room } : {}),
+      fillRadius,
+      radius: roomInfo ? GAS_START_RADIUS : GAS_CLOUD_RADIUS,
       remainingSec: GAS_CLOUD_DURATION,
       durationSec: GAS_CLOUD_DURATION,
       elapsedSec: 0,
@@ -402,7 +452,27 @@ export class TearGas {
       puffs,
     });
 
-    this.bus.emit('gasDetonated', { pos, radius: GAS_CLOUD_RADIUS });
+    this.bus.emit('gasDetonated', { pos, radius: fillRadius });
+  }
+
+  /** 起爆点を含む屋内の部屋（同じ階・最小面積）と、最も遠い角までの広がり半径（上限あり）。なければ null */
+  private findRoom(pos: Vec3): { room: GasRoomRect; fillRadius: number } | null {
+    let best: RoomDef | null = null;
+    for (const r of this.rooms) {
+      if (r.outdoor) continue;
+      if (Math.abs((r.floorY ?? 0) - pos.y) > 1.6) continue;
+      if (Math.abs(pos.x - r.x) > r.width / 2 || Math.abs(pos.z - r.z) > r.depth / 2) continue;
+      if (!best || r.width * r.depth < best.width * best.depth) best = r;
+    }
+    if (!best) return null;
+    const room: GasRoomRect = {
+      minX: best.x - best.width / 2,
+      maxX: best.x + best.width / 2,
+      minZ: best.z - best.depth / 2,
+      maxZ: best.z + best.depth / 2,
+    };
+    const far = Math.hypot(Math.max(pos.x - room.minX, room.maxX - pos.x), Math.max(pos.z - room.minZ, room.maxZ - pos.z));
+    return { room, fillRadius: Math.min(GAS_FILL_MAX_RADIUS, Math.max(GAS_CLOUD_RADIUS, far + 0.3)) };
   }
 
   private removeCloud(cl: GasCloud): void {
