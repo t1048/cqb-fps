@@ -117,18 +117,30 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   };
 }
 
-/** 容疑者が使える武器（faction='suspect' の改造拳銃のみ。非致死性装備・SWAT 装備は無し） */
-export function suspectWeapons(defs: readonly WeaponDef[], reserveMagazines?: number): WeaponDef[] {
+/** 容疑者が使える武器（primaryWeaponId 指定時はその 1 本のみ携行し、数字キーでの未解放循環を防ぐ） */
+export function suspectWeapons(
+  defs: readonly WeaponDef[],
+  reserveMagazines?: number,
+  primaryWeaponId?: string,
+): WeaponDef[] {
   const own = defs.filter((w) => w.faction === 'suspect');
-  const list = own.length > 0 ? own : defs.filter((w) => w.category === 'primary');
+  let list = own.length > 0 ? own : defs.filter((w) => w.category === 'primary');
+  if (primaryWeaponId) {
+    const picked = list.filter((w) => w.id === primaryWeaponId);
+    if (picked.length > 0) list = picked;
+  }
   if (reserveMagazines === undefined) return list;
   // 建物の規模に応じた持ち込み弾薬（有限弾数の武器だけ置き換える）
   return list.map((w) => (w.reserveMagazines !== undefined ? { ...w, reserveMagazines } : w));
 }
 
-/** SWAT（通常モード）が使える武器 */
-export function swatWeapons(defs: readonly WeaponDef[]): WeaponDef[] {
-  return defs.filter((w) => w.faction !== 'suspect');
+/** SWAT（通常モード）が使える武器（primaryWeaponId 指定時は主武器をその 1 本に絞る） */
+export function swatWeapons(defs: readonly WeaponDef[], primaryWeaponId?: string): WeaponDef[] {
+  const list = defs.filter((w) => w.faction !== 'suspect');
+  if (!primaryWeaponId) return list;
+  const hasMatch = list.some((w) => w.category === 'primary' && w.id === primaryWeaponId);
+  if (!hasMatch) return list;
+  return list.filter((w) => w.category !== 'primary' || w.id === primaryWeaponId);
 }
 
 export type SuspectOutcome = 'repelled' | 'survived' | 'killed' | 'arrested';

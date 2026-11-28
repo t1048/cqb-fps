@@ -27,7 +27,7 @@ import {
 } from './squadTypes';
 import { approachSign, computeMoveSlots } from './squadMovement';
 import { assignPortalGroup, findRoomAcrossDoor } from './squadEntry';
-import { applyScoutPreAim, doorKnowledge, startCheck, startDisarm, startMirror } from './squadScout';
+import { applyScoutPreAim, doorKnowledge, startCheck, startDisarm, startLockpick, startMirror } from './squadScout';
 import { findNearestActionableId } from './squadClearing';
 import { beginStairOp, stairOpBusy } from './squadStairs';
 
@@ -47,6 +47,7 @@ const ORDER_I18N_KEY: Record<SquadOrder, string> = {
   mirror: 'mirror',
   check: 'check',
   disarm: 'disarm',
+  lockpick: 'lockpick',
   stairClear: 'stair_clear',
   stairFlashClear: 'stair_flash_clear',
 };
@@ -397,7 +398,8 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
     order === 'pieDoor' ||
     order === 'mirror' ||
     order === 'check' ||
-    order === 'disarm';
+    order === 'disarm' ||
+    order === 'lockpick';
   let portal: EntryPortal | null = null;
   let targetRoom: RoomDef | null = null;
   if (isDoorOrder) {
@@ -449,14 +451,25 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
     return;
   }
 
-  if (order === 'check' || order === 'disarm') {
+  if (order === 'c2Clear' && !ctx.c2Allowed) {
+    ctx.ack = t('C2 爆破ブリーチは SWAT Lv.3 で解放されます', 'C2 Breach unlocks at SWAT Lv.3');
+    ctx.ackLeft = 2.0;
+    return;
+  }
+
+  if (order === 'check' || order === 'disarm' || order === 'lockpick') {
     if (!portal || !orderCtx.door) {
       ctx.ack = t('ドアを見て実行します', 'Look at a door to do this');
       ctx.ackLeft = 1.4;
       return;
     }
-    if (order === 'check' && orderCtx.door.angle >= ctx.cfg.doorOpenAngle) {
+    if ((order === 'check' || order === 'lockpick') && orderCtx.door.angle >= ctx.cfg.doorOpenAngle) {
       ctx.ack = t('ドアはすでに開いています', 'The door is already open');
+      ctx.ackLeft = 1.4;
+      return;
+    }
+    if (order === 'lockpick' && !orderCtx.door.locked) {
+      ctx.ack = t('このドアは施錠されていません', 'This door is already unlocked');
       ctx.ackLeft = 1.4;
       return;
     }
@@ -471,6 +484,9 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
     if (order === 'check') {
       startCheck(ctx, lead);
       if (alreadyAtDoor) lead.checkStarted = true;
+    } else if (order === 'lockpick') {
+      startLockpick(lead);
+      if (alreadyAtDoor) lead.lockpickStarted = true;
     } else {
       startDisarm(ctx, lead);
       if (alreadyAtDoor) lead.disarmStarted = true;
@@ -636,6 +652,8 @@ export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
   ally.checkStarted = false;
   ally.disarmLeft = 0;
   ally.disarmStarted = false;
+  ally.lockpickLeft = 0;
+  ally.lockpickStarted = false;
   ally.stairOp = null;
   ally.stairStartT = -1;
   ally.body.setPose('stand');

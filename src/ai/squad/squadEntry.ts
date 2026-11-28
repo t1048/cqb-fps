@@ -1,4 +1,4 @@
-import { rollTrapSpot, tickCheck, tickDisarm, tickMirror } from './squadScout';
+import { rollTrapSpot, tickCheck, tickDisarm, tickLockpick, tickMirror } from './squadScout';
 import * as THREE from 'three';
 import { t } from '../../core/i18n';
 import {
@@ -780,9 +780,10 @@ export function updateStackingPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
   }
   // ミラー確認中の隊員はスタック位置で静止してドア下を確認する（終わるまで他の動作をしない）
   if (ally.mirrorLeft > 0 && tickMirror(ctx, ally, dt)) return;
-  // ドアチェック（施錠・トラップ）/ 確認済みトラップの解除: 先頭の隊員がドア際でしゃがんで作業する
+  // ドアチェック（施錠・トラップ）/ 確認済みトラップの解除 / キーピック解錠: 先頭の隊員がドア際でしゃがんで作業する
   if (ally.checkLeft > 0 && tickCheck(ctx, ally, dt)) return;
   if ((ally.disarmLeft > 0 || ally.disarmStarted) && tickDisarm(ctx, ally, dt)) return;
+  if ((ally.lockpickLeft > 0 || ally.lockpickStarted) && tickLockpick(ctx, ally, dt)) return;
   // door_prep への遷移はグループ単位（updatePortalGroups）。個人のタイムアウトで先走らない
   const g = ctx.portalGroups.get(portal.id);
   ally.stackWaitTimer = g?.waitT ?? 0;
@@ -832,7 +833,7 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
     }
 
     // ブービートラップ: 確認済み（またはその場で気付いた）なら解除してから開ける。未発見のまま開けると起爆する
-    const usesC2 = ally.order === 'c2Clear' || (ally.order === 'breachClear' && door.locked);
+    const usesC2 = ctx.c2Allowed && (ally.order === 'c2Clear' || (ally.order === 'breachClear' && door.locked));
     if (
       isDoorLead &&
       !usesC2 &&
@@ -846,8 +847,9 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
       ally.progress = t('トラップ解除を援護中', 'Covering Disarm');
     }
 
-    // C2 爆破ブリーチ（c2Clear 指示、または施錠ドアへの breachClear）
+    // C2 爆破ブリーチ（C2 解放済みかつ c2Clear 指示、または施錠ドアへの breachClear）
     if (
+      ctx.c2Allowed &&
       isDoorLead &&
       !door.isMoving &&
       door.angle < ctx.cfg.doorOpenAngle &&
@@ -858,6 +860,16 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
     ) {
       beginC2Sequence(ctx, ally, portal, door);
       return;
+    }
+
+    // ステルス突入時の施錠ドア: 蹴らずにキーピックで静かに解錠してからピーク確認へ
+    if (useStealth && door.locked && door.angle < ctx.cfg.doorOpenAngle) {
+      if (isDoorLead) {
+        if (tickLockpick(ctx, ally, dt)) return;
+      } else {
+        ally.progress = t('キーピック解錠を援護中', 'Covering Lockpick');
+        return;
+      }
     }
 
     // ステルス／pieDoor: まず peekAngle（半開き）まで静かに開けて内部を覗き確認

@@ -207,6 +207,8 @@ class App {
   private readonly suspectMission: SuspectMission | null = null;
   private readonly allyDirector: SuspectAllyDirector | null = null;
   private readonly mode: GameMode;
+  private readonly weaponDefs: readonly WeaponDef[];
+  private readonly suspectReserveMagazines?: number;
   private readonly resultScreen: ResultScreen;
   private readonly textures: TextureLibrary;
   private readonly envTex: THREE.Texture;
@@ -366,13 +368,18 @@ class App {
       suspect ? 'suspect' : 'swat',
     );
     this.scene.add(this.doors.root);
+    this.weaponDefs = weaponDefs;
+    this.suspectReserveMagazines = loadout?.reserveMagazines;
+    const activePrimaryId = suspect ? suspectLoadoutCfg.primaryWeapon : swatLoadout.primaryWeapon;
     this.weapons = new WeaponSystem(
       this.player,
       this.input,
       this.world.colliders,
-      suspect ? suspectWeapons(weaponDefs, loadout?.reserveMagazines) : swatWeapons(weaponDefs),
+      suspect
+        ? suspectWeapons(weaponDefs, loadout?.reserveMagazines, activePrimaryId)
+        : swatWeapons(weaponDefs, activePrimaryId),
       this.bus,
-      suspect ? suspectLoadoutCfg.primaryWeapon : swatLoadout.primaryWeapon,
+      activePrimaryId,
     );
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.flashOverlay = new FlashOverlay(document.body);
@@ -468,12 +475,14 @@ class App {
         allowStealthEntry: swatUnlocks.stealthEntry,
         allowShield: swatUnlocks.shieldMember,
         allowGas: swatUnlocks.teargas,
+        allowC2: swatUnlocks.c2Breach,
       },
     );
     if (!suspect) {
       this.squad.menu.setFeatureLocks({
         gasLocked: !swatUnlocks.teargas,
         optiwandLocked: !swatUnlocks.optiwand,
+        c2Locked: !swatUnlocks.c2Breach,
       });
     }
     this.entities.attachSquad(this.squad, squadCfg.presenceBonusPerAlly);
@@ -574,6 +583,7 @@ class App {
           root: this.scene,
           check: squadCfg.doorCheck,
           trap: squadCfg.doorTrap,
+          allowC2: swatUnlocks.c2Breach,
         });
       }
       // 容疑者側の警戒度（閃光弾・銃声・ブリーチ等で上がる）と、高警戒時の人質処刑の脅迫
@@ -971,11 +981,15 @@ class App {
   private applyBriefingLoadout(): void {
     if (this.mode === 'suspect') {
       const lo = getEffectiveSuspectLoadout();
-      this.weapons.selectWeapon(lo.primaryWeapon);
+      const def = this.weaponDefs.find((w) => w.id === lo.primaryWeapon);
+      if (def) this.weapons.setPrimaryWeapon(def, this.suspectReserveMagazines);
+      else this.weapons.selectWeapon(lo.primaryWeapon);
       this.player.equipVest('suspect', lo.vest, true);
     } else {
       const lo = getEffectiveSwatLoadout();
-      this.weapons.selectWeapon(lo.primaryWeapon);
+      const def = this.weaponDefs.find((w) => w.id === lo.primaryWeapon);
+      if (def) this.weapons.setPrimaryWeapon(def);
+      else this.weapons.selectWeapon(lo.primaryWeapon);
       this.player.equipVest('swat', lo.vest, true);
     }
   }
@@ -1268,7 +1282,7 @@ class App {
     if (this.suspectMission?.isSurrendering) return 'surrender';
     const dw = this.doorWork?.activeWork;
     if (dw === 'c2' || dw === 'disarm') return 'trap';
-    if (dw === 'check') return 'lock';
+    if (dw === 'check' || dw === 'lockpick') return 'lock';
     const hold = this.interaction.activeHold;
     if (!hold) return null;
     if (hold.providerId === 'barricade') return 'barricade';

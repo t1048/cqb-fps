@@ -4,6 +4,7 @@ import { t } from '../../core/i18n';
 import type { MirrorConfig, RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
+import { SAFE_DISARM_PEEK_DEG } from '../../world/DoorTraps';
 import type { Collider } from '../../world/WorldBuilder';
 import { contactCallout } from '../../player/optiwandGeometry';
 import {
@@ -234,8 +235,50 @@ export function startDisarm(ctx: SquadContext, ally: AllyUnit): void {
   ally.disarmStarted = false;
 }
 
+/** 施錠ドアのキーピック解錠を始める（スタック位置に着いてから経過を数える）。 */
+export function startLockpick(ally: AllyUnit, durationSec = 3.0): void {
+  ally.lockpickLeft = durationSec;
+  ally.lockpickStarted = false;
+}
+
 /**
- * トラップ解除の進行（先頭の隊員がドア際にしゃがんで数秒作業）。作業中は true。
+ * 隊員による施錠ドアのキーピック解錠（静かに解錠・約 3 秒）。作業中は true。
+ * 完了時に door.locked = false として無音で開錠する。
+ */
+export function tickLockpick(ctx: SquadContext, ally: AllyUnit, dt: number): boolean {
+  const door = ally.door ?? ally.entryPortal?.door ?? null;
+  if (!door || !door.locked) {
+    ally.lockpickLeft = 0;
+    ally.lockpickStarted = false;
+    return false;
+  }
+  if (!ally.lockpickStarted) {
+    ally.lockpickStarted = true;
+    if (ally.lockpickLeft <= 0) ally.lockpickLeft = 3.0;
+    ctx.emitRadio(ally, 'キーピックで静かに解錠する', 'Picking the lock quietly');
+  }
+  ally.lockpickLeft = Math.max(0, ally.lockpickLeft - dt);
+  ally.body.setPose('crouch');
+  ally.body.aimAt(
+    door.centerX + door.axisX * door.width * 0.35,
+    door.sillY + 0.95,
+    door.centerZ + door.axisZ * door.width * 0.35,
+    dt,
+    Math.PI * 2 * dt,
+  );
+  ally.progress = t('キーピックで解錠中', 'Lockpicking Door');
+  if (ally.lockpickLeft > 0) return true;
+  ally.lockpickStarted = false;
+  ally.body.setPose('stand');
+  door.locked = false;
+  ctx.emitRadio(ally, '解錠した。ドアは開く', 'Lock picked, door is clear');
+  ctx.ack = t('キーピックで解錠した', 'Door lockpicked');
+  ctx.ackLeft = 2.2;
+  return false;
+}
+
+/**
+ * トラップ解除の進行（先頭の隊員が扉をわずかに開いて隙間のワイヤーを切断する）。作業中は true。
  * 終了時に failChance で失敗（起爆）。成功ならトラップは除去される。
  * 未発見の仕掛けに「気付いた」ときの処理もここ（door_prep から）で共有する。
  */
@@ -252,14 +295,22 @@ export function tickDisarm(ctx: SquadContext, ally: AllyUnit, dt: number): boole
     const [ja, en] = pickRadio(DISARM_START);
     ctx.emitRadio(ally, ja, en);
   }
+  if (!ctx.traps.isDisarming?.(door.id)) {
+    ctx.traps.beginDisarm?.(door.id);
+    if (door.locked) door.locked = false;
+    if (door.angle < SAFE_DISARM_PEEK_DEG - 1 && door.targetAngle < SAFE_DISARM_PEEK_DEG - 1) {
+      door.command?.(SAFE_DISARM_PEEK_DEG, false, ally.body.px, ally.body.pz);
+    }
+  }
   ally.disarmLeft = Math.max(0, ally.disarmLeft - dt);
   ally.body.setPose('crouch');
   ally.body.aimAt(door.centerX + door.axisX * door.width * 0.35, door.sillY + 0.95, door.centerZ + door.axisZ * door.width * 0.35, dt, Math.PI * 2 * dt);
-  ally.progress = t('トラップ解除中', 'Disarming Trap');
+  ally.progress = t('扉を少し開いてワイヤー切断中', 'Cracking Door & Cutting Wire');
   if (ally.disarmLeft > 0) return true;
   ally.disarmStarted = false;
   ally.body.setPose('stand');
   if (roll(ctx) < ctx.cfg.doorTrap.failChance) {
+    ctx.traps.endDisarm?.(door.id);
     const [ja, en] = pickRadio(TRAP_FAIL);
     ctx.emitRadio(ally, ja, en);
     ctx.traps.detonate(door.id);
@@ -267,7 +318,7 @@ export function tickDisarm(ctx: SquadContext, ally: AllyUnit, dt: number): boole
     ctx.traps.disarm(door.id);
     const [ja, en] = pickRadio(TRAP_CLEAR);
     ctx.emitRadio(ally, ja, en);
-    ctx.ack = t('トラップを解除した', 'Trap disarmed');
+    ctx.ack = t('ワイヤーを切断し、トラップを解除した', 'Tripwire cut — trap disarmed');
     ctx.ackLeft = 2.5;
   }
   return false;

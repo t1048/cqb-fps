@@ -80,7 +80,9 @@ describe('Z の段階（実機）', () => {
     h.squad.rand = () => 0.99; // 解除は成功
     pressZ();
     h.step(2);
-    expect(door.angle).toBeLessThan(5); // 解除作業中はまだ開けない
+    expect(door.angle).toBeGreaterThan(5); // 解除作業中はワイヤー露出のため少しだけ開く
+    expect(door.angle).toBeLessThanOrEqual(18); // 安全ピーク角度以内（全開はしない）
+    expect(blasts).toBe(0);
     expect(h.traps!.isRigged(door.id)).toBe(true);
     h.step(10);
     expect(h.traps!.isRigged(door.id)).toBe(false);

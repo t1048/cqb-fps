@@ -79,6 +79,8 @@ export interface MenuGearProvider {
   gasLocked?: boolean;
   /** 進行度によりオプティワンド（ミラー確認）が未解放か */
   optiwandLocked?: boolean;
+  /** 進行度により C2 爆破ブリーチが未解放か */
+  c2Locked?: boolean;
 }
 
 interface MenuItem {
@@ -193,7 +195,7 @@ export class CommandMenu {
 
   private items: MenuItem[] = [];
   private gearProvider: MenuGearProvider | null = null;
-  private featureLocks: { gasLocked?: boolean; optiwandLocked?: boolean } = {};
+  private featureLocks: { gasLocked?: boolean; optiwandLocked?: boolean; c2Locked?: boolean } = {};
   private offsetPx = 0;
   private selectedIdx = 0;
   private open = false;
@@ -698,8 +700,8 @@ export class CommandMenu {
     this.gearProvider = p;
   }
 
-  /** 進行度に応じたロック状態（CSガス・オプティワンド）を設定する。 */
-  setFeatureLocks(locks: { gasLocked?: boolean; optiwandLocked?: boolean }): void {
+  /** 進行度に応じたロック状態（CSガス・オプティワンド・C2）を設定する。 */
+  setFeatureLocks(locks: { gasLocked?: boolean; optiwandLocked?: boolean; c2Locked?: boolean }): void {
     this.featureLocks = { ...locks };
   }
 
@@ -713,6 +715,7 @@ export class CommandMenu {
     const gear = this.gearProvider?.gear() ?? null;
     const gasLocked = this.featureLocks.gasLocked === true || this.gearProvider?.gasLocked === true;
     const optiwandLocked = this.featureLocks.optiwandLocked === true || this.gearProvider?.optiwandLocked === true;
+    const c2Locked = this.featureLocks.c2Locked === true || this.gearProvider?.c2Locked === true;
     const flashOk = gear === null || gear.flash > 0;
     const gasOk = !gasLocked && (gear === null || gear.gas > 0);
     const flashLabel = (base: string): string =>
@@ -745,8 +748,11 @@ export class CommandMenu {
         !optiwandLocked,
       );
       add('prep', 'check', t('ドアチェック（施錠・トラップ確認）', 'Check Door (Lock & Trap)'), true);
+      if (ctx.door.locked) {
+        add('prep', 'lockpick', t('キーピック解錠（静かに解錠・約3秒）', 'Lockpick Door (Quiet, ~3s)'), true);
+      }
       if (this.gearProvider?.trapKnown(ctx.door.id)) {
-        add('prep', 'disarm', t('トラップ解除（確認済み・数秒）', 'Disarm Trap (Found, a few sec)'), true);
+        add('prep', 'disarm', t('トラップ解除（扉を少し開いてワイヤー切断）', 'Disarm Trap (Crack Door & Cut Wire)'), true);
       }
       add('prep', 'pieDoor', t('扉開放・外から警戒', 'Open & Hold (Cover from Outside)'), !ctx.door.locked);
       add(
@@ -759,8 +765,10 @@ export class CommandMenu {
       );
       add('entry', 'flashClear', flashLabel(t('フラッシュ＆クリア（閃光→突入）', 'Flash & Clear (Flashbang + Entry)')), flashOk);
       add('entry', 'gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
-      add('entry', 'c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
-      add('entry', 'breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
+      if (!c2Locked) {
+        add('entry', 'c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
+      }
+      add('entry', 'breachClear', t('ブリーチ＆クリア（蹴破り強行突入）', 'Breach & Clear (Kick Entry)'), true);
     } else if (ctx.stairTarget) {
       const up = ctx.stairTarget.up;
       add('prep', 'stack', t('スタックアップ（階段口で待機）', 'Stack Up (Hold at Stairs)'), true);

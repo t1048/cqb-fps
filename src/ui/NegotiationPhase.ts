@@ -564,18 +564,22 @@ export class NegotiationPhase {
       el('span', 'ngp-key', locked ? '🔒' : keyLabel(i)),
       el('span', 'ngp-opt-label', `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`),
     );
+    if (locked) {
+      head.appendChild(el('span', 'ngp-locked-reason', opt.lockedReason!));
+      btn.appendChild(head);
+      btn.title = opt.lockedReason ?? '';
+      return btn;
+    }
     const chance = opt.chance?.() ?? null;
     const pill = el(
       'span',
       'ngp-chance',
-      locked
-        ? t('未解放', 'Locked')
-        : chance === null
-          ? t('確実', 'Guaranteed')
-          : t(`成功率 ${Math.round(chance * 100)}%`, `${Math.round(chance * 100)}% Chance`),
+      chance === null
+        ? t('確実', 'Guaranteed')
+        : t(`成功率 ${Math.round(chance * 100)}%`, `${Math.round(chance * 100)}% Chance`),
     );
     const c = chance ?? 1;
-    const pc = locked ? '#8b9db0' : c >= 0.65 ? '#5cd67d' : c >= 0.4 ? '#f2c14e' : '#ff6b6b';
+    const pc = c >= 0.65 ? '#5cd67d' : c >= 0.4 ? '#f2c14e' : '#ff6b6b';
     pill.style.cssText = `color:${pc};background:${pc}22;border:1px solid ${pc}88`;
     head.appendChild(pill);
     btn.appendChild(head);

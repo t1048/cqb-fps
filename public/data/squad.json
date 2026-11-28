@@ -51,6 +51,7 @@
     "mirror": "ミラー確認",
     "check": "ドアチェック",
     "disarm": "トラップ解除",
+    "lockpick": "キーピック解錠",
     "stairClear": "階段クリア",
     "stairFlashClear": "閃光階段クリア"
   },

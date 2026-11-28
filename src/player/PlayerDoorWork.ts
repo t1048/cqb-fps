@@ -13,7 +13,7 @@ import type { DoorCheckConfig, DoorTrapConfig, Vec3 } from '../core/types';
 import type { InputManager } from '../core/InputManager';
 import type { Subtitle } from '../ui/Subtitle';
 import type { Door, DoorSystem } from '../world/Door';
-import type { DoorTrapSystem } from '../world/DoorTraps';
+import { SAFE_DISARM_MAX_DEG, SAFE_DISARM_PEEK_DEG, type DoorTrapSystem } from '../world/DoorTraps';
 import type { Interaction } from './Interaction';
 import type { PlayerController } from './PlayerController';
 
@@ -42,6 +42,10 @@ export interface PlayerDoorWorkDeps {
   check: DoorCheckConfig;
   trap: DoorTrapConfig;
   rand?: () => number;
+  /** C2 爆破ブリーチが解放済みか（未指定は true） */
+  allowC2?: boolean;
+  /** キーピック解錠の所要秒数（未指定は 3.0 秒） */
+  lockpickSec?: number;
 }
 
 interface PlantedC2 {
@@ -67,9 +71,11 @@ export class PlayerDoorWork {
   private readonly gaugeTxt = document.createElement('div');
   private gaugeValue = -1;
   private gaugeText = '';
-  private workKind: 'check' | 'disarm' | 'c2' | null = null;
-  private lastWorkKind: 'check' | 'disarm' | 'c2' | null = null;
+  private workKind: 'check' | 'disarm' | 'lockpick' | 'c2' | null = null;
+  private lastWorkKind: 'check' | 'disarm' | 'lockpick' | 'c2' | null = null;
   private done = false;
+  /** 現在ワイヤー切断解除中のドア（安全ピーク角度まで開いている間も解決を維持する） */
+  private disarmingDoor: Door | null = null;
   private planting: { door: Door; side: number; sec: number } | null = null;
   private readonly planted: PlantedC2[] = [];
   private readonly blasts: { mesh: THREE.Mesh; t: number }[] = [];
@@ -95,6 +101,9 @@ export class PlayerDoorWork {
       },
       onHold: (door, _dt, sec) => this.hold(door, sec),
       onRelease: (door, sec) => {
+        if (this.disarmingDoor === door) {
+          this.cancelDisarm(door);
+        }
         if (!this.done && sec < TAP_SEC && !door.locked) {
           door.toggle(true, this.d.player.position.x, this.d.player.position.z);
         }
@@ -111,37 +120,83 @@ export class PlayerDoorWork {
     return (this.d.rand ?? Math.random)();
   }
 
+  private get c2Allowed(): boolean {
+    return this.d.allowC2 !== false;
+  }
+
+  private cancelDisarm(door: Door): void {
+    this.disarmingDoor = null;
+    if (this.d.traps.isDisarming?.(door.id)) {
+      this.d.traps.endDisarm?.(door.id);
+      if (door.angle > 0.5 || door.targetAngle > 0.5) {
+        door.command?.(0, false, this.d.player.position.x, this.d.player.position.z);
+      }
+    }
+  }
+
   private resolveClosedDoor(range: number): Door | null {
     if (this.disposed || !this.d.player.alive) return null;
     const door = this.d.doors.aimed(range);
-    if (!door || door.angle > 1 || door.targetAngle > 1) return null;
+    if (!door) return null;
+    if (this.disarmingDoor === door && door.angle <= SAFE_DISARM_MAX_DEG && door.targetAngle <= SAFE_DISARM_MAX_DEG) {
+      return door;
+    }
+    if (door.angle > 1 || door.targetAngle > 1) return null;
     return door;
   }
 
   private label(door: Door): string {
+    const c2Hint = this.c2Allowed ? t(' / B C2', ' / B C2') : '';
     if (this.d.traps.isDiscovered(door.id)) {
-      return t('罠あり！ F 長押し: 解除 / B: C2 で吹き飛ばす', 'Trap! Hold F: Disarm / B: Blow with C2');
+      return this.c2Allowed
+        ? t('罠あり！ F 長押し: 扉を少し開いてワイヤー切断 / B: C2 で吹き飛ばす', 'Trap! Hold F: Crack door & cut wire / B: Blow with C2')
+        : t('罠あり！ F 長押し: 扉を少し開いてワイヤー切断', 'Trap! Hold F: Crack door & cut wire');
     }
-    if (door.locked) return t('ドア: 施錠 (G 蹴破り / B C2 / F 長押し チェック)', 'Door: Locked (G Kick / B C2 / Hold F Check)');
-    return t('ドア: F 開閉 / F 長押し ドアチェック(罠・施錠) / B C2', 'Door: F Open / Hold F Check (Trap & Lock) / B C2');
+    if (door.locked) {
+      if (this.checked.get(door.id)?.locked) {
+        return t(`ドア: 施錠 (F 長押し キーピック解錠 / G 蹴破り${c2Hint})`, `Door: Locked (Hold F Lockpick / G Kick${c2Hint})`);
+      }
+      return t(`ドア: 施錠 (G 蹴破り / F 長押し チェック→キーピック${c2Hint})`, `Door: Locked (G Kick / Hold F Check→Lockpick${c2Hint})`);
+    }
+    return t(`ドア: F 開閉 / F 長押し ドアチェック(罠・施錠)${c2Hint}`, `Door: F Open / Hold F Check (Trap & Lock)${c2Hint}`);
   }
 
   private hold(door: Door, sec: number): void {
     if (sec < TAP_SEC || this.done) return;
     const work = sec - TAP_SEC;
     if (this.d.traps.isDiscovered(door.id)) {
+      if (this.disarmingDoor !== door) {
+        this.disarmingDoor = door;
+        this.d.traps.beginDisarm?.(door.id);
+        if (door.locked) door.locked = false;
+        door.command?.(SAFE_DISARM_PEEK_DEG, false, this.d.player.position.x, this.d.player.position.z);
+      }
       const need = this.d.trap.disarmSec;
       this.workKind = 'disarm';
-      this.showGauge(t('罠を解除中...', 'Disarming the trap...'), work / need);
+      this.showGauge(t('扉を少し開いてワイヤーを切断中...', 'Cracking door & cutting tripwire...'), work / need);
       if (work < need) return;
       this.done = true;
+      this.disarmingDoor = null;
       if (this.rand() < this.d.trap.failChance) {
+        this.d.traps.endDisarm?.(door.id);
         this.d.subtitle.show(t('しまった、起爆した！', 'Damn, it blew!'), 1.6);
         this.d.traps.detonate(door.id);
       } else {
         this.d.traps.disarm(door.id);
-        this.d.subtitle.show(t('罠を解除した', 'Trap disarmed'), 2.0);
+        this.d.subtitle.show(t('ワイヤーを切断し、罠を解除した', 'Tripwire cut — trap disarmed'), 2.0);
       }
+      return;
+    }
+    // チェック済みの施錠ドア（未発見/未設置）: キーピックで静かに解錠
+    if (door.locked && this.checked.get(door.id)?.locked) {
+      const need = this.d.lockpickSec ?? 3.0;
+      this.workKind = 'lockpick';
+      this.showGauge(t('キーピックで静かに解錠中...', 'Lockpicking door quietly...'), work / need);
+      if (work < need) return;
+      this.done = true;
+      door.locked = false;
+      this.checked.set(door.id, { locked: false, trapFound: false });
+      this.d.subtitle.show(t('キーピックで解錠した', 'Door lockpicked'), 2.0);
       return;
     }
     const need = this.d.check.durationSec;
@@ -167,14 +222,17 @@ export class PlayerDoorWork {
     this.gaugeText = text;
   }
 
-  /** 今フレーム実行中の作業種別（ドアチェック / 罠解除 / C2 設置）。 */
-  get activeWork(): 'check' | 'disarm' | 'c2' | null {
+  /** 今フレーム実行中の作業種別（ドアチェック / 罠解除 / キーピック / C2 設置）。 */
+  get activeWork(): 'check' | 'disarm' | 'lockpick' | 'c2' | null {
     return this.lastWorkKind;
   }
 
   /** 毎フレーム: ゲージ表示 / C2 の設置・信管・爆発演出 */
   update(dt: number): void {
     if (this.disposed) return;
+    if (this.disarmingDoor && this.workKind !== 'disarm') {
+      this.cancelDisarm(this.disarmingDoor);
+    }
     this.updateC2(dt);
     this.lastWorkKind = this.planting ? 'c2' : this.workKind;
     this.workKind = null;
@@ -206,7 +264,7 @@ export class PlayerDoorWork {
           this.emitBeep(pl.door, false);
         }
       }
-    } else if (this.d.input.isPointerLocked && this.d.input.wasPressed('c2')) {
+    } else if (this.c2Allowed && this.d.input.isPointerLocked && this.d.input.wasPressed('c2')) {
       const door = this.resolveClosedDoor(C2_RANGE);
       if (door && !this.planted.some((c) => c.door === door)) {
         const side = (p.position.x - door.centerX) * door.normalX + (p.position.z - door.centerZ) * door.normalZ >= 0 ? 1 : -1;

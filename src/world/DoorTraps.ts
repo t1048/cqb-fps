@@ -19,6 +19,11 @@ export interface BlastVictim {
   hurt(damage: number, from: Vec3): void;
 }
 
+/** 罠解除時にワイヤーを露出させるため扉をそっと開ける安全角度（度） */
+export const SAFE_DISARM_PEEK_DEG = 12;
+/** 発見済みかつ解除作業中に起爆しない最大角度（度） */
+export const SAFE_DISARM_MAX_DEG = 18;
+
 /** 爆風: LOS が通る犠牲者に距離減衰ダメージ。返り値は被害を受けた数。 */
 export function applyTrapBlast(
   colliders: readonly Collider[],
@@ -72,11 +77,14 @@ export interface DoorTrapDeps {
 export class DoorTrapSystem {
   readonly root = new THREE.Group();
   private readonly traps = new Map<string, RiggedTrap>();
+  /** 安全ピークでワイヤー切断中のドア ID（発見済みかつ角度 <= SAFE_DISARM_MAX_DEG なら起爆しない） */
+  private readonly disarming = new Set<string>();
   private readonly fx: { mesh: THREE.Mesh; t: number }[] = [];
   private readonly boxGeo = new THREE.BoxGeometry(1, 1, 1);
   private readonly ledGeo = new THREE.SphereGeometry(1, 8, 6);
   private readonly bodyMat = new THREE.MeshStandardMaterial({ color: 0x3a3a2a, roughness: 0.7 });
   private readonly ledMat = new THREE.MeshBasicMaterial({ color: 0xff2a1a });
+  private readonly wireMat = new THREE.MeshBasicMaterial({ color: 0xff4433 });
   private disposed = false;
   /** 起爆した回数・解除した回数（成績・テスト用） */
   detonated = 0;
@@ -108,6 +116,23 @@ export class DoorTrapSystem {
     if (!t) return false;
     t.discovered = true;
     return true;
+  }
+
+  /** 安全ピークによるワイヤー切断作業を開始する（発見済みトラップのみ有効）。 */
+  beginDisarm(doorId: string): boolean {
+    const t = this.traps.get(doorId);
+    if (!t || !t.discovered) return false;
+    this.disarming.add(doorId);
+    return true;
+  }
+
+  /** ワイヤー切断作業を終了（中断/完了）する。 */
+  endDisarm(doorId: string): void {
+    this.disarming.delete(doorId);
+  }
+
+  isDisarming(doorId: string): boolean {
+    return this.disarming.has(doorId);
   }
 
   /** ミッション開始時: 条件を満たすドアに count 個を無作為に仕掛ける。返り値は仕掛けたドア ID。 */
@@ -144,7 +169,13 @@ export class DoorTrapSystem {
       led.position.set(0.32 * door.width * 0.5 + 0.05, 0.035, side * 0.12);
       led.userData.noShadow = true;
       led.castShadow = false;
-      g.add(box, led);
+      // 扉をわずかに開いた隙間から見える赤いトリップワイヤー
+      const wire = new THREE.Mesh(this.boxGeo, this.wireMat);
+      wire.scale.set(door.width * 0.42, 0.006, 0.006);
+      wire.position.set(0.18 * door.width * 0.5, -0.02, side * 0.075);
+      wire.userData.noShadow = true;
+      wire.castShadow = false;
+      g.add(box, led, wire);
     }
     g.position.set(door.centerX, door.sillY + 0.95, door.centerZ);
     g.rotation.y = Math.atan2(door.normalX, door.normalZ);
@@ -154,6 +185,7 @@ export class DoorTrapSystem {
 
   private remove(doorId: string): boolean {
     const t = this.traps.get(doorId);
+    this.disarming.delete(doorId);
     if (!t) return false;
     this.traps.delete(doorId);
     this.root.remove(t.mesh);
@@ -227,6 +259,10 @@ export class DoorTrapSystem {
       const door = this.d.doors.getDoor(t.doorId);
       if (!door) continue;
       if (door.angle <= 2 && door.targetAngle <= 2) continue;
+      // 発見済みトラップの安全ピーク解除中（ワイヤー切断中）は安全角度以内なら起爆しない
+      if (t.discovered && this.disarming.has(t.doorId) && door.angle <= SAFE_DISARM_MAX_DEG && door.targetAngle <= SAFE_DISARM_MAX_DEG) {
+        continue;
+      }
       let near = false;
       for (const p of this.d.swatPositions()) {
         if (Math.abs(p.footY - door.sillY) < 0.9 && Math.hypot(p.x - door.centerX, p.z - door.centerZ) < trig) {
@@ -259,5 +295,6 @@ export class DoorTrapSystem {
     this.ledGeo.dispose();
     this.bodyMat.dispose();
     this.ledMat.dispose();
+    this.wireMat.dispose();
   }
 }

@@ -105,6 +105,35 @@ export class WeaponSystem {
     return true;
   }
 
+  /**
+   * ブリーフィングでの主武器変更時に、slot:1 の主武器を 1 本だけへ差し替える。
+   * 未選択・未解放の主武器へ数字キーで循環切替されない状態を維持する。
+   */
+  setPrimaryWeapon(def: WeaponDef, reserveMagazines?: number): void {
+    const copy: WeaponDef =
+      reserveMagazines !== undefined && def.reserveMagazines !== undefined
+        ? { ...def, reserveMagazines }
+        : { ...def };
+    const wasPrimary = this.current.category === 'primary';
+    for (let i = this.weapons.length - 1; i >= 0; i--) {
+      if (this.weapons[i]!.category === 'primary') this.weapons.splice(i, 1);
+    }
+    this.weapons.unshift(copy);
+    this.ammo.set(copy.id, copy.magazineSize);
+    if (copy.reserveMagazines !== undefined) {
+      this.reserve.set(copy.id, copy.reserveMagazines * copy.magazineSize);
+    } else {
+      this.reserve.delete(copy.id);
+    }
+    if (wasPrimary) {
+      this.current = copy;
+      this.reloadLeft = 0;
+      this.reloadTotal = 0;
+      this.cooldown = 0;
+      this.player.speedMultiplier = copy.moveSpeedMul ?? 1;
+    }
+  }
+
   /** 現在の武器がサプレッサー装着か */
   get isSuppressed(): boolean {
     return this.current.suppressed === true;

@@ -2109,6 +2109,7 @@ export const SQUAD_ORDERS: readonly SquadOrder[] = [
   'mirror',
   'check',
   'disarm',
+  'lockpick',
   'stairClear',
   'stairFlashClear',
 ] as const;
@@ -2117,6 +2118,7 @@ export const SQUAD_ORDERS: readonly SquadOrder[] = [
 const OPTIONAL_ORDER_LABELS: Partial<Record<SquadOrder, string>> = {
   check: 'ドアチェック',
   disarm: 'トラップ解除',
+  lockpick: 'キーピック解錠',
   stairClear: '階段クリア',
   stairFlashClear: '閃光階段クリア',
 };

@@ -232,6 +232,7 @@ export class SquadSystem implements SquadContext {
   /** 突入モード: dynamic = ダイナミック強行突入, stealth = ステルス慎重突入（Tab 切替） */
   entryMode: EntryMode = 'dynamic';
   readonly stealthEntryAllowed: boolean;
+  readonly c2Allowed: boolean;
   quickHintCache = '';
   quickHintTimer = 0;
   disposed = false;
@@ -266,11 +267,14 @@ export class SquadSystem implements SquadContext {
       allowShield?: boolean;
       /** CS ガスが解放されているか（false のとき分隊のガス携行数を 0 に制限） */
       allowGas?: boolean;
+      /** C2 爆破ブリーチが解放されているか（未指定時は true で後方互換） */
+      allowC2?: boolean;
     },
   ) {
     this.intel = gadgets?.intel ?? new ScoutIntel();
     this.traps = gadgets?.traps ?? null;
     this.stealthEntryAllowed = gadgets?.allowStealthEntry ?? true;
+    this.c2Allowed = gadgets?.allowC2 ?? true;
     const memberLoadouts = gadgets?.memberLoadouts;
     const allowShield = gadgets?.allowShield ?? true;
     const allowGas = gadgets?.allowGas ?? true;
@@ -514,6 +518,8 @@ export class SquadSystem implements SquadContext {
         checkStarted: false,
         disarmLeft: 0,
         disarmStarted: false,
+        lockpickLeft: 0,
+        lockpickStarted: false,
         stairOp: null,
         stairStartT: -1,
         targetWrapper,
@@ -757,6 +763,13 @@ export class SquadSystem implements SquadContext {
   }
 
   resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
+    if (ally.disarmStarted) {
+      const d = ally.door ?? ally.entryPortal?.door ?? null;
+      if (d && this.traps?.isDisarming?.(d.id)) {
+        this.traps.endDisarm?.(d.id);
+        if (d.angle > 0.5 || d.targetAngle > 0.5) d.command?.(0, false, ally.body.px, ally.body.pz);
+      }
+    }
     resetUnitForOrderImpl(ally, order);
   }
 

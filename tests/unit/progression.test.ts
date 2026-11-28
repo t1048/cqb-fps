@@ -225,6 +225,7 @@ describe('Map size, motif, weapon, vest, squad, negotiation, and fortify unlock 
     expect(u.stealthEntry).toBe(false);
     expect(u.teargas).toBe(false);
     expect(u.optiwand).toBe(false);
+    expect(u.c2Breach).toBe(false);
     expect(u.shieldMember).toBe(false);
     expect(u.squadLoadoutCustom).toBe(false);
     expect(u.squadGadgetCustom).toBe(false);
@@ -258,6 +259,7 @@ describe('Map size, motif, weapon, vest, squad, negotiation, and fortify unlock 
     recordMissionResult({ mode: 'swat', cleared: true, rank: 'S', score: 300 }); // 290 XP -> Lv.3
     u = getSwatUnlocks();
     expect(u.stealthEntry).toBe(true);
+    expect(u.c2Breach).toBe(true);
     expect(u.weapons.suppressed_rifle).toBe(true);
     expect(u.shieldMember).toBe(true);
     expect(u.squadLoadoutCustom).toBe(true);
@@ -419,5 +421,27 @@ describe('SuspectScore calculation and rank thresholds', () => {
     expect(board.count('trapHit')).toBe(2);
     expect(board.count('swatNeutralized')).toBe(4);
     expect(board.rank).toBe('S');
+  });
+});
+
+describe('Weapon filtering for slot-1 progression safety', () => {
+  it('restricts primary weapons to only the selected weapon ID', async () => {
+    const { swatWeapons, suspectWeapons } = await import('../../src/modes/SuspectMode');
+    const mockDefs = [
+      { id: 'rifle', name: 'カービン', category: 'primary', slot: 1, faction: 'swat' },
+      { id: 'smg', name: 'SMG', category: 'primary', slot: 1, faction: 'swat' },
+      { id: 'shotgun', name: 'ショットガン', category: 'primary', slot: 1, faction: 'swat' },
+      { id: 'pepperball', name: 'ペッパー', category: 'nonlethal', slot: 2, faction: 'swat' },
+      { id: 'machine_pistol', name: '拳銃', category: 'primary', slot: 1, faction: 'suspect', reserveMagazines: 3 },
+      { id: 'suspect_shotgun', name: 'SG', category: 'primary', slot: 1, faction: 'suspect', reserveMagazines: 3 },
+    ] as never;
+
+    const swatList = swatWeapons(mockDefs, 'rifle');
+    expect(swatList.filter((w) => w.category === 'primary').map((w) => w.id)).toEqual(['rifle']);
+    expect(swatList.some((w) => w.id === 'pepperball')).toBe(true);
+
+    const suspectList = suspectWeapons(mockDefs, 5, 'machine_pistol');
+    expect(suspectList.map((w) => w.id)).toEqual(['machine_pistol']);
+    expect(suspectList[0]!.reserveMagazines).toBe(5);
   });
 });

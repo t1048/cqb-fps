@@ -560,10 +560,16 @@ export class BriefingScreen {
     details.open = true;
 
     const summary = document.createElement('summary');
+    const swatCustom = this.mode === 'swat' && getSwatUnlocks().squadLoadoutCustom;
+    const suspectPolicy = this.mode === 'suspect' && getSuspectUnlocks().allyPolicyCustom;
     summary.textContent =
       this.mode === 'suspect'
-        ? t('🎒 ロードアウト & 仲間方針（クリックで開閉）', '🎒 Loadout & Crew Policy (Click to Toggle)')
-        : t('🎒 ロードアウト & 分隊装備（クリックで開閉）', '🎒 Loadout & Squad Gear (Click to Toggle)');
+        ? suspectPolicy
+          ? t('🎒 ロードアウト & 仲間方針（クリックで開閉）', '🎒 Loadout & Crew Policy (Click to Toggle)')
+          : t('🎒 ロードアウト（クリックで開閉）', '🎒 Loadout (Click to Toggle)')
+        : swatCustom
+          ? t('🎒 ロードアウト & 分隊装備（クリックで開閉）', '🎒 Loadout & Squad Gear (Click to Toggle)')
+          : t('🎒 ロードアウト（クリックで開閉）', '🎒 Loadout (Click to Toggle)');
     details.appendChild(summary);
 
     const body = document.createElement('div');
@@ -681,7 +687,8 @@ export class BriefingScreen {
     vSec.append(vTitle, vGrid);
     container.appendChild(vSec);
 
-    // 3. Squad customization (4 members)
+    // 3. Squad customization (4 members) — 未解放時は画面スッキリ化のため非表示
+    if (!u.squadLoadoutCustom) return;
     const sqSec = document.createElement('div');
     sqSec.className = 'bfs-lo-sec';
     const sqTitle = document.createElement('div');
@@ -883,7 +890,8 @@ export class BriefingScreen {
     vSec.append(vTitle, vGrid);
     container.appendChild(vSec);
 
-    // 3. Ally policy
+    // 3. Ally policy — 未解放時は画面スッキリ化のため非表示
+    if (!u.allyPolicyCustom) return;
     const pSec = document.createElement('div');
     pSec.className = 'bfs-lo-sec';
     const pTitle = document.createElement('div');

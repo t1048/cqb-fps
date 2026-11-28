@@ -143,6 +143,7 @@ export interface SwatUnlocks {
   vests: Record<SwatVestTier, boolean>;
   teargas: boolean;
   optiwand: boolean;
+  c2Breach: boolean;
   shieldMember: boolean;
   squadLoadoutCustom: boolean;
   squadGadgetCustom: boolean;
@@ -212,6 +213,7 @@ export const UNLOCK_ROADMAP: readonly UnlockEntry[] = [
   // SWAT Lv.3
   { id: 'stage:random_house', mode: 'swat', level: 3, labelJa: '中規模マップ解放', labelEn: 'Medium Map Unlocked' },
   { id: 'entry:stealth', mode: 'swat', level: 3, labelJa: 'ステルス突入モード', labelEn: 'Stealth Entry Mode' },
+  { id: 'breach:c2', mode: 'swat', level: 3, labelJa: 'C2 爆破ブリーチング', labelEn: 'C2 Explosive Breaching' },
   { id: 'weapon:suppressed_rifle', mode: 'swat', level: 3, labelJa: '消音カービン', labelEn: 'Suppressed Carbine' },
   { id: 'squad:shield', mode: 'swat', level: 3, labelJa: '盾持ち隊員 & 分隊装備カスタム', labelEn: 'Shield Member & Squad Loadout' },
   { id: 'neg:ultimatum', mode: 'swat', level: 3, labelJa: '交渉カード: 最後通告', labelEn: 'Negotiation: Ultimatum' },
@@ -668,6 +670,7 @@ export function getSwatUnlocks(state: Readonly<ProgressionState> = getProgressio
     },
     teargas: lv >= 2,
     optiwand: lv >= 2,
+    c2Breach: lv >= 3,
     shieldMember: lv >= 3,
     squadLoadoutCustom: lv >= 3,
     squadGadgetCustom: lv >= 4,

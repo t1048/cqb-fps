@@ -299,6 +299,9 @@ export interface AllyUnit extends HitTarget {
   /** トラップ解除の残り秒 / 作業を始めたか */
   disarmLeft: number;
   disarmStarted: boolean;
+  /** キーピック解錠の残り秒 / 作業を始めたか */
+  lockpickLeft: number;
+  lockpickStarted: boolean;
   /** 参加中の階段クリア（同じ階段のメンバーで共有。指示のリセットで外れる） */
   stairOp: StairOp | null;
   /** 階段クリアの縦列で昇降を始めた時刻（simTime。未発進は -1） */
@@ -490,6 +493,7 @@ export interface SquadContext {
   lastPlayerPos: XZ;
   entryMode: EntryMode;
   readonly stealthEntryAllowed: boolean;
+  readonly c2Allowed: boolean;
   quickHintCache: string;
   quickHintTimer: number;
   disposed: boolean;
