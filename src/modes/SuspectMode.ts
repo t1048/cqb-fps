@@ -9,6 +9,8 @@ import type { Subtitle } from '../ui/Subtitle';
 import type { Door, DoorSystem } from '../world/Door';
 import type { Fortify } from './Fortify';
 import type { SwatSpawn, SwatTeam } from './SwatTeam';
+import { indoorFloorArea } from '../rules/MissionRoster';
+import { suspectLoadout, type SuspectLoadout } from './SuspectLoadout';
 
 /** ゲームモード: swat = 通常（SWAT 隊長として突入）、suspect = 容疑者として籠城し SWAT と戦う */
 export type GameMode = 'swat' | 'suspect';
@@ -34,6 +36,8 @@ export interface SuspectModeSetup {
   swatSpawns: SwatSpawn[];
   /** プレイヤーを含む SWAT 合計。applyMissionRoster 後の allies + 1 */
   swatCount: number;
+  /** 建物の規模に応じた持ち込み装備 */
+  loadout: SuspectLoadout;
 }
 
 /**
@@ -76,19 +80,26 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
   const civilians = map.entities.filter((e) => e.type === 'civilian').length;
   const swatCount = swatSpawns.length;
   const holdMin = Math.round(SUSPECT_MODE.holdSec / 60);
+  const loadout = suspectLoadout(indoorFloorArea(map.rooms));
+  const medJa = loadout.medkits > 0 ? `・救急キット ${loadout.medkits} 個` : '';
+  const medEn = loadout.medkits > 0 ? `, ${loadout.medkits} medkit${loadout.medkits === 1 ? '' : 's'}` : '';
   const summary = t(
     'あなたは立てこもり犯だ。' +
       (kept.length > 0 ? `仲間の容疑者 ${kept.length} 名が同じ建物にいる。` : '') +
       `まもなく SWAT ${swatCount} 名が入口から突入してくる。` +
       `突入から ${holdMin} 分間持ちこたえるか、SWAT を全員無力化せよ。` +
-      '武器は弾数の少ない改造フルオート拳銃のみ。突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
+      '武器は改造フルオート拳銃のみ。' +
+      `建物の規模に合わせて予備マガジン ${loadout.reserveMagazines} 本・トラップ部材 ${loadout.trapKits} 個${medJa}を持ち込んでいる。` +
+      '突入前の交渉で時間を稼いだり、人質と防弾チョッキ・弾薬を交換できる。' +
       'ドアを施錠（F 長押し）、窓を板で塞ぎ（窓の前で F 長押し）、ドアにトラップを仕掛けろ（C でしゃがんだ状態で F 長押し）。時間を稼げば仲間が補強・武器改造を進める。' +
       '人質を盾にもできる（民間人の前で F 長押し）が、人質は暴れて振りほどこうとし、SWAT はペッパーボールで盾ごと崩してくる。',
     'You are a barricaded suspect. ' +
       (kept.length > 0 ? `${kept.length} armed ${kept.length === 1 ? 'accomplice is' : 'accomplices are'} inside the building with you. ` : '') +
       `${swatCount} SWAT officers will breach the entrance soon. ` +
       `Hold out for ${holdMin} minutes after the breach, or neutralize all SWAT officers. ` +
-      'You only have a low-capacity modded auto pistol. Negotiate before the breach to buy time, or trade hostages for body armor and ammo. ' +
+      'Your only weapon is a modded auto pistol. ' +
+      `Sized to the building, you brought ${loadout.reserveMagazines} spare magazines, ${loadout.trapKits} trap kits${medEn}. ` +
+      'Negotiate before the breach to buy time, or trade hostages for body armor and ammo. ' +
       'Lock doors (Hold F), board up windows (Hold F at a window), and rig door traps (Crouch with C, then Hold F). Buying time lets your accomplices craft traps and upgrade weapons. ' +
       'You can also take a hostage as a human shield (Hold F near a civilian), but they will struggle to break free and SWAT will use pepperballs to disrupt your grip.',
   );
@@ -106,13 +117,17 @@ export function prepareSuspectMode(map: MapData): SuspectModeSetup {
     },
     swatSpawns,
     swatCount,
+    loadout,
   };
 }
 
 /** 容疑者が使える武器（faction='suspect' の改造拳銃のみ。非致死性装備・SWAT 装備は無し） */
-export function suspectWeapons(defs: readonly WeaponDef[]): WeaponDef[] {
+export function suspectWeapons(defs: readonly WeaponDef[], reserveMagazines?: number): WeaponDef[] {
   const own = defs.filter((w) => w.faction === 'suspect');
-  return own.length > 0 ? own : defs.filter((w) => w.category === 'primary');
+  const list = own.length > 0 ? own : defs.filter((w) => w.category === 'primary');
+  if (reserveMagazines === undefined) return list;
+  // 建物の規模に応じた持ち込み弾薬（有限弾数の武器だけ置き換える）
+  return list.map((w) => (w.reserveMagazines !== undefined ? { ...w, reserveMagazines } : w));
 }
 
 /** SWAT（通常モード）が使える武器 */

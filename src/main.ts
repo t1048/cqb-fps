@@ -68,6 +68,7 @@ import {
   type ResultReport,
 } from './modes/SuspectMode';
 import { SuspectAllyDirector } from './modes/SuspectAllies';
+import type { SuspectLoadout } from './modes/SuspectLoadout';
 
 type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'paused' | 'ended';
 
@@ -234,11 +235,13 @@ class App {
     map = applyMissionRoster(map);
     let swatSpawns: { x: number; y: number; z: number }[] = [];
     let swatCount = 0;
+    let loadout: SuspectLoadout | null = null;
     if (suspect) {
       const setup = prepareSuspectMode(map);
       map = setup.map;
       swatSpawns = setup.swatSpawns;
       swatCount = setup.swatCount;
+      loadout = setup.loadout;
     }
     this.mapId = map.id;
     const initialSettings = getSettings();
@@ -298,7 +301,7 @@ class App {
       suspect ? 'suspect' : 'swat',
     );
     this.scene.add(this.doors.root);
-    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs) : swatWeapons(weaponDefs), this.bus);
+    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs, loadout?.reserveMagazines) : swatWeapons(weaponDefs), this.bus);
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.flashOverlay = new FlashOverlay(document.body);
     this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight, map.rooms);
@@ -540,6 +543,7 @@ class App {
         showGauge: (label, ratio) => sm.showGauge(label, ratio),
         subtitle: this.subtitle,
       });
+      if (loadout && loadout.medkits > 0) this.medkit.add(loadout.medkits);
       this.pepper = new PepperEffect(this.player, this.weapons, this.subtitle, this.renderer.domElement);
       this.tearGasEffect = new TearGasEffect(this.player, this.weapons, this.tearGas, this.subtitle, this.bus);
       this.fortify = new Fortify({
@@ -559,6 +563,7 @@ class App {
         entry: swatSpawns[0] ?? { x: 0, y: 0, z: 0 },
         isPrep: () => sm.preparing,
         showGauge: (label, ratio) => sm.showGauge(label, ratio),
+        loadout: loadout ?? undefined,
         onCivilianKilled: (c) => sm.addEntry(t(`民間人殺害・トラップ (${c.id})`, `Civilian Killed by Trap (${c.id})`), -400),
       });
       sm.attachFortify(this.fortify);
