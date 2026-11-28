@@ -8,6 +8,8 @@ export interface PauseMenuOptions {
   onResume: () => void;
   onRetry: () => void;
   onBackToBriefing: () => void;
+  /** タイトル画面へ戻る（指定時のみボタンを表示） */
+  onBackToTitle?: () => void;
   onCloseSettings?: () => void;
   seedInfo?: SeedShareInfo;
 }
@@ -99,7 +101,7 @@ const CSS = `
 }
 .cqb-pause-row-btns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 8px;
 }
 .cqb-pause-section {
@@ -261,6 +263,7 @@ export class PauseMenu {
   private readonly resumeBtn: HTMLButtonElement;
   private readonly retryBtn: HTMLButtonElement;
   private readonly briefingBtn: HTMLButtonElement;
+  private titleBtn: HTMLButtonElement | null = null;
   private readonly closeSettingsBtn: HTMLButtonElement;
 
   private readonly settingsHeadingEl: HTMLSpanElement;
@@ -335,6 +338,13 @@ export class PauseMenu {
     this.briefingBtn.addEventListener('click', () => this.opts.onBackToBriefing());
 
     rowBtns.append(this.retryBtn, this.briefingBtn);
+    if (this.opts.onBackToTitle) {
+      this.titleBtn = document.createElement('button');
+      this.titleBtn.type = 'button';
+      this.titleBtn.className = 'cqb-pause-btn';
+      this.titleBtn.addEventListener('click', () => this.opts.onBackToTitle?.());
+      rowBtns.append(this.titleBtn);
+    }
     this.pauseActionsEl.append(this.resumeBtn, rowBtns);
     card.appendChild(this.pauseActionsEl);
 
@@ -553,6 +563,7 @@ export class PauseMenu {
     this.resumeBtn.textContent = t('▶ ゲームを再開', '▶ Resume');
     this.retryBtn.textContent = t('↻ リトライ', '↻ Retry');
     this.briefingBtn.textContent = t('☰ ブリーフィング', '☰ Briefing');
+    if (this.titleBtn) this.titleBtn.textContent = t('⌂ タイトル', '⌂ Title');
     this.closeSettingsBtn.textContent = t('閉じる', 'Close');
 
     this.settingsHeadingEl.textContent = t('基本設定', 'Settings');

@@ -58,7 +58,6 @@ import {
   describePortalDirection,
   findObstructingBarricade,
   resolveSwatSpawns,
-  shouldTriggerReinforcements,
   updateRoomStay,
 } from './swat/swatHelpers';
 import { SwatHunter } from './swat/SwatHunter';
@@ -74,11 +73,6 @@ import {
   PRESSURE_PER_DOWN,
   PRESSURE_RAMP_SEC,
   RADIO_STAGGER_SEC,
-  REINFORCEMENT_COOLDOWN_SEC,
-  REINFORCEMENT_MAX_WAVES,
-  REINFORCEMENT_MIN_HOLD_SEC,
-  REINFORCEMENT_TRIGGER_KILLS,
-  REINFORCEMENT_WAVE_SIZE,
   SEPARATION_DIST,
   SEPARATION_FIXED_DIST,
   SEPARATION_LOOSE_MUL,
@@ -90,7 +84,6 @@ import {
   type BreachIntel,
   type CoverCell,
   type HunterState,
-  type ReinforcementCheck,
   type SwatSpawn,
   type SwatTeamDeps,
   type SwatTeamHost,
@@ -138,11 +131,6 @@ export {
   PRESSURE_PER_DOWN,
   PRESSURE_RAMP_SEC,
   RADIO_STAGGER_SEC,
-  REINFORCEMENT_COOLDOWN_SEC,
-  REINFORCEMENT_MAX_WAVES,
-  REINFORCEMENT_MIN_HOLD_SEC,
-  REINFORCEMENT_TRIGGER_KILLS,
-  REINFORCEMENT_WAVE_SIZE,
   SHIELD_COMBAT,
   SWAT_COMBAT,
   VISION_FOV_DEG,
@@ -151,10 +139,9 @@ export {
   cellSizes,
   describePortalDirection,
   findObstructingBarricade,
-  shouldTriggerReinforcements,
   updateRoomStay,
 };
-export type { CoverCell, HunterState, ReinforcementCheck, SwatSpawn, SwatTeamDeps, TrapHooks };
+export type { CoverCell, HunterState, SwatSpawn, SwatTeamDeps, TrapHooks };
 
 /**
  * 容疑者モードの敵 SWAT チーム。2 人 1 組で部屋を順に掃討し、音・目撃情報は無線で共有する。
@@ -185,7 +172,6 @@ export class SwatTeam implements SwatTeamHost {
   private readonly combatCtx: CombatContext;
   private readonly baseSpawns: readonly SwatSpawn[];
   private nextHunterId = 1;
-  private nextCellIndex = 0;
 
   private readonly coverage: SwatCoverage;
   private readonly entry: SwatEntryCoordinator;
@@ -316,7 +302,6 @@ export class SwatTeam implements SwatTeamHost {
         return self.radioCd;
       },
       nextHunterId: () => this.nextHunterId++,
-      nextCellIndex: () => this.nextCellIndex++,
       assignCells: () => this.assignCells(),
       portals: () => this.entry.portals(),
       reachablePortalLengths: (from) => this.entry.reachablePortalLengths(from),
@@ -475,7 +460,6 @@ export class SwatTeam implements SwatTeamHost {
       });
       i += size;
     });
-    this.nextCellIndex = sizes.length;
   }
 
   // ---------- 公開プロパティ・ゲッター ----------
@@ -562,14 +546,6 @@ export class SwatTeam implements SwatTeamHost {
     return this.tactics.lastSightingAge;
   }
 
-  get reinforcementWavesSpawned(): number {
-    return this.tactics.reinforcementWavesSpawned;
-  }
-
-  get hasPendingReinforcements(): boolean {
-    return this.tactics.hasPendingReinforcements;
-  }
-
   get clock(): number {
     return this.entry.clock;
   }
@@ -580,14 +556,6 @@ export class SwatTeam implements SwatTeamHost {
   }
 
   // ---------- 公開 Facade メソッド ----------
-
-  checkReinforcements(holdLeftSec: number): boolean {
-    return this.tactics.checkReinforcements(holdLeftSec);
-  }
-
-  spawnReinforcements(count = REINFORCEMENT_WAVE_SIZE): number {
-    return this.tactics.spawnReinforcements(count);
-  }
 
   withdraw(): boolean {
     return this.tactics.withdraw();

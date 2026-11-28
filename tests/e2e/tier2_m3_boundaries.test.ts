@@ -375,100 +375,25 @@ describe('Tier 2 — M3 Boundary & Corner Cases (F10–F13)', () => {
   });
 
   // =========================================================================
-  // F13 Boundaries
+  // F13 Boundaries: 増援ウェーブは廃止
   // =========================================================================
-  describe('F13 Boundaries: Reinforcement Waves Option', () => {
-    it('F13.B1: When reinforcements is false (default), hasPendingReinforcements is false', () => {
+  describe('F13 Boundaries: Reinforcement Waves Removed', () => {
+    it('F13.B1: SwatTeam exposes no reinforcement API and never grows past the initial team', () => {
       const h = track(
         createSwatHarness({
           map: makeSingleRoomMap(),
           spawns: [{ x: 0, y: 0, z: 6 }],
           count: 1,
           startAssault: true,
-          reinforcements: false,
         }),
       );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(typeof team.hasPendingReinforcements, 'hasPendingReinforcements getter must exist in M3').toBe('boolean');
-      expect(team.hasPendingReinforcements).toBe(false);
-    });
-
-    it('F13.B2: spawnReinforcements() is bounded and eventually exhausts hasPendingReinforcements', () => {
-      const h = track(
-        createSwatHarness({
-          map: makeSingleRoomMap(),
-          spawns: [{ x: 0, y: 0, z: 6 }],
-          count: 1,
-          startAssault: true,
-          reinforcements: true,
-        }),
-      );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(typeof team.spawnReinforcements).toBe('function');
-      // Drain all waves (cap loop at 10 to prevent infinite loop)
-      for (let i = 0; i < 10 && team.hasPendingReinforcements; i++) {
-        team.spawnReinforcements!();
+      const team = h.team as unknown as Record<string, unknown>;
+      for (const key of ['hasPendingReinforcements', 'spawnReinforcements', 'checkReinforcements', 'reinforcementWavesSpawned']) {
+        expect(key in team, key).toBe(false);
       }
-      expect(team.hasPendingReinforcements).toBe(false);
-    });
-
-    it('F13.B3: Calling spawnReinforcements() when reinforcements disabled does not spawn extra units', () => {
-      const h = track(
-        createSwatHarness({
-          map: makeSingleRoomMap(),
-          spawns: [{ x: 0, y: 0, z: 6 }],
-          count: 1,
-          startAssault: true,
-          reinforcements: false,
-        }),
-      );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(typeof team.spawnReinforcements).toBe('function');
-      const before = team.total;
-      team.spawnReinforcements!();
-      expect(team.total).toBe(before);
-    });
-
-    it('F13.B4: BriefingScreen in normal SWAT mode does NOT expose Suspect-only reinforcements toggle', () => {
-      const dom = installDomShim();
-      const map = makeSingleRoomMap();
-      const opts: BriefingOptionsWithM3 = {
-        onStart: () => {},
-        mode: 'swat',
-        reinforcements: false,
-        onToggleReinforcements: () => {},
-      };
-      const screen = new BriefingScreen(dom.document.body as unknown as HTMLElement, map, opts);
-      // Verify suspect mode DOES have it while swat mode hides it
-      const swatToggles = dom.document.body.findAll((el) => /増援|reinforce/i.test(el.textContent));
-      screen.dispose();
-
-      dom.reset();
-      const screen2 = new BriefingScreen(dom.document.body as unknown as HTMLElement, map, {
-        ...opts,
-        mode: 'suspect',
-      });
-      const suspectToggles = dom.document.body.findAll((el) => /増援|reinforce/i.test(el.textContent));
-      screen2.dispose();
-      expect(swatToggles.length).toBe(0);
-      expect(suspectToggles.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('F13.B5: Reinforcement wave units are registered in WeaponSystem targets so player can shoot and kill them', () => {
-      const h = track(
-        createSwatHarness({
-          map: makeSingleRoomMap(),
-          spawns: [{ x: 0, y: 0, z: 6 }],
-          count: 1,
-          startAssault: true,
-          reinforcements: true,
-        }),
-      );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(typeof team.spawnReinforcements).toBe('function');
-      const beforeTargets = h.weapons.targets.size;
-      team.spawnReinforcements!();
-      expect(h.weapons.targets.size).toBe(beforeTargets + 2);
+      const before = h.team.total;
+      h.step(10, 0.05);
+      expect(h.team.total).toBe(before);
     });
   });
 });

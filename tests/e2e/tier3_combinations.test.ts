@@ -424,29 +424,6 @@ describe('Tier 3 — Cross-Feature Pairwise Combinations (F1–F13)', () => {
     expect(h.recorder.count('swatFootstep')).toBeGreaterThanOrEqual(1);
   });
 
-  it('C12 (F13 + F4): Reinforcement wave spawns under elevated pressure and includes a shielded pointman', () => {
-    const h = track(
-      createSwatHarness({
-        map: makeSingleRoomMap(),
-        spawns: [
-          { x: 0, y: 0, z: 6 },
-          { x: 1, y: 0, z: 6 },
-        ],
-        count: 2,
-        startAssault: true,
-        reinforcements: true,
-      }),
-    );
-    const team = h.team as SwatTeamWithM2M3;
-    expect(typeof team.spawnReinforcements).toBe('function');
-    h.step(40, 0.05);
-    const pressureBefore = team.currentPressure;
-    team.spawnReinforcements!();
-    expect(team.total).toBe(4);
-    expect(team.currentPressure).toBeGreaterThanOrEqual(pressureBefore);
-    expect(team.hunters.slice(2).some((u) => u.shielded)).toBe(true);
-  });
-
   it('C13 (F8 + F12): C2 arming beeps and detonation route to AudioBridge without dropping events', () => {
     const bus = createGameEventBus();
     const player = createHeadlessPlayer();
@@ -466,28 +443,5 @@ describe('Tier 3 — Cross-Feature Pairwise Combinations (F1–F13)', () => {
     expect(called.filter((m) => m === 'playC2Beep').length).toBe(2);
     expect(called.some((m) => m === 'playC2Blast' || m === 'playBreach')).toBe(true);
     bridge.dispose();
-  });
-
-  it('C14 (F13 + F6): Reinforcement cell enters cleanly through exterior portal on multi-door house', () => {
-    const map = makeTwoDoorHouseMap();
-    const h = track(
-      createSwatHarness({
-        map,
-        spawns: [
-          { x: 0, y: 0, z: 8 },
-          { x: 1, y: 0, z: 8 },
-        ],
-        count: 2,
-        startAssault: true,
-        reinforcements: true,
-      }),
-    );
-    const team = h.team as SwatTeamWithM2M3;
-    expect(typeof team.spawnReinforcements).toBe('function');
-    team.spawnReinforcements!();
-    h.step(4.0, 0.05);
-    const newUnits = team.hunters.slice(2);
-    expect(newUnits.length).toBe(2);
-    expect(newUnits.every((u) => u.alive && u.state !== 'staging')).toBe(true);
   });
 });

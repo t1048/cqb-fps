@@ -257,7 +257,7 @@ describe('Tier 4 — Real-World Suspect Mode Application Scenarios (8 Scenarios)
     expect(h.team.hunters[2]!.body.pz).toBeLessThan(blueInitZ - 1.5);
   });
 
-  it('Scenario 6 (F13 + F4 + F6): Reinforcement Wave Survival vs. Repelled Victory Gate', () => {
+  it('Scenario 6 (F4 + F6): Repelled victory once the whole assault team is down (no reinforcement waves)', () => {
     const h = track(
       createSwatHarness({
         map: makeTwoDoorHouseMap(),
@@ -267,12 +267,9 @@ describe('Tier 4 — Real-World Suspect Mode Application Scenarios (8 Scenarios)
         ],
         count: 2,
         startAssault: true,
-        reinforcements: true,
-        urlSearch: '?mode=suspect&waves=1',
+        urlSearch: '?mode=suspect',
       }),
     );
-    const team = h.team as SwatTeamWithM2M3;
-    expect(team.hasPendingReinforcements).toBe(true);
 
     let ended = false;
     const interaction = new Interaction(createHeadlessInput(), 100);
@@ -291,31 +288,23 @@ describe('Tier 4 — Real-World Suspect Mode Application Scenarios (8 Scenarios)
       },
     );
 
-    // Wipe wave 1
-    for (const u of [...h.team.hunters]) {
-      h.bus.emit('entityHit', { targetId: u.id, shooter: 'player', damage: 250, pos: { x: u.body.px, y: 1, z: u.body.pz } });
-    }
+    // 1 名だけ倒してもまだ終わらない
+    const [first, second] = h.team.hunters;
+    h.bus.emit('entityHit', { targetId: first!.id, shooter: 'player', damage: 250, pos: { x: first!.body.px, y: 1, z: first!.body.pz } });
     for (let i = 0; i < 60; i++) {
       h.step(0.05, 0.05);
       mission.update(0.05);
     }
-    // Must spawn wave 2 instead of ending prematurely
     expect(ended).toBe(false);
-    expect(h.team.aliveCount).toBeGreaterThanOrEqual(2);
+    expect(h.team.aliveCount).toBe(1);
 
-    // Wipe remaining waves until no pending reinforcements -> repelled victory unlocks
-    for (let guard = 0; guard < 5 && !ended; guard++) {
-      for (const u of [...h.team.hunters]) {
-        if (u.alive) {
-          h.bus.emit('entityHit', { targetId: u.id, shooter: 'player', damage: 250, pos: { x: u.body.px, y: 1, z: u.body.pz } });
-        }
-      }
-      for (let i = 0; i < 80; i++) {
-        h.step(0.05, 0.05);
-        mission.update(0.05);
-        if (ended) break;
-      }
+    // 全滅で撃退。増援は来ない
+    h.bus.emit('entityHit', { targetId: second!.id, shooter: 'player', damage: 250, pos: { x: second!.body.px, y: 1, z: second!.body.pz } });
+    for (let i = 0; i < 80 && !ended; i++) {
+      h.step(0.05, 0.05);
+      mission.update(0.05);
     }
+    expect(h.team.total).toBe(2);
     expect(ended).toBe(true);
     mission.dispose();
   });

@@ -10,11 +10,8 @@ import {
   BARRICADE_FACE_OFFSET,
   BARRICADE_MIN_DIST,
   BARRICADE_SHOOT_RANGE,
-  REINFORCEMENT_MIN_HOLD_SEC,
-  REINFORCEMENT_TRIGGER_KILLS,
   STACK_CELL_SPLIT_PENALTY,
   STACK_SIDE_PREF_PENALTY,
-  type ReinforcementCheck,
   type SwatSpawn,
 } from './swatTypes';
 
@@ -141,16 +138,6 @@ export function describePortalDirection(portalPos: Vec3, center: Vec3): { ja: st
     return dz < 0 ? { ja: '北ドア', en: 'north door' } : { ja: '南ドア', en: 'south door' };
   }
   return dx > 0 ? { ja: '東ドア', en: 'east door' } : { ja: '西ドア', en: 'west door' };
-}
-
-/** 増援ウェーブを発生させるべきか判定する純粋関数 */
-export function shouldTriggerReinforcements(c: ReinforcementCheck): boolean {
-  if (!c.enabled || !c.started) return false;
-  if (c.wavesSpawned >= c.maxWaves) return false;
-  if (c.holdLeftSec < REINFORCEMENT_MIN_HOLD_SEC) return false;
-  if (c.aliveCount === 0) return true;
-  if (c.cooldownSec > 0) return false;
-  return c.killsSinceLastWave >= REINFORCEMENT_TRIGGER_KILLS;
 }
 
 /**

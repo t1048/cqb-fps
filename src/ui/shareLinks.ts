@@ -6,7 +6,6 @@ export interface SeedShareInfo {
   stage: string;
   seed: number;
   mode: GameMode;
-  reinforcements: boolean;
 }
 
 /** 現在のシード・ステージ・モードを再現する共有 URL を生成する */
@@ -19,7 +18,6 @@ export function buildSeedShareUrl(info: SeedShareInfo): string {
   params.set('stage', info.stage);
   params.set('seed', String(info.seed));
   if (info.mode === 'suspect') params.set('mode', 'suspect');
-  if (info.reinforcements) params.set('waves', '1');
   return `${base}?${params.toString()}`;
 }
 

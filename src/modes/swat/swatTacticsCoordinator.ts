@@ -15,7 +15,6 @@ import {
   flankLine,
   manDownLine,
   pickRadio,
-  reinforceLine,
 } from '../../ai/radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { resolveFloorY, type CombatContext } from '../../ai/EngageBehavior';
@@ -39,13 +38,11 @@ import {
   SWAT_RUSH_LOW_HP,
   SWAT_RUSH_RADIUS,
   SWAT_RUSH_TEAM_COOLDOWN,
-  isShieldRole,
 } from '../../ai/SwatProfile';
 import {
   C2_BLAST_RADIUS,
   computeBallisticVelocity,
   evaluateC2BlastCone,
-  filterReachableExteriorEntries,
   isIndoorPoint,
   planFlashThrow,
   planPincerFlankGoal,
@@ -58,24 +55,18 @@ import {
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import { RepeatGuard } from '../../ai/actionGuard';
 import type { Door } from '../../world/Door';
-import { campStayDt, lerp, resolveSwatSpawns, shouldTriggerReinforcements, updateRoomStay } from './swatHelpers';
-import { SwatHunter } from './SwatHunter';
+import { campStayDt, lerp, updateRoomStay } from './swatHelpers';
+import type { SwatHunter } from './SwatHunter';
 import {
   BASE_REACTION_SEC,
   CAMP_GAS_THRESHOLD_SEC,
-  CELL_NAMES,
   FLASH_REFILL_SEC,
   FLASH_TEAM_CD,
   GAS_TEAM_CD,
   HEARING_MUL,
-  NAMES,
   OCCLUDED_MUL,
   PRESSURE_PER_DOWN,
   PRESSURE_RAMP_SEC,
-  REINFORCEMENT_COOLDOWN_SEC,
-  REINFORCEMENT_MAX_WAVES,
-  REINFORCEMENT_MIN_HOLD_SEC,
-  REINFORCEMENT_WAVE_SIZE,
   SELF_NOISE_RADIUS,
   SHIELD_COMBAT,
   SWAT_COMBAT,
@@ -102,7 +93,6 @@ export interface SwatTacticsHost {
   readonly aliveCount: number;
   readonly radioCd: number;
   nextHunterId(): number;
-  nextCellIndex(): number;
   assignCells(): void;
   portals(): EntryPortal[];
   reachablePortalLengths?(from: Vec3): readonly EntryReach[];
@@ -170,18 +160,10 @@ export class SwatTacticsCoordinator {
   private gasLeft = SWAT_GAS_PER_TEAM;
   /** 統計 */
   pepperShots = 0;
-  /** 増援ウェーブ（F13） */
-  private readonly reinforcementsEnabled: boolean;
-  private wavesSpawned = 0;
-  private killsAtLastWave = 0;
-  private waveCooldown = 0;
-  private lastHoldLeft = Infinity;
-  private lastReinforcementPortalId: string | null = null;
   private readonly chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly rayOriginScratch: Vec3 = { x: 0, y: 0, z: 0 };
 
   constructor(private readonly host: SwatTacticsHost) {
-    this.reinforcementsEnabled = Boolean(host.d.reinforcements);
     const k = Math.max(1, (host.d.count ?? 0) / 4); // 4 人編成が基準。隊員が増えた分だけ携行数を増やす
     this.flashesLeft = Math.ceil(SWAT_FLASH_PER_TEAM * k);
     this.gasLeft = Math.ceil(SWAT_GAS_PER_TEAM * k);
@@ -198,18 +180,6 @@ export class SwatTacticsCoordinator {
     return this.sightingAge;
   }
 
-  get reinforcementWavesSpawned(): number {
-    return this.wavesSpawned;
-  }
-
-  get hasPendingReinforcements(): boolean {
-    return (
-      this.reinforcementsEnabled &&
-      this.wavesSpawned < REINFORCEMENT_MAX_WAVES &&
-      this.lastHoldLeft >= REINFORCEMENT_MIN_HOLD_SEC
-    );
-  }
-
   tickTimers(dt: number): void {
     this.flashCd = Math.max(0, this.flashCd - dt);
     this.gasCd = Math.max(0, this.gasCd - dt);
@@ -219,106 +189,11 @@ export class SwatTacticsCoordinator {
     this.pincerRefreshCd = Math.max(0, this.pincerRefreshCd - dt);
     this.pincerPlanCd = Math.max(0, this.pincerPlanCd - dt);
     this.pincerRadioCd = Math.max(0, this.pincerRadioCd - dt);
-    this.waveCooldown = Math.max(0, this.waveCooldown - dt);
     this.sightingAge += dt;
     this.c2Clock += dt;
   }
 
-  // ---------- 増援・撤収 ----------
-
-  /** 残り時間・撃破数に応じて増援ウェーブ（F13）の突入を判定・実行する */
-  checkReinforcements(holdLeftSec: number): boolean {
-    this.lastHoldLeft = holdLeftSec;
-    const should = shouldTriggerReinforcements({
-      enabled: this.reinforcementsEnabled,
-      started: this.host.started,
-      wavesSpawned: this.wavesSpawned,
-      maxWaves: REINFORCEMENT_MAX_WAVES,
-      aliveCount: this.host.aliveCount,
-      killsSinceLastWave: this.host.kills - this.killsAtLastWave,
-      holdLeftSec,
-      cooldownSec: this.waveCooldown,
-    });
-    if (!should) return false;
-    return this.spawnReinforcements() > 0;
-  }
-
-  /** 外周から新規 2 名セル（盾持ち＋ライフル）を増援として突入させる */
-  spawnReinforcements(count = REINFORCEMENT_WAVE_SIZE): number {
-    if (this.host.disposed || !this.reinforcementsEnabled || this.wavesSpawned >= REINFORCEMENT_MAX_WAVES || count <= 0) return 0;
-    const anchor = this.host.baseSpawns[0] ?? { x: 0, y: 0, z: 0 };
-    const reachable = filterReachableExteriorEntries(this.host.portals(), anchor, this.host.d.colliders, this.host.d.bounds);
-    const refPos = this.lastSighting ?? this.host.d.player.position;
-    let chosenPortal: EntryPortal | null = null;
-    if (reachable.length > 0) {
-      const fresh = reachable.filter((p) => p.id !== this.lastReinforcementPortalId);
-      const pool = fresh.length > 0 ? fresh : reachable;
-      chosenPortal = pool.reduce((best, p) => {
-        const dBest = Math.hypot(best.outside.x - refPos.x, best.outside.z - refPos.z);
-        const dCur = Math.hypot(p.outside.x - refPos.x, p.outside.z - refPos.z);
-        return dCur > dBest ? p : best;
-      }, pool[0]!);
-      this.lastReinforcementPortalId = chosenPortal.id;
-    }
-
-    const spawns = chosenPortal
-      ? resolveSwatSpawns([chosenPortal.outside], count, this.host.d.colliders)
-      : resolveSwatSpawns(this.host.baseSpawns, count, this.host.d.colliders);
-    const cellIdx = this.host.nextCellIndex();
-    const cellName = CELL_NAMES[cellIdx % CELL_NAMES.length]!;
-    const members: SwatHunter[] = [];
-    const focus = this.host.rooms[0];
-
-    for (let k = 0; k < spawns.length; k++) {
-      const idNum = this.host.nextHunterId();
-      const shielded = isShieldRole(k, spawns.length);
-      const h = new SwatHunter(
-        `swat_${idNum}`,
-        `${cellName}-${k + 1}`,
-        NAMES[(idNum - 1) % NAMES.length]!,
-        spawns[k]!,
-        this.host.teamHost,
-        this.host.combatCtx,
-        this.host.d.bus,
-        this.host.d.textures,
-        shielded,
-      );
-      h.cell = members;
-      h.cellIndex = cellIdx;
-      h.cellName = cellName;
-      h.assignedPortal = chosenPortal;
-      members.push(h);
-      this.host.hunters.push(h);
-      this.host.root.add(h.body.group);
-      this.host.root.add(h.optics.group);
-      this.host.d.weapons.addTarget(h);
-      if (focus) h.body.faceToward(focus.x, focus.z);
-      if (this.host.started) {
-        if (this.lastSighting) {
-          h.huntTarget = { ...this.lastSighting };
-          h.setState('hunt');
-        } else {
-          h.setState('sweep');
-        }
-      }
-    }
-
-    this.wavesSpawned++;
-    this.killsAtLastWave = this.host.kills;
-    this.waveCooldown = REINFORCEMENT_COOLDOWN_SEC;
-    if (members[0]) {
-      const [reJa, reEn] = reinforceLine(cellName);
-      this.host.queueRadio(members[0], reJa, reEn);
-    }
-    this.host.d.subtitle.show(
-      t(
-        `SWAT 増援（${cellName}班 ${members.length}名）が外周から突入した！`,
-        `SWAT reinforcements (${cellName} team, ${members.length} units) breached from the perimeter!`,
-      ),
-      2.6,
-    );
-    return members.length;
-  }
+  // ---------- 撤収 ----------
 
   /** 交渉で突入班を 1 名下げる（最後尾の隊員を撤収）。成功で true */
   withdraw(): boolean {

@@ -61,10 +61,8 @@ export interface BriefingScreenOptions {
   mode?: GameMode;
   /** モード切替（指定時はモード選択ボタンを表示） */
   onSelectMode?: (mode: GameMode) => void;
-  /** 容疑者モード: 増援ウェーブを有効にするか（既定 false） */
-  reinforcements?: boolean;
-  /** 容疑者モード: 増援ウェーブ切替コールバック */
-  onToggleReinforcements?: (enabled: boolean) => void;
+  /** タイトル画面へ戻るコールバック（指定時は右上に「タイトルへ」ボタンを表示） */
+  onBackToTitle?: () => void;
   /** 設定モーダルを開くコールバック */
   onOpenSettings?: () => void;
   /** シード共有 URL 生成用情報 */
@@ -128,6 +126,22 @@ export class BriefingScreen {
     this.stageBtnCleanups.push(() => langBtn.removeEventListener('click', onLangClick));
     topbar.appendChild(langBtn);
 
+    if (options.onBackToTitle) {
+      const titleBtn = document.createElement('button');
+      titleBtn.type = 'button';
+      titleBtn.className = 'bfs-topbtn';
+      titleBtn.dataset.action = 'title';
+      titleBtn.textContent = t('← タイトルへ', '← Title');
+      titleBtn.style.marginRight = 'auto';
+      const onTitleClick = (): void => {
+        if (this.disposed) return;
+        options.onBackToTitle?.();
+      };
+      titleBtn.addEventListener('click', onTitleClick);
+      this.stageBtnCleanups.push(() => titleBtn.removeEventListener('click', onTitleClick));
+      topbar.prepend(titleBtn);
+    }
+
     if (options.onOpenSettings) {
       const settingsBtn = document.createElement('button');
       settingsBtn.type = 'button';
@@ -147,26 +161,20 @@ export class BriefingScreen {
     const setup = document.createElement('div');
     setup.className = 'bfs-setup';
     if (options.onSelectMode) {
-      this.modeSlot = this.buildModeStep(
-        options.mode ?? 'swat',
-        options.onSelectMode,
-        Boolean(options.reinforcements),
-        options.onToggleReinforcements,
-      );
+      this.modeSlot = this.buildModeStep(options.mode ?? 'swat', options.onSelectMode);
       setup.appendChild(this.modeSlot);
-    } else if (suspectMode && options.onToggleReinforcements) {
-      const optStep = document.createElement('div');
-      optStep.className = 'bfs-step';
-      optStep.appendChild(this.buildReinforcementsToggle(Boolean(options.reinforcements), options.onToggleReinforcements));
-      setup.appendChild(optStep);
+    } else {
+      // モード・広さはタイトル画面で選ぶ。ここではシード（間取り）だけを扱う
+      setup.style.gridTemplateColumns = '1fr';
     }
 
     this.stageSlot.className = 'bfs-step';
-    if (options.stages && options.stages.length > 0 && options.onSelectStage) {
-      this.renderStageButtons(options.stages, options.currentStageId ?? map.id, options.onSelectStage, options.onSelectMode ? 2 : 1);
-      if (map.seed !== undefined && options.onRegenerate) {
-        this.stageSlot.appendChild(this.buildSeedRow(map.seed, options.onRegenerate, options.seedShareInfo));
-      }
+    const hasStageButtons = Boolean(options.stages && options.stages.length > 0 && options.onSelectStage);
+    if (hasStageButtons) {
+      this.renderStageButtons(options.stages!, options.currentStageId ?? map.id, options.onSelectStage!, options.onSelectMode ? 2 : 1);
+    }
+    if (map.seed !== undefined && options.onRegenerate) {
+      this.stageSlot.appendChild(this.buildSeedRow(map.seed, options.onRegenerate, options.seedShareInfo));
     }
     if (options.stageSelector) this.stageSlot.appendChild(options.stageSelector);
     setup.appendChild(this.stageSlot);
@@ -368,7 +376,9 @@ export class BriefingScreen {
     const footLeft = document.createElement('div');
     footLeft.style.cssText = 'display:flex;align-items:center;gap:12px;flex-wrap:wrap';
     const footHelp = document.createElement('div');
-    footHelp.textContent = t('モードとマップの広さを選んだら、交渉フェーズへ進む', 'Select mode & map size, then proceed to negotiation');
+    footHelp.textContent = options.onSelectMode
+      ? t('モードとマップの広さを選んだら、交渉フェーズへ進む', 'Select mode & map size, then proceed to negotiation')
+      : t('間取りと人数を確認したら、交渉フェーズへ進む', 'Review the floor plan, then proceed to negotiation');
     footHelp.style.cssText = 'font-size:14px;color:#8399b0';
     const kofi = document.createElement('a');
     kofi.className = 'bfs-kofi';
@@ -476,12 +486,7 @@ export class BriefingScreen {
     this.stageSlot.appendChild(grid);
   }
 
-  private buildModeStep(
-    mode: GameMode,
-    onSelectMode: (mode: GameMode) => void,
-    reinforcements: boolean,
-    onToggleReinforcements?: (enabled: boolean) => void,
-  ): HTMLElement {
+  private buildModeStep(mode: GameMode, onSelectMode: (mode: GameMode) => void): HTMLElement {
     const step = document.createElement('div');
     step.className = 'bfs-step';
     step.appendChild(this.stepTitle(1, t('モード', 'Mode')));
@@ -513,46 +518,7 @@ export class BriefingScreen {
       );
     }
     step.appendChild(grid);
-    if (mode === 'suspect' && onToggleReinforcements) {
-      step.appendChild(this.buildReinforcementsToggle(reinforcements, onToggleReinforcements));
-    }
     return step;
-  }
-
-  private buildReinforcementsToggle(
-    reinforcements: boolean,
-    onToggleReinforcements: (enabled: boolean) => void,
-  ): HTMLElement {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'bfs-toggle';
-    btn.dataset.option = 'reinforcements';
-    btn.setAttribute('aria-pressed', reinforcements ? 'true' : 'false');
-
-    const copy = document.createElement('div');
-    const head = document.createElement('div');
-    head.style.cssText = 'font:bold 14px sans-serif;color:#f4f8fc';
-    head.textContent = t('増援ウェーブ', 'Reinforcement Waves');
-    const desc = document.createElement('div');
-    desc.className = 'bfs-choice-desc';
-    desc.textContent = t(
-      'SWAT を倒しても残り時間があれば外周から 2 人組（盾持ち＋ライフル）が追加突入',
-      'Additional 2-man SWAT teams (Shield + Rifle) breach while time remains',
-    );
-    copy.append(head, desc);
-
-    const badge = document.createElement('span');
-    badge.className = 'bfs-toggle-badge';
-    badge.textContent = reinforcements ? 'ON' : 'OFF';
-
-    btn.append(copy, badge);
-    const onClick = (): void => {
-      if (this.disposed) return;
-      onToggleReinforcements(!reinforcements);
-    };
-    btn.addEventListener('click', onClick);
-    this.stageBtnCleanups.push(() => btn.removeEventListener('click', onClick));
-    return btn;
   }
 
   private buildSeedRow(seed: number, onRegenerate: (seed?: number) => void, seedShareInfo?: SeedShareInfo): HTMLElement {
