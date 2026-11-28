@@ -668,6 +668,8 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
     const alts: { pm: PlannedModule; style: PlannedEdgeStyle }[] = [];
     for (const x of plan.modules) {
       if (x.id === m.parentId || x.level !== m.level || !placed.has(x.id) || x.def.private) continue;
+      // 屋外は屋内室の付け替え先にしない（屋外経由でしか入れない屋内室を作らない）
+      if (x.def.outdoor && !m.def.outdoor) continue;
       const r = rules.rule(x.category, m.category);
       if (!r || (r.style === 'exterior_door' && !x.def.outdoor && !m.def.outdoor)) continue;
       alts.push({ pm: x, style: r.style });
@@ -1125,16 +1127,17 @@ export function solveSpatialLayout(tpl: ModularGeneratorTemplate, plan: Building
     return false;
   };
 
+  // 1F も含め、屋外（前庭・中庭・テラス）を数えずに屋内室だけで連結を判定する。屋外を経由しないと
+  // 別の部屋へ行けない間取り（隣家に入るような建物）は作らない
   for (const lv of plan.levels) {
-    if (lv === 0) continue;
-    const lvRooms = rooms.filter((r) => r.level === lv);
+    const lvRooms = rooms.filter((r) => r.level === lv && !r.outdoor);
     connectByContacts(lvRooms);
-    for (let k = 0; k < 4 && componentCount(lvRooms) > 1; k++) {
+    for (let k = 0; k < 4 && lv !== 0 && componentCount(lvRooms) > 1; k++) {
       if (!insertBridge(lv, lvRooms)) break;
       connectByContacts(lvRooms);
     }
     if (componentCount(lvRooms) > 1) {
-      throw new RetryGeneration(`${levelLabel(lv)}: 同じ階の部屋が島に分かれて連結できません`);
+      throw new RetryGeneration(`${levelLabel(lv)}: 同じ階の屋内室が屋外を経由しないと連結できません`);
     }
   }
 

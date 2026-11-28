@@ -429,6 +429,9 @@ export function planStoriesAndGraph(tpl: ModularGeneratorTemplate, profile: Stor
       for (const c of pending) {
         for (const p of inTree) {
           if (p.def.private) continue; // private は葉に限定
+          // 屋外（中庭・テラス）は屋内室の親にしない。屋内室どうしが屋外を経由しないと行き来できない
+          // （隣家に入るような）間取りを作らないため、屋外モジュールは屋内側の葉にする
+          if (p.def.outdoor && !c.def.outdoor) continue;
           const r = rules.rule(p.category, c.def.category);
           if (!r) continue;
           // exterior_door は屋外モジュール（中庭・テラス）との辺に限る
