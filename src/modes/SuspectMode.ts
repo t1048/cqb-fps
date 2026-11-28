@@ -415,6 +415,11 @@ export class SuspectMission {
   private gaugeReq = -1;
   private gaugeLabel = '';
 
+  /** Space 長押しで投降中か */
+  get isSurrendering(): boolean {
+    return this.surrenderHold > 0;
+  }
+
   /** 今フレームの長押しゲージを要求（最後の要求を flushGauge で反映） */
   showGauge(label: string, ratio: number): void {
     this.gaugeReq = Math.max(0, Math.min(1, ratio));

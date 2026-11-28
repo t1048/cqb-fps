@@ -67,6 +67,8 @@ export class PlayerDoorWork {
   private readonly gaugeTxt = document.createElement('div');
   private gaugeValue = -1;
   private gaugeText = '';
+  private workKind: 'check' | 'disarm' | 'c2' | null = null;
+  private lastWorkKind: 'check' | 'disarm' | 'c2' | null = null;
   private done = false;
   private planting: { door: Door; side: number; sec: number } | null = null;
   private readonly planted: PlantedC2[] = [];
@@ -129,6 +131,7 @@ export class PlayerDoorWork {
     const work = sec - TAP_SEC;
     if (this.d.traps.isDiscovered(door.id)) {
       const need = this.d.trap.disarmSec;
+      this.workKind = 'disarm';
       this.showGauge(t('罠を解除中...', 'Disarming the trap...'), work / need);
       if (work < need) return;
       this.done = true;
@@ -142,6 +145,7 @@ export class PlayerDoorWork {
       return;
     }
     const need = this.d.check.durationSec;
+    this.workKind = 'check';
     this.showGauge(t('ドアチェック中（施錠・罠）...', 'Checking door (lock & trap)...'), work / need);
     if (work < need) return;
     this.done = true;
@@ -163,10 +167,17 @@ export class PlayerDoorWork {
     this.gaugeText = text;
   }
 
+  /** 今フレーム実行中の作業種別（ドアチェック / 罠解除 / C2 設置）。 */
+  get activeWork(): 'check' | 'disarm' | 'c2' | null {
+    return this.lastWorkKind;
+  }
+
   /** 毎フレーム: ゲージ表示 / C2 の設置・信管・爆発演出 */
   update(dt: number): void {
     if (this.disposed) return;
     this.updateC2(dt);
+    this.lastWorkKind = this.planting ? 'c2' : this.workKind;
+    this.workKind = null;
     if (this.gaugeValue >= 0) {
       this.gaugeEl.style.display = 'block';
       this.gaugeTxt.textContent = this.gaugeText;

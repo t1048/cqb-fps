@@ -48,6 +48,7 @@ export class Interaction {
   private readonly entries: Entry[] = [];
   private current: { entry: Entry; target: unknown } | null = null;
   private held: { entry: Entry; target: unknown; sec: number } | null = null;
+  private pressedId: string | null = null;
   private wheelAccum = 0;
   private disposed = false;
 
@@ -82,9 +83,21 @@ export class Interaction {
     return { providerId: this.current.entry.id, label: this.current.entry.label(this.current.target) };
   }
 
+  /** F 長押し中の provider ID と保持秒数。長押し中でなければ null。 */
+  get activeHold(): { providerId: string; sec: number } | null {
+    if (!this.held) return null;
+    return { providerId: this.held.entry.id, sec: this.held.sec };
+  }
+
+  /** 今フレームで F を押した瞬間の provider ID。無ければ null。 */
+  get pressedProviderId(): string | null {
+    return this.pressedId;
+  }
+
   update(rawDt: number): void {
     if (this.disposed) return;
     const dt = Math.min(rawDt, MAX_DT);
+    this.pressedId = null;
 
     this.current = null;
     for (const e of this.entries) {
@@ -122,6 +135,7 @@ export class Interaction {
       this.held.entry.hold(this.held.target, dt, this.held.sec);
     }
     if (!this.held && this.input.isPointerLocked && this.input.wasPressed('interact') && this.current) {
+      this.pressedId = this.current.entry.id;
       this.current.entry.press(this.current.target);
       this.held = { entry: this.current.entry, target: this.current.target, sec: 0 };
     }

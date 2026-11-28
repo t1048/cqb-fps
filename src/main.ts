@@ -42,8 +42,7 @@ import { DoorSystem } from './world/Door';
 import { normalizeSeed, randomSeed } from './world/generator/Rng';
 import { TextureLibrary } from './world/Materials';
 import { motifById } from './world/Motif';
-import { ViewModel } from './player/ViewModel';
-import { PlayerAvatar } from './player/PlayerAvatar';
+import { ViewModel, type InteractAnimKind } from './player/ViewModel';
 import { Optiwand } from './player/Optiwand';
 import { MedkitUse } from './player/Medkit';
 import { ScoutIntel } from './ai/ScoutIntel';
@@ -190,7 +189,6 @@ class App {
   private readonly textures: TextureLibrary;
   private readonly envTex: THREE.Texture;
   private readonly viewModel: ViewModel;
-  private readonly avatar: PlayerAvatar;
   private readonly squad: SquadSystem;
   /** オプティワンド（SWAT モードのみ）。偵察情報は隊と共有する */
   private readonly optiwand: Optiwand | null = null;
@@ -377,8 +375,6 @@ class App {
     const equipmentLight = new THREE.DirectionalLight(0xfff1d6, 2.6);
     equipmentLight.position.set(-1, 2, 1);
     this.equipmentScene.add(equipmentLight);
-    this.avatar = new PlayerAvatar(this.textures);
-    this.scene.add(this.avatar.root);
     this.subtitle = new Subtitle(document.body);
     if (!suspect) {
       // オプティワンド（プレイヤー）・ミラー確認（隊員）で見つけた容疑者もミニマップに一時表示
@@ -399,7 +395,6 @@ class App {
         subtitle: this.subtitle,
         weapons: this.weapons,
         host: document.body,
-        hideDuringRender: [this.avatar.root],
       });
     }
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {
@@ -972,16 +967,33 @@ class App {
     this.pepper?.update(dt);
     this.tearGasEffect?.update(dt);
     this.fortify?.update(dt);
-    const viewStyle = this.flashbang.equipped ? this.flashbang.weapon.id : this.weapons.weapon.id;
-    this.viewModel.setStyle(viewStyle);
-    this.viewModel.root.visible = !this.optiwand?.equipped;
-    const reloadP = this.flashbang.equipped ? null : this.weapons.reloadProgress;
-    this.viewModel.update(dt, this.player.isMoving, reloadP, this.weapons.reloadFromEmpty);
-    this.playReloadCues(reloadP);
-    this.syncDynamicShadows();
-    this.avatar.update(this.player);
     this.arrest?.update(dt);
     this.doorWork?.update(dt);
+    const wandEquipped = Boolean(this.optiwand?.equipped);
+    const viewStyle = wandEquipped
+      ? 'optiwand'
+      : this.flashbang.equipped
+        ? this.flashbang.weapon.id
+        : this.weapons.weapon.id;
+    this.viewModel.setStyle(viewStyle);
+    this.viewModel.root.visible = true;
+    const reloadP = wandEquipped || this.flashbang.equipped ? null : this.weapons.reloadProgress;
+    const wandState = this.optiwand?.equipped
+      ? {
+          extend: this.optiwand.extendProgress,
+          underDoor: this.optiwand.underDoor,
+          panYaw: this.optiwand.panYaw,
+          panPitch: this.optiwand.panPitch,
+        }
+      : null;
+    const pressedId = this.interaction.pressedProviderId;
+    if (pressedId === 'door' || pressedId === 'doorWork' || pressedId === 'suspectDoor') {
+      this.viewModel.triggerInteractPulse('doorTap');
+    }
+    const interactKind = wandEquipped ? null : this.resolveInteractAnim();
+    this.viewModel.update(dt, this.player.isMoving, reloadP, this.weapons.reloadFromEmpty, wandState, interactKind);
+    this.playReloadCues(reloadP);
+    this.syncDynamicShadows();
     this.warningCall?.update(dt);
     this.subtitle.update(dt);
     this.hud.update(dt);
@@ -997,6 +1009,31 @@ class App {
       if (this.squadTour.done) this.squadTour = null;
     }
     this.input.endFrame();
+  }
+
+  /** 現在のインタラクト操作に対応する一人称ハンドアニメーション種別を返す。 */
+  private resolveInteractAnim(): InteractAnimKind | null {
+    if (this.medkit?.using) return 'heal';
+    if (this.suspectMission?.isSurrendering) return 'surrender';
+    const dw = this.doorWork?.activeWork;
+    if (dw === 'c2' || dw === 'disarm') return 'trap';
+    if (dw === 'check') return 'lock';
+    const hold = this.interaction.activeHold;
+    if (!hold) return null;
+    if (hold.providerId === 'barricade') return 'barricade';
+    if (
+      hold.providerId === 'arrest' ||
+      hold.providerId === 'secureCivilian' ||
+      hold.providerId === 'evidence' ||
+      hold.providerId === 'freeAlly' ||
+      hold.providerId === 'hostageGrab'
+    ) {
+      return 'restrain';
+    }
+    if (hold.providerId === 'suspectDoor' && hold.sec >= 0.2) {
+      return this.fortify?.wantsTrap() ? 'trap' : 'lock';
+    }
+    return null;
   }
 
   /** リロード進捗の節目で機械音を鳴らす。 */
@@ -1303,7 +1340,6 @@ class App {
     this.flashOverlay.dispose();
     this.squad.dispose();
     this.viewModel.dispose();
-    this.avatar.dispose();
     this.entities.dispose();
     this.arrest?.dispose();
     this.doorWork?.dispose();

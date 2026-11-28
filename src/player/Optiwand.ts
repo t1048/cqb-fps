@@ -215,6 +215,24 @@ export class Optiwand {
     return this.viewing && this.lockedDoor !== null;
   }
 
+  /** 先端の伸縮進捗（0=収納/待機、1=展開完了） */
+  get extendProgress(): number {
+    if (!this.viewing) return 0;
+    return Math.min(1, this.extendT / Math.max(0.001, this.d.cfg.deploySec));
+  }
+
+  /** 先端カメラの左右首振り角（rad） */
+  get panYaw(): number {
+    if (!this.viewing) return 0;
+    return this.lockedDoor ? this.yawOff : this.freeLook.yawOffset;
+  }
+
+  /** 先端カメラの上下角（rad） */
+  get panPitch(): number {
+    if (!this.viewing) return 0;
+    return this.lockedDoor ? this.pitch : this.freeLook.pitchOffset;
+  }
+
   get currentPose(): WandPose | null {
     return this.pose;
   }

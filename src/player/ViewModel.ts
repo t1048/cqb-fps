@@ -3,6 +3,20 @@ import type { TextureLibrary } from '../world/Materials';
 
 const MAX_DT = 0.05;
 
+export interface OptiwandViewState {
+  /** 先端の伸縮進捗 0..1 */
+  extend: number;
+  /** ドア下カメラモード中か */
+  underDoor: boolean;
+  /** 先端カメラの左右首振り角（rad） */
+  panYaw: number;
+  /** 先端カメラの上下角（rad） */
+  panPitch: number;
+}
+
+/** インタラクト時の左手アニメーション種別 */
+export type InteractAnimKind = 'heal' | 'lock' | 'trap' | 'barricade' | 'restrain' | 'surrender' | 'doorTap';
+
 /** 一人称装備専用のカメラとモデル。装備 ID で部品構成を切り替える。 */
 export class ViewModel {
   readonly root = new THREE.Group();
@@ -14,6 +28,23 @@ export class ViewModel {
   private readonly mag = new THREE.Group();
   /** 左手（リロード時だけ弾倉を持って現れる）。mag の子なので弾倉に追従する */
   private readonly offHand = new THREE.Group();
+  /** インタラクト時の左手アニメーション用グループ（武器切替の影響を受けない） */
+  private readonly interactGroup = new THREE.Group();
+  private readonly interactMedkit = new THREE.Group();
+  private readonly interactTool = new THREE.Group();
+  private readonly interactGeos: THREE.BufferGeometry[] = [];
+  private readonly interactMats: THREE.Material[] = [];
+  private interactBlend = 0;
+  private interactPhase = 0;
+  private lastInteractKind: InteractAnimKind = 'lock';
+  private interactPulseLeft = 0;
+  private interactPulseKind: InteractAnimKind = 'doorTap';
+  /** オプティワンドの伸縮ロッド部 */
+  private readonly wandShaft = new THREE.Group();
+  /** オプティワンドの先端カメラヘッド（首振り追従） */
+  private readonly wandHead = new THREE.Group();
+  private wandScreenMat: THREE.MeshBasicMaterial | null = null;
+  private wandLedMat: THREE.MeshBasicMaterial | null = null;
   private readonly magRest = new THREE.Vector3();
   private hasMag = false;
   /** 抜き差し方向（弾倉の向き。拳銃はグリップ角に合わせる） */
@@ -32,9 +63,17 @@ export class ViewModel {
 
   constructor(private readonly textures: TextureLibrary) {
     this.root.name = 'viewmodel';
-    this.root.add(this.holder);
+    this.root.add(this.holder, this.interactGroup);
     this.holder.add(this.gun);
+    this.buildInteractHand();
+    this.interactGroup.visible = false;
     this.rebuild('rifle');
+  }
+
+  /** ドア開閉タップなど単発インタラクトの短い手アニメーションを発火する。 */
+  triggerInteractPulse(kind: InteractAnimKind, durationSec = 0.24): void {
+    this.interactPulseKind = kind;
+    this.interactPulseLeft = Math.max(this.interactPulseLeft, durationSec);
   }
 
   setStyle(style: string): void {
@@ -56,8 +95,17 @@ export class ViewModel {
   /**
    * @param reload リロード進捗 0..1（リロード中でなければ null）
    * @param emptyReload 弾切れからのリロード（最後にチャージングハンドルを引く）
+   * @param wand オプティワンド構え中の伸縮・首振り状態
+   * @param interact 実行中のインタラクト種別（施錠・罠解除・回復・拘束など）
    */
-  update(rawDt: number, moving: boolean, reload: number | null = null, emptyReload = false): void {
+  update(
+    rawDt: number,
+    moving: boolean,
+    reload: number | null = null,
+    emptyReload = false,
+    wand: OptiwandViewState | null = null,
+    interact: InteractAnimKind | null = null,
+  ): void {
     if (this.disposed) return;
     const dt = Math.min(rawDt, MAX_DT);
     const reloading = reload !== null;
@@ -72,6 +120,138 @@ export class ViewModel {
     this.holder.position.set(hipOffset + sway, -0.165 + bobY, -0.43 + this.kickZ);
     this.holder.rotation.set(0.03 + this.kickPitch, -0.04, -0.02);
     this.animateReload(reload ?? -1, emptyReload);
+    if (this.style === 'optiwand') this.animateOptiwand(wand);
+    this.animateInteract(dt, interact);
+  }
+
+  private animateInteract(dt: number, interact: InteractAnimKind | null): void {
+    if (this.interactPulseLeft > 0) this.interactPulseLeft = Math.max(0, this.interactPulseLeft - dt);
+    const activeKind = interact ?? (this.interactPulseLeft > 0 ? this.interactPulseKind : null);
+    if (activeKind) {
+      this.lastInteractKind = activeKind;
+      this.interactBlend = Math.min(1, this.interactBlend + dt * 11);
+      this.interactPhase += dt;
+    } else {
+      this.interactBlend = Math.max(0, this.interactBlend - dt * 9);
+      if (this.interactBlend === 0) this.interactPhase = 0;
+    }
+
+    const b = smooth(this.interactBlend);
+    if (b <= 0.002) {
+      this.interactGroup.visible = false;
+      return;
+    }
+
+    const kind = this.lastInteractKind;
+    const t = this.interactPhase;
+    this.interactGroup.visible = true;
+    this.interactMedkit.visible = kind === 'heal';
+    this.interactTool.visible = kind === 'lock' || kind === 'trap';
+
+    // 作業中は右手の武器を少し下げて避ける
+    const dipMul = kind === 'heal' || kind === 'surrender' ? 1.5 : kind === 'doorTap' ? 0.35 : 1;
+    this.holder.position.x += 0.045 * b * dipMul;
+    this.holder.position.y -= 0.075 * b * dipMul;
+    this.holder.rotation.x -= 0.22 * b * dipMul;
+    this.holder.rotation.z -= 0.12 * b * dipMul;
+
+    // 画面左下（待機）→ 作業位置へ補間
+    const restX = -0.32;
+    const restY = -0.34;
+    const restZ = -0.22;
+    let tx = -0.05;
+    let ty = -0.10;
+    let tz = -0.38;
+    let rx = -0.12;
+    let ry = 0.22;
+    let rz = -0.18;
+
+    if (kind === 'heal') {
+      // 救急キットを手前に掲げて包帯を巻くような円弧動作
+      tx = -0.01 + Math.sin(t * 5.2) * 0.032;
+      ty = -0.105 + Math.cos(t * 5.2) * 0.022;
+      tz = -0.34 + Math.sin(t * 2.6) * 0.015;
+      rx = 0.18 + Math.sin(t * 5.2) * 0.12;
+      ry = 0.38 + Math.cos(t * 5.2) * 0.14;
+      rz = -0.22 + Math.sin(t * 5.2) * 0.25;
+    } else if (kind === 'lock') {
+      // 施錠・解錠・ドアチェック: 手首をひねる動作
+      tx = -0.04 + Math.sin(t * 4.5) * 0.012;
+      ty = -0.095 + Math.cos(t * 4.5) * 0.008;
+      tz = -0.40 - Math.sin(t * 4.5) * 0.014;
+      rx = -0.18;
+      ry = 0.18;
+      rz = -0.15 + Math.sin(t * 7.5) * 0.48;
+    } else if (kind === 'trap') {
+      // 罠解除・トラップ設置・C2 設置: 細かな精密作業
+      tx = -0.03 + Math.sin(t * 8.5) * 0.018;
+      ty = -0.105 + Math.sin(t * 6.0) * 0.014;
+      tz = -0.39 + Math.cos(t * 7.0) * 0.012;
+      rx = -0.25 + Math.sin(t * 6.0) * 0.08;
+      ry = 0.14 + Math.cos(t * 8.5) * 0.16;
+      rz = -0.1 + Math.sin(t * 9.0) * 0.18;
+    } else if (kind === 'barricade') {
+      // 窓の板張り・外し: リズミカルに押し当てる・打ち付ける動作
+      const beat = Math.sin(t * 8.0);
+      tx = -0.045;
+      ty = -0.08 + beat * 0.028;
+      tz = -0.36 - Math.max(0, beat) * 0.065;
+      rx = -0.15 - Math.max(0, beat) * 0.22;
+      ry = 0.15;
+      rz = -0.25;
+    } else if (kind === 'restrain') {
+      // 逮捕・保護・証拠回収・仲間解放・人質確保: 手前で締め上げるスイープ動作
+      tx = -0.03 + Math.sin(t * 5.5) * 0.04;
+      ty = -0.12 + Math.cos(t * 5.5) * 0.016;
+      tz = -0.37 - Math.abs(Math.sin(t * 2.75)) * 0.035;
+      rx = -0.32 + Math.sin(t * 5.5) * 0.12;
+      ry = 0.28 + Math.sin(t * 5.5) * 0.22;
+      rz = -0.3 + Math.cos(t * 5.5) * 0.24;
+    } else if (kind === 'surrender') {
+      // 投降: 左手を高く上げる
+      tx = -0.14;
+      ty = 0.02 + Math.sin(t * 3.0) * 0.01;
+      tz = -0.34;
+      rx = 0.45;
+      ry = 0.15;
+      rz = 0.25;
+    } else if (kind === 'doorTap') {
+      // ドア開閉タップ: 素早く前方に伸ばして引く
+      const reach = Math.sin(Math.min(1, t / 0.24) * Math.PI);
+      tx = -0.06;
+      ty = -0.10 + reach * 0.02;
+      tz = -0.33 - reach * 0.10;
+      rx = -0.15 - reach * 0.15;
+      ry = 0.22;
+      rz = -0.2;
+    }
+
+    this.interactGroup.position.set(
+      restX + (tx - restX) * b,
+      restY + (ty - restY) * b,
+      restZ + (tz - restZ) * b,
+    );
+    this.interactGroup.rotation.set(rx * b, ry * b, rz * b);
+  }
+
+  private animateOptiwand(wand: OptiwandViewState | null): void {
+    const ext = wand ? smooth(wand.extend) : 0;
+    const active = ext > 0.05;
+    this.wandShaft.position.set(0, -0.004, -0.195 - ext * 0.22);
+    if (wand) {
+      this.wandHead.rotation.set(wand.panPitch * 0.45 * ext, wand.panYaw * 0.55 * ext, 0);
+    } else {
+      this.wandHead.rotation.set(0, 0, 0);
+    }
+    if (wand?.underDoor) {
+      this.gun.position.set(-0.02 * ext, -0.065 * ext, -0.08 * ext);
+      this.gun.rotation.set(-0.34 * ext, 0.06 * ext, 0.05 * ext);
+    } else {
+      this.gun.position.set(-0.015 * ext, 0.015 * ext, -0.09 * ext);
+      this.gun.rotation.set(0.04 * ext, 0.04 * ext, 0);
+    }
+    if (this.wandScreenMat) this.wandScreenMat.color.setHex(active ? 0x4fa86c : 0x1f3d28);
+    if (this.wandLedMat) this.wandLedMat.color.setHex(active ? 0xff4444 : 0x38d868);
   }
 
   /** p<0 で通常姿勢。タイムラインは装備の reloadTime に比例して伸縮する。 */
@@ -146,9 +326,14 @@ export class ViewModel {
     this.gun.clear();
     this.mag.clear();
     this.offHand.clear();
+    this.wandShaft.clear();
+    this.wandHead.clear();
+    this.wandScreenMat = null;
+    this.wandLedMat = null;
     this.hasMag = false;
     this.parent = this.gun;
-    if (style === 'radio') this.buildRadio();
+    if (style === 'optiwand') this.buildOptiwand();
+    else if (style === 'radio') this.buildRadio();
     else if (style === 'flashbang') this.buildFlash();
     else if (style === 'teargas') this.buildGas();
     else if (style === 'taser') this.buildTaser();
@@ -304,11 +489,125 @@ export class ViewModel {
     this.buildHand(0.03, -0.08, -0.143);
   }
 
+  /** オプティワンド: ピストルグリップ本体＋小型モニター＋伸縮ロッド＋首振り先端カメラ */
+  private buildOptiwand(): void {
+    const bodyMat = this.metal(0x323b38);
+    const trimMat = this.metal(0x4a535c);
+    const gripMat = this.metal(0x252a2e);
+    const darkMat = this.metal(0x1e2326);
+    const ferruleMat = this.metal(0x7c8690);
+
+    // ピストルグリップ＋バッテリー底部
+    this.add(new THREE.BoxGeometry(0.044, 0.115, 0.052).rotateX(-0.18), gripMat, 0, -0.072, -0.08);
+    this.add(new THREE.BoxGeometry(0.048, 0.018, 0.056), darkMat, 0, -0.128, -0.072);
+
+    // コントロール本体＋上面レール＋左側面首振りダイヤル
+    this.add(new THREE.BoxGeometry(0.064, 0.054, 0.125), bodyMat, 0, -0.005, -0.11);
+    this.add(new THREE.BoxGeometry(0.052, 0.012, 0.11), trimMat, 0, 0.024, -0.112);
+    this.add(new THREE.CylinderGeometry(0.012, 0.012, 0.014, 10).rotateZ(Math.PI / 2), ferruleMat, -0.035, -0.005, -0.105);
+
+    // 背面ステータス LED（待機=緑、展開中=赤）
+    this.wandLedMat = new THREE.MeshBasicMaterial({ color: 0x38d868 });
+    this.mats.push(this.wandLedMat);
+    this.add(new THREE.BoxGeometry(0.008, 0.008, 0.005), this.wandLedMat, 0.024, 0.016, -0.046);
+
+    // 傾斜モニター＋遮光フード＋液晶面
+    this.add(new THREE.BoxGeometry(0.102, 0.074, 0.018).rotateX(-0.22), darkMat, 0, 0.056, -0.088);
+    this.add(new THREE.BoxGeometry(0.104, 0.008, 0.026).rotateX(-0.22), darkMat, 0, 0.092, -0.082);
+    this.add(new THREE.BoxGeometry(0.007, 0.072, 0.024).rotateX(-0.22), darkMat, -0.048, 0.056, -0.082);
+    this.add(new THREE.BoxGeometry(0.007, 0.072, 0.024).rotateX(-0.22), darkMat, 0.048, 0.056, -0.082);
+    this.wandScreenMat = new THREE.MeshBasicMaterial({ color: 0x1f3d28 });
+    this.mats.push(this.wandScreenMat);
+    this.add(new THREE.BoxGeometry(0.086, 0.058, 0.004).rotateX(-0.22), this.wandScreenMat, 0, 0.056, -0.079);
+
+    // 本体前部のロッド受けカラー
+    this.add(new THREE.CylinderGeometry(0.019, 0.021, 0.038, 12).rotateX(Math.PI / 2), trimMat, 0, -0.004, -0.185);
+
+    // 伸縮ロッド部（wandShaft）
+    this.wandShaft.position.set(0, -0.004, -0.195);
+    this.wandShaft.rotation.set(0, 0, 0);
+    this.gun.add(this.wandShaft);
+    this.parent = this.wandShaft;
+    this.add(new THREE.CylinderGeometry(0.012, 0.013, 0.24, 12).rotateX(Math.PI / 2), gripMat, 0, 0, -0.12);
+    this.add(new THREE.CylinderGeometry(0.015, 0.015, 0.016, 12).rotateX(Math.PI / 2), ferruleMat, 0, 0, -0.235);
+    this.add(new THREE.CylinderGeometry(0.0085, 0.0095, 0.2, 12).rotateX(Math.PI / 2), trimMat, 0, 0, -0.33);
+
+    // 首振り先端カメラヘッド（wandHead）
+    this.wandHead.position.set(0, 0, -0.435);
+    this.wandHead.rotation.set(0, 0, 0);
+    this.wandShaft.add(this.wandHead);
+    this.parent = this.wandHead;
+    this.add(new THREE.CylinderGeometry(0.009, 0.009, 0.032, 10).rotateX(Math.PI / 2), darkMat, 0, 0, -0.01);
+    this.add(new THREE.BoxGeometry(0.028, 0.024, 0.034), bodyMat, 0, 0, -0.036);
+    this.add(new THREE.CylinderGeometry(0.011, 0.012, 0.014, 12).rotateX(Math.PI / 2), darkMat, 0, 0, -0.055);
+    const lensMat = new THREE.MeshStandardMaterial({ color: 0x1a5c54, roughness: 0.08, metalness: 0.75 });
+    const irMat = new THREE.MeshBasicMaterial({ color: 0x88ffaa });
+    this.mats.push(lensMat, irMat);
+    this.add(new THREE.CylinderGeometry(0.0085, 0.0085, 0.004, 12).rotateX(Math.PI / 2), lensMat, 0, 0, -0.061);
+    this.add(new THREE.CylinderGeometry(0.0028, 0.0028, 0.004, 8).rotateX(Math.PI / 2), irMat, 0.01, 0.006, -0.053);
+
+    this.parent = this.gun;
+    this.buildHand(0.016, -0.088, -0.068);
+  }
+
+  /** インタラクト用の左手＋前腕と、回復・解除などの小型プロップを構築する。 */
+  private buildInteractHand(): void {
+    const addPart = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
+      this.interactGeos.push(geo);
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      parent.add(m);
+    };
+    const glove = new THREE.MeshStandardMaterial({ map: this.textures.get('fabric'), color: 0x383e42, roughness: 0.7 });
+    const sleeve = new THREE.MeshStandardMaterial({ map: this.textures.get('fabric'), color: 0x465044, roughness: 0.92 });
+    const pouchMat = new THREE.MeshStandardMaterial({ map: this.textures.get('fabric'), color: 0xe6e8e4, roughness: 0.78 });
+    const crossMat = new THREE.MeshBasicMaterial({ color: 0xcc2c2c });
+    const toolMat = new THREE.MeshStandardMaterial({ map: this.textures.get('metal'), color: 0x626c75, roughness: 0.42, metalness: 0.25 });
+    const toolGripMat = new THREE.MeshStandardMaterial({ map: this.textures.get('metal'), color: 0x262c30, roughness: 0.65, metalness: 0.1 });
+    this.interactMats.push(glove, sleeve, pouchMat, crossMat, toolMat, toolGripMat);
+
+    // 左手のひら・指・親指・前腕
+    addPart(this.interactGroup, new THREE.BoxGeometry(0.068, 0.044, 0.088), glove, 0, 0, 0);
+    for (let f = 0; f < 4; f++) {
+      addPart(
+        this.interactGroup,
+        new THREE.BoxGeometry(0.014, 0.018, 0.056).rotateX(-0.22),
+        glove,
+        -0.024 + f * 0.016,
+        -0.004,
+        -0.062,
+      );
+    }
+    addPart(this.interactGroup, new THREE.BoxGeometry(0.02, 0.022, 0.048).rotateY(-0.45), glove, 0.04, 0.002, -0.024);
+    const forearm = new THREE.BoxGeometry(0.078, 0.074, 0.28);
+    forearm.rotateX(0.28).rotateY(-0.26);
+    addPart(this.interactGroup, forearm, sleeve, -0.055, -0.055, 0.155);
+
+    // 救急キット（回復中のみ表示）
+    this.interactGroup.add(this.interactMedkit);
+    addPart(this.interactMedkit, new THREE.BoxGeometry(0.115, 0.082, 0.044), pouchMat, 0.03, 0.048, -0.028);
+    addPart(this.interactMedkit, new THREE.BoxGeometry(0.044, 0.014, 0.004), crossMat, 0.03, 0.048, -0.005);
+    addPart(this.interactMedkit, new THREE.BoxGeometry(0.014, 0.044, 0.004), crossMat, 0.03, 0.048, -0.005);
+    this.interactMedkit.visible = false;
+
+    // マルチツール（施錠・解錠・罠解除中のみ表示）
+    this.interactGroup.add(this.interactTool);
+    addPart(this.interactTool, new THREE.BoxGeometry(0.018, 0.022, 0.064), toolGripMat, 0.014, 0.006, -0.052);
+    addPart(this.interactTool, new THREE.BoxGeometry(0.007, 0.009, 0.054).rotateY(0.14), toolMat, 0.009, 0.006, -0.104);
+    addPart(this.interactTool, new THREE.BoxGeometry(0.007, 0.009, 0.054).rotateY(-0.14), toolMat, 0.019, 0.006, -0.104);
+    this.interactTool.visible = false;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     for (const g of this.geos) g.dispose();
     for (const m of this.mats) {
+      if (m instanceof THREE.MeshStandardMaterial) m.map = null;
+      m.dispose();
+    }
+    for (const g of this.interactGeos) g.dispose();
+    for (const m of this.interactMats) {
       if (m instanceof THREE.MeshStandardMaterial) m.map = null;
       m.dispose();
     }

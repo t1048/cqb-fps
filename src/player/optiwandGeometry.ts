@@ -355,4 +355,12 @@ export class FreeLook {
   get pitch(): number {
     return Math.max(this.pitchMinRad, Math.min(this.pitchMaxRad, this.basePitch + this.pitchOff));
   }
+
+  get yawOffset(): number {
+    return this.yawOff;
+  }
+
+  get pitchOffset(): number {
+    return this.pitchOff;
+  }
 }
