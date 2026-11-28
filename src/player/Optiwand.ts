@@ -39,6 +39,14 @@ const FRAME_CSS = `
 .cqb-wand .rec{position:absolute;right:8px;top:5px;font:bold 11px monospace;color:#ff6a6a;text-shadow:0 0 4px #000}
 .cqb-wand .hint{position:absolute;left:8px;bottom:5px;font:11px monospace;color:rgba(200,255,215,.85);text-shadow:0 0 4px #000}
 .cqb-wand .dep{position:absolute;inset:0;background:#000;transition:opacity .1s}
+.cqb-wand .marks{position:absolute;inset:0}
+.cqb-wand .mk{position:absolute;transform:translate(-50%,-50%);border:2px solid;border-radius:2px;box-sizing:border-box}
+.cqb-wand .mk span{position:absolute;left:50%;top:100%;transform:translateX(-50%);margin-top:1px;font:bold 9px monospace;letter-spacing:.06em;white-space:nowrap;text-shadow:0 0 3px #000,0 0 2px #000}
+.cqb-wand .mk.threat{border-color:#ff4a4a;color:#ff7a7a}
+.cqb-wand .mk.unarmed{border-color:#ffc24a;color:#ffd27a}
+.cqb-wand .mk.civilian{border-color:#5ad0ff;color:#8fe0ff}
+.cqb-wand.ally{border-color:rgba(120,200,255,.6)}
+.cqb-wand.ally .lbl{color:#9fd8ff}
 .cqb-wand-hint{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);display:none;z-index:5;pointer-events:none;max-width:min(560px,44vw);padding:5px 12px;border-radius:4px;background:rgba(8,18,12,.74);border:1px solid rgba(160,255,190,.4);color:#c9ffd8;font:bold 13px/1.45 sans-serif;text-align:center}
 `;
 /** 前方（角越し）カメラのピッチ上下限（度） */
@@ -105,6 +113,38 @@ export interface OptiwandDeps {
   host: HTMLElement;
   /** 先端カメラの描画時だけ非表示にするオブジェクト（プレイヤーの体など） */
   hideDuringRender?: THREE.Object3D[];
+  /** 隊員がドア下ワンド（ミラー確認）で偵察中の情報。あればプレイヤー非使用時にその映像を PiP に出す */
+  allyFeed?: () => AllyScoutFeed | null;
+}
+
+/** 隊員のドア下ワンド偵察（映像中継用）。progress は 0→1 で首振りの進行に使う */
+export interface AllyScoutFeed {
+  allyId: string;
+  callsign: string;
+  door: Door;
+  x: number;
+  z: number;
+  progress: number;
+}
+
+/** 映像内マーカー（発見済みの接触） */
+interface FeedMark {
+  id: string;
+  kind: 'threat' | 'unarmed' | 'civilian';
+  chest: { x: number; y: number; z: number };
+  dist: number;
+}
+
+/** 魚眼シェーダ（q = p·(1 + 0.24|p|²) でサンプル）の逆写像: 画面上の位置 p を求める */
+export function fisheyeInverse(nx: number, ny: number): { x: number; y: number } {
+  let x = nx;
+  let y = ny;
+  for (let i = 0; i < 6; i++) {
+    const k = 1 + 0.24 * (x * x + y * y);
+    x = nx / k;
+    y = ny / k;
+  }
+  return { x, y };
 }
 
 /**
@@ -130,6 +170,18 @@ export class Optiwand {
   private readonly depEl = document.createElement('div');
   private readonly hintEl = document.createElement('div');
   private readonly spotter = new WandSpotter();
+  /** 隊員映像用（プレイヤーの発見蓄積とは別に持つ） */
+  private readonly allySpotter = new WandSpotter();
+  private readonly lblEl = document.createElement('div');
+  private readonly marksEl = document.createElement('div');
+  private readonly markEls: HTMLDivElement[] = [];
+  private readonly projTmp = new THREE.Vector3();
+  /** 現在 PiP に出している映像のマーカー */
+  private marks: FeedMark[] = [];
+  /** 隊員映像の現在姿勢（プレイヤーが見ていないときだけ使う） */
+  private allyPose: WandPose | null = null;
+  private allyFeedId: string | null = null;
+  private allyFeedT = 0;
   private readonly eyeTmp = new THREE.Vector3();
   private readonly eyeScratch = new THREE.Vector3();
   private readonly vpTmp = new THREE.Vector4();
@@ -182,15 +234,16 @@ export class Optiwand {
     this.styleEl.textContent = FRAME_CSS;
     document.head.appendChild(this.styleEl);
     this.frame.className = 'cqb-wand';
-    const lbl = document.createElement('div');
+    const lbl = this.lblEl;
     lbl.className = 'lbl';
     lbl.textContent = 'OPTIWAND';
+    this.marksEl.className = 'marks';
     const rec = document.createElement('div');
     rec.className = 'rec';
     rec.textContent = '● REC';
     this.hintEl.className = 'hint';
     this.depEl.className = 'dep';
-    this.frame.append(lbl, rec, this.hintEl, this.depEl);
+    this.frame.append(this.marksEl, lbl, rec, this.hintEl, this.depEl);
     d.host.appendChild(this.frame);
     this.hudHint.className = 'cqb-wand-hint';
     d.host.appendChild(this.hudHint);
@@ -271,6 +324,7 @@ export class Optiwand {
     const mode = chooseWandViewMode(player.isCrouching, aimed, eye, cfg);
     this.viewingFlag = true;
     this.extendT = 0;
+    this.marks = [];
     this.spotter.reset();
     this.dwell.clear();
     player.stanceLocked = true;
@@ -326,6 +380,7 @@ export class Optiwand {
     this.viewingFlag = false;
     this.releaseDoor();
     this.pose = null;
+    this.marks = [];
     this.frame.style.display = 'none';
     this.d.player.externalMoveScale = 1;
     this.d.player.stanceLocked = false;
@@ -353,6 +408,7 @@ export class Optiwand {
       if (left - dt <= 0) this.noticeCd.delete(id);
       else this.noticeCd.set(id, left - dt);
     }
+    this.updateAllyFeed(dt);
     if (!this.equippedFlag) return;
 
     this.deployT = Math.min(cfg.deploySec, this.deployT + dt);
@@ -425,6 +481,92 @@ export class Optiwand {
     this.hudHint.style.display = 'block';
   }
 
+  /**
+   * 隊員のドア下ワンド偵察を映像として中継する。プレイヤー自身がワンドを伸ばしている間は自分の映像を優先する。
+   * 映った容疑者・民間人（人質）は隊員の発見として ScoutIntel に登録し、ミニマップにも即時反映する。
+   */
+  private updateAllyFeed(dt: number): void {
+    const feed = this.d.allyFeed?.() ?? null;
+    if (!feed || this.viewingFlag) {
+      if (!feed) {
+        this.allyFeedId = null;
+        this.allyPose = null;
+      } else this.allyPose = null;
+      return;
+    }
+    const { cfg, intel, rooms, colliders } = this.d;
+    if (this.allyFeedId !== feed.allyId + feed.door.id) {
+      this.allyFeedId = feed.allyId + feed.door.id;
+      this.allySpotter.reset();
+      this.allyFeedT = 0;
+    }
+    this.allyFeedT = Math.min(cfg.deploySec, this.allyFeedT + dt);
+    // 進行に合わせて左→右へゆっくり首振り（端で少し止まるようにイーズ）
+    const lim = cfg.yawLimitDeg * DEG2RAD * 0.85;
+    const sweep = -Math.cos(Math.min(1, feed.progress / 0.9) * Math.PI);
+    const pose = computeDoorPose(feed.door, { x: feed.x, z: feed.z }, cfg, this.d.doorThickness, sweep * lim, 6 * DEG2RAD);
+    this.allyPose = pose;
+    this.camera.position.set(pose.x, pose.y, pose.z);
+    this.camera.rotation.set(pose.pitch, pose.yaw, 0);
+    this.camera.updateMatrixWorld(true);
+    // 隊員の映像は確認に専念しているので見落としにくい（発見に要する時間を短めに）
+    const allyCfg = { ...cfg, spotSec: cfg.spotSec * 0.6 };
+    const { visible } = this.allySpotter.update(dt, pose, allyCfg, this.camera.aspect, this.collectSources(), colliders);
+    for (const c of visible) {
+      if (!this.allySpotter.hasSpotted(c.id)) continue;
+      const room = roomAtPoint(rooms, c.chest.x, c.chest.z, c.chest.y - 1.2);
+      if (room) intel.reportContact(room.id, this.toContact(c), 'ally');
+    }
+    this.marks = this.toMarks(visible, pose, this.allySpotter);
+    this.lblEl.textContent = `OPTIWAND · ${feed.callsign}`;
+    this.hintEl.textContent = t('隊員のドア下ワンド映像', 'Teammate under-door feed');
+    this.depEl.style.opacity = String(1 - this.allyFeedT / Math.max(0.001, cfg.deploySec));
+  }
+
+  private toMarks(visible: readonly WandContactSource[], pose: WandPose, spotter: WandSpotter): FeedMark[] {
+    const out: FeedMark[] = [];
+    for (const c of visible) {
+      if (!spotter.hasSpotted(c.id)) continue;
+      out.push({
+        id: c.id,
+        kind: c.kind === 'civilian' ? 'civilian' : c.armed ? 'threat' : 'unarmed',
+        chest: c.chest,
+        dist: Math.hypot(c.chest.x - pose.x, c.chest.y - pose.y, c.chest.z - pose.z),
+      });
+    }
+    return out;
+  }
+
+  /** 映像内のマーカー（敵: 赤 / 投降・非武装: 黄 / 民間人・人質: 青）を DOM で重ねる */
+  private drawMarks(w: number, h: number): void {
+    const civLabel = t('民間人', 'CIV');
+    let n = 0;
+    for (const m of this.marks) {
+      this.projTmp.set(m.chest.x, m.chest.y, m.chest.z).project(this.camera);
+      if (this.projTmp.z > 1) continue;
+      const p = fisheyeInverse(this.projTmp.x, this.projTmp.y);
+      if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1) continue;
+      let el = this.markEls[n];
+      if (!el) {
+        el = document.createElement('div');
+        el.appendChild(document.createElement('span'));
+        this.markEls.push(el);
+        this.marksEl.appendChild(el);
+      }
+      n++;
+      const size = Math.max(12, Math.min(64, (h * 0.9) / Math.max(0.6, m.dist)));
+      el.className = `mk ${m.kind}`;
+      el.style.display = 'block';
+      el.style.left = `${((p.x + 1) / 2) * w}px`;
+      el.style.top = `${((1 - p.y) / 2) * h}px`;
+      el.style.width = `${size * 0.7}px`;
+      el.style.height = `${size}px`;
+      el.firstElementChild!.textContent =
+        m.kind === 'threat' ? t('敵', 'HOSTILE') : m.kind === 'unarmed' ? t('投降', 'UNARMED') : civLabel;
+    }
+    for (let i = n; i < this.markEls.length; i++) this.markEls[i]!.style.display = 'none';
+  }
+
   private collectSources(): WandContactSource[] {
     const out: WandContactSource[] = [];
     const chest = { x: 0, y: 0, z: 0 };
@@ -463,6 +605,7 @@ export class Optiwand {
     const { cfg, intel, rooms, colliders } = this.d;
     const aspect = this.camera.aspect;
     const { visible, fresh } = this.spotter.update(dt, pose, cfg, aspect, this.collectSources(), colliders);
+    this.marks = this.toMarks(visible, pose, this.spotter);
 
     // 一度「発見」した対象は、見えている間は位置・武装状態を更新し続ける
     for (const c of visible) {
@@ -534,7 +677,20 @@ export class Optiwand {
 
   /** メイン描画後に PiP を描く。非展開時は何もしない（低コスト）。 */
   render(renderer: THREE.WebGLRenderer, scene: THREE.Scene): void {
-    if (this.disposed || !this.equippedFlag || !this.viewingFlag || !this.pose) return;
+    if (this.disposed) return;
+    const own = this.equippedFlag && this.viewingFlag && this.pose;
+    if (!own && !this.allyPose) {
+      if (this.frame.style.display !== 'none') this.frame.style.display = 'none';
+      return;
+    }
+    if (own) {
+      this.lblEl.textContent = 'OPTIWAND';
+      const p = this.pose!;
+      this.camera.position.set(p.x, p.y, p.z);
+      this.camera.rotation.set(p.pitch, p.yaw, 0);
+      this.camera.updateMatrixWorld(true);
+    }
+    this.frame.classList.toggle('ally', !own);
     const hide = this.d.hideDuringRender ?? [];
     const prevVis = hide.map((o) => o.visible);
     for (const o of hide) o.visible = false;
@@ -558,6 +714,7 @@ export class Optiwand {
     this.frame.style.top = `${top}px`;
     this.frame.style.width = `${w}px`;
     this.frame.style.height = `${h}px`;
+    this.drawMarks(w, h);
 
     renderer.getViewport(this.vpTmp);
     renderer.getScissor(this.scTmp);

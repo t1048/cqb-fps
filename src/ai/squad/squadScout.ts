@@ -325,9 +325,14 @@ function resolveMirror(ctx: SquadContext, ally: AllyUnit, door: Door): void {
       );
     }
   }
-  const armed = res.seen.filter((c) => c.kind === 'suspect' && c.armed).length;
-  const unarmed = res.seen.filter((c) => c.kind === 'suspect' && !c.armed).length;
-  const civilians = res.seen.filter((c) => c.kind === 'civilian').length;
+  // ワンド映像（Optiwand の隊員映像中継）で途中発見して登録済みの接触も含めて報告する
+  const known = new Map<string, { kind: 'suspect' | 'civilian'; armed: boolean }>();
+  for (const c of res.seen) known.set(c.id, c);
+  if (room) for (const c of ctx.intel.contactsIn(room.id)) if (!known.has(c.id)) known.set(c.id, c);
+  const all = [...known.values()];
+  const armed = all.filter((c) => c.kind === 'suspect' && c.armed).length;
+  const unarmed = all.filter((c) => c.kind === 'suspect' && !c.armed).length;
+  const civilians = all.filter((c) => c.kind === 'civilian').length;
   const [ja, en] = contactCallout(armed, unarmed, civilians, { ja: 'ミラー確認: ', en: 'Mirror check: ' });
   ctx.emitRadio(ally, ja, en);
   ctx.bus.emit('scoutReport', { roomId: room?.id ?? null, suspects: armed + unarmed, armed, civilians, source: 'ally' });
