@@ -40,6 +40,9 @@ const ARRESTED_COLOR = 0x3060b0;
 const FREED_MORALE_MARGIN = 6;
 const DEFAULT_HP = 100;
 const MAX_DT = 0.05;
+/** 音への反応の切り替わりすぎ防止: この距離より近い続きの音は同じ行き先として扱う / 遮蔽で待つ判断をこの秒数は通す */
+const NOISE_RETARGET_DIST = 3;
+const NOISE_DECISION_HOLD_SEC = 4;
 
 const GAS_BUILD_PER_SEC = 55;
 const GAS_DECAY_PER_SEC = 18;
@@ -94,6 +97,8 @@ export class Suspect implements HitTarget {
   private alertMoveTarget: Vec3 | null = null;
   private alertMoveMode: 'investigate' | 'reinforce' | null = null;
   private alertMoveElapsed = 0;
+  /** 音への反応（調査に行くか・遮蔽で待つか）を決めてからの秒数。決め直しの最短間隔に使う */
+  private sinceNoiseDecision = Infinity;
   private patrolTimer = 0;
   private patrolTarget: Vec3 | null = null;
   private patrolElapsed = 0;
@@ -312,6 +317,7 @@ export class Suspect implements HitTarget {
     this.warningLeft = Math.max(0, this.warningLeft - dt);
     this.blindLeft = Math.max(0, this.blindLeft - dt);
     this.ambushRollCd = Math.max(0, this.ambushRollCd - dt);
+    this.sinceNoiseDecision += dt;
     const density = Math.max(0, Math.min(1, gas?.density ?? 0));
     const st = this.fsm.state;
     if (st === SuspectState.DOWN || st === SuspectState.ARRESTED) {
@@ -1044,6 +1050,7 @@ export class Suspect implements HitTarget {
 
   /** 交戦系ステートではプレイヤー・味方隊員の視認を毎フレーム更新。 */
   private senseTarget(): void {
+    const prevThreatId = this.visibleThreat?.id ?? null;
     this.sees = false;
     this.visibleThreat = null;
     if (this.blindLeft > 0) return;
@@ -1058,7 +1065,7 @@ export class Suspect implements HitTarget {
       return;
     }
     const eyeY = this.body.footY + (st === SuspectState.ENGAGE ? 1.45 : 1.55);
-    const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, this.combat.engageRange);
+    const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, this.combat.engageRange, prevThreatId);
     if (threat) {
       this.sees = true;
       this.visibleThreat = threat;
@@ -1254,6 +1261,28 @@ export class Suspect implements HitTarget {
       this.setState(SuspectState.ALERT);
       return;
     }
+
+    // すでに音のした方へ向かっている: 近くで鳴った続きの音（撃ち合いの連射など）なら行き先だけ更新し、
+    // 経路を引き直したり、調査に行くかのくじを引き直したりしない（音のたびに立ち止まって迷わない）
+    // 銃声・ブリーチで増援に向かう判断は保持より優先する（調査中や遮蔽待ちでも、撃ち合いが起きたら駆けつける）
+    const wantsReinforce =
+      Boolean(this.mobility?.reinforceOnGunshot) &&
+      (kind === 'gunshot' || kind === 'breach') &&
+      this.alertMoveMode !== 'reinforce';
+    if (this.alertMoveTarget && this.nav && !wantsReinforce) {
+      const shift = Math.hypot(target.x - this.alertMoveTarget.x, target.z - this.alertMoveTarget.z);
+      if (shift < NOISE_RETARGET_DIST && Math.abs(target.y - this.alertMoveTarget.y) < 0.75) {
+        this.alertMoveTarget = target;
+        this.setState(SuspectState.ALERT);
+        return;
+      }
+    }
+    // 遮蔽で待つと決めたばかりなら、しばらくはその判断を通す（くじの引き直しで動いたり止まったりしない）
+    if (!wantsReinforce && !this.alertMoveTarget && this.alertCover && this.sinceNoiseDecision < NOISE_DECISION_HOLD_SEC) {
+      this.setState(SuspectState.ALERT);
+      return;
+    }
+    this.sinceNoiseDecision = 0;
 
     const mob = this.mobility;
     const guardRoom = Boolean(mob?.guardHostageRoom && this.hasUnsecuredCivilianInSameRoom());

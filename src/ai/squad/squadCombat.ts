@@ -18,7 +18,7 @@ import { hasLineOfSight } from '../../weapons/Flashbang';
 import { collidersNear } from '../../world/ColliderIndex';
 import type { AABB, Collider } from '../../world/WorldBuilder';
 import { pathSegmentClear, squadRoute } from '../SquadRoute';
-import { blockedAt, type AllyTarget, type XZ } from '../EngageBehavior';
+import { TARGET_STICK_M, blockedAt, type AllyTarget, type XZ } from '../EngageBehavior';
 import {
   computeCornerLean,
   computeStepOutPoint,
@@ -452,8 +452,13 @@ export function syncAnchorConstraints(ally: AllyUnit): void {
   ally.mobility.repositionAfterLostSec = confined ? 9999 : baseMob.repositionAfterLostSec;
 }
 
+/** 隊員ごとの直前の標的（撃てずに構えているだけの相手も含む） */
+const lastTargetId = new WeakMap<AllyUnit, string>();
+
 export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   const hadPepper = ally.pepperTarget !== null;
+  // 直前の標的を少し優先する（似た距離の 2 人の間で毎フレーム狙いが往復しない）
+  const prevTargetId = lastTargetId.get(ally) ?? null;
   ally.sees = false;
   ally.threat = null;
   ally.pepperTarget = null;
@@ -477,12 +482,14 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
     if (!hostile) continue;
     const c = s.body.chestPos();
     const d = Math.hypot(c.x - from.x, c.z - from.z);
-    if (d > bestD || !hasLineOfSight(ctx.colliders, from, c)) continue;
-    bestD = d;
+    const scoreD = s.id === prevTargetId ? d - TARGET_STICK_M : d;
+    if (d > ally.combat.engageRange || scoreD > bestD || !hasLineOfSight(ctx.colliders, from, c)) continue;
+    bestD = scoreD;
     best = { id: s.id, x: s.body.px, z: s.body.pz, footY: s.body.footY, pos: c, state: s.state };
   }
 
   if (best) {
+    lastTargetId.set(ally, best.id);
     const wasEngaging = ally.engageActive;
     ally.known = { x: best.x, y: best.footY, z: best.z };
     ally.lostSec = 0;

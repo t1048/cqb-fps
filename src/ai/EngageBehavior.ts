@@ -100,6 +100,15 @@ const MUZZLE_SEC = 0.06;
 const STAND_CHEST = 1.25;
 const CROUCH_CHEST = 0.85;
 const FALLBACK_PLAYER_EYE_Y = 1.6;
+/**
+ * 行動の切り替わりすぎを防ぐ値（ヒステリシス・最低継続）。
+ * - TARGET_STICK_M: いま狙っている相手を、ほかの相手よりこの距離ぶん近いものとして扱う（等距離の 2 人の間で狙いが往復しない）
+ * - RESIGHT_CONFIRM_SEC: 追撃・回り込みを打ち切るには、相手がこの秒数続けて見えている必要がある（射線の端のちらつきで止まらない）
+ * - HIT_RETREAT_HOLD_SEC: 被弾で遮蔽を選んでからこの秒数は、続けて撃たれても遮蔽を選び直さない（連射を受けて右往左往しない）
+ */
+export const TARGET_STICK_M = 1.5;
+const RESIGHT_CONFIRM_SEC = 0.15;
+const HIT_RETREAT_HOLD_SEC = 1.2;
 
 /** 円(半径 r)が壁/遮蔽物/ドア板に重なるか（歩行高さ帯のみ） */
 export function blockedAt(colliders: readonly Collider[], x: number, z: number, r = BODY_RADIUS, feetY = 0): boolean {
@@ -286,7 +295,10 @@ export function findNearestVisibleThreat(
   z: number,
   eyeY: number,
   range: number,
+  preferId: string | null = null,
 ): CombatThreat | null {
+  // 直前の標的を少し優先する（毎フレーム最寄りを選び直すと、似た距離の 2 人の間で狙いが往復する）
+  const score = (id: string, d: number): number => (id === preferId ? d - TARGET_STICK_M : d);
   threatFromTmp.x = x;
   threatFromTmp.y = eyeY;
   threatFromTmp.z = z;
@@ -297,7 +309,7 @@ export function findNearestVisibleThreat(
     const eye = ctx.player.getEyePosition(threatPlayerEyeTmp);
     const pos = ctx.player.position;
     const d = Math.hypot(pos.x - x, pos.z - z);
-    if (d <= bestD) {
+    if (d <= range && score('player', d) <= bestD) {
       // 胸が見えるなら胸を狙う（目を狙うと弾が頭部判定に入り、ベストが効かない）。
       // 胸が遮られて目だけ見える（覗き・リーン）ときだけ目を狙う。
       const chestY = eye.y - PLAYER_BODY_DROP;
@@ -305,14 +317,14 @@ export function findNearestVisibleThreat(
       threatPtTmp.y = chestY;
       threatPtTmp.z = pos.z;
       if (hasLineOfSight(ctx.colliders, threatFromTmp, threatPtTmp)) {
-        bestD = d;
+        bestD = score('player', d);
         best = { id: 'player', x: pos.x, z: pos.z, point: { x: pos.x, y: chestY, z: pos.z }, isPlayer: true };
       } else {
         threatPtTmp.x = eye.x;
         threatPtTmp.y = eye.y;
         threatPtTmp.z = eye.z;
         if (hasLineOfSight(ctx.colliders, threatFromTmp, threatPtTmp)) {
-          bestD = d;
+          bestD = score('player', d);
           best = { id: 'player', x: pos.x, z: pos.z, point: { x: eye.x, y: eye.y, z: eye.z }, isPlayer: true };
         }
       }
@@ -324,10 +336,10 @@ export function findNearestVisibleThreat(
     for (let i = 0; i < allies.length; i++) {
       const a = allies[i]!;
       const d = Math.hypot(a.px - x, a.pz - z);
-      if (d > bestD) continue;
+      if (d > range || score(a.id, d) > bestD) continue;
       const chest = a.getChest();
       if (hasLineOfSight(ctx.colliders, threatFromTmp, chest)) {
-        bestD = d;
+        bestD = score(a.id, d);
         best = { id: a.id, x: a.px, z: a.pz, point: { x: chest.x, y: chest.y, z: chest.z }, isPlayer: false };
       }
     }
@@ -908,6 +920,10 @@ export class EngageBehavior {
   private flinch = 0;
   private moveTime = 0;
   private lostSightSec = 0;
+  /** 相手が続けて見えている秒数（追撃・回り込みの打ち切りの確認用） */
+  private seenStreakSec = 0;
+  /** 被弾で遮蔽を選び直してからの秒数 */
+  private sinceHitRetreat = Infinity;
   private repositionGoal: Vec3 | null = null;
   private repositionTimer = 0;
   private burstLimit: number | null = null;
@@ -1047,6 +1063,12 @@ export class EngageBehavior {
     if (this.opts.skipRetreatOnHit?.()) {
       return;
     }
+    // 被弾して遮蔽を選んだ直後なら、その遮蔽へ向かう・隠れるのを続ける（続けて撃たれるたびに選び直して右往左往しない）。
+    // 時間が経ってから遮蔽の中で撃たれたなら、その遮蔽は効いていないので選び直す
+    if ((this.phase === 'toCover' || this.phase === 'cover') && this.sinceHitRetreat < HIT_RETREAT_HOLD_SEC) {
+      return;
+    }
+    this.sinceHitRetreat = 0;
     this.burstLimit = null;
     this.repositionGoal = null;
     this.nav?.reset();
@@ -1054,6 +1076,8 @@ export class EngageBehavior {
   }
 
   update(dt: number, known: Vec3 | null, sees: boolean, threat: CombatThreat | null = null): void {
+    this.sinceHitRetreat += dt;
+    this.seenStreakSec = sees ? this.seenStreakSec + dt : 0;
     if (this.flinch > 0) {
       this.flinch -= dt;
       if (this.flinch <= 0) this.body.setFlash(false);
@@ -1062,8 +1086,8 @@ export class EngageBehavior {
 
     if (sees) {
       this.lostSightSec = 0;
-      // 追撃・回り込み中に脅威を再視認したら即座に射撃姿勢へ
-      if (this.phase === 'advance' || this.phase === 'flank') {
+      // 追撃・回り込み中に脅威を再視認したら射撃姿勢へ（一瞬のちらつきでは止まらず、続けて見えたときだけ）
+      if ((this.phase === 'advance' || this.phase === 'flank') && this.seenStreakSec >= RESIGHT_CONFIRM_SEC) {
         this.repositionGoal = null;
         this.burstLimit = null;
         this.nav?.reset();
