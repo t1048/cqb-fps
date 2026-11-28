@@ -59,6 +59,12 @@ export function elementLabelText(cfg: SquadConfig, el: SquadElement): string {
 }
 
 export function toggleEntryMode(ctx: SquadContext): EntryMode {
+  if (!ctx.stealthEntryAllowed) {
+    ctx.entryMode = 'dynamic';
+    ctx.ack = t('ステルス突入は SWAT Lv.3 で解放されます', 'Stealth Entry unlocks at SWAT Lv.3');
+    ctx.ackLeft = 2.0;
+    return 'dynamic';
+  }
   ctx.entryMode = ctx.entryMode === 'dynamic' ? 'stealth' : 'dynamic';
   const isStealth = ctx.entryMode === 'stealth';
   ctx.ack = isStealth

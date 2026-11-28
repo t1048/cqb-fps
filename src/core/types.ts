@@ -819,6 +819,14 @@ export interface WeaponDef {
   faction?: 'swat' | 'suspect';
   /** 予備マガジン数。指定時は弾数が有限（リロードで予備を消費）。省略時は無限 */
   reserveMagazines?: number;
+  /** この武器を携行中の移動速度倍率（省略時 1.0） */
+  moveSpeedMul?: number;
+  /** 1射撃あたりの散弾ペレット数（ショットガン用。省略時 1） */
+  pellets?: number;
+  /** サプレッサー装着（発砲音・警戒度上昇を抑制。省略時 false） */
+  suppressed?: boolean;
+  /** 解放レベル (1〜5, メタデータ。省略時 1) */
+  unlockLevel?: number;
 }
 
 export interface WeaponsData {
@@ -1131,6 +1139,25 @@ export interface PlayerConfig {
  */
 export type ArmorKind = 'swatIssue' | 'suspectVest';
 
+/** 選択可能な防弾ベストの段階 */
+export type VestTier = 'none' | 'light' | 'standard' | 'heavy';
+
+/** 防弾ベスト 1 種分の防護・重量仕様 */
+export interface VestSpec {
+  /** 耐久値（0 = 未装備） */
+  durability: number;
+  /** 新品時の肩代わり率 (0..1) */
+  absorb: number;
+  /** 耐久がほぼ尽きた時の肩代わり率 (0..absorb) */
+  minAbsorb: number;
+  /** 移動速度倍率 */
+  speedMul: number;
+  /** 足音の noise 半径倍率 */
+  footstepRadiusMul: number;
+  /** リーンの速さ倍率 */
+  leanSpeedMul: number;
+}
+
 /** ベストの重さの代償（装着中ずっと効く。耐久が尽きても脱げない） */
 export interface ArmorWeight {
   /** 移動速度の倍率 (0..1] */
@@ -1152,6 +1179,11 @@ export interface ArmorConfig {
   swatIssue: number;
   /** 容疑者モードで交渉（人質交換）により得る耐久値 */
   suspectVest: number;
+  /** SWAT / 容疑者モードの段階別ベスト仕様（light / standard / heavy / none） */
+  vests: {
+    swat: Record<'light' | 'standard' | 'heavy', VestSpec>;
+    suspect: Record<VestTier, VestSpec>;
+  };
 }
 
 /** 負傷モデル（player.json の wounds）。HP 比率・倍率・度は無次元/度。 */

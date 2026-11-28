@@ -2,8 +2,30 @@ import type { BriefingRange, MapData, StageEntry } from '../core/types';
 import { motifById } from '../world/Motif';
 import type { GameMode } from '../modes/SuspectMode';
 import { collectFloorLevels, drawFloorPlan, floorLabelAt, resolveActiveFloor } from './Minimap';
-import { getLocale, setLocale, t, tMotifLabel, tMotifSummary, tStageDesc, tStageName, tStageSize, tStageTagline } from '../core/i18n';
+import { getLocale, isEn, setLocale, t, tMotifLabel, tMotifSummary, tStageDesc, tStageName, tStageSize, tStageTagline } from '../core/i18n';
 import { buildSeedShareUrl, copyToClipboard, KOFI_URL, type SeedShareInfo } from './shareLinks';
+import {
+  getEffectiveSuspectLoadout,
+  getEffectiveSwatLoadout,
+  getNextUnlockPreview,
+  getProgression,
+  getStageUnlockLevel,
+  getSuspectUnlocks,
+  getSwatUnlocks,
+  isStageUnlocked,
+  isSuspectModeUnlocked,
+  isUnlockAll,
+  updateSquadMemberLoadout,
+  updateSuspectLoadout,
+  updateSwatLoadout,
+  xpProgressInLevel,
+  type SquadMemberWeaponId,
+  type SuspectAllyPolicy,
+  type SuspectPrimaryWeaponId,
+  type SuspectVestTier,
+  type SwatPrimaryWeaponId,
+  type SwatVestTier,
+} from '../rules/Progression';
 
 const PLAN_WIDTH = 560;
 const PLAN_HEIGHT = 420;
@@ -22,6 +44,46 @@ const CSS = `
 .bfs-choice{text-align:left;padding:12px 14px;border-radius:8px;background:#192534;border:2px solid #34495f;color:#dce6f2;cursor:pointer;font:15px/1.4 sans-serif;display:flex;flex-direction:column;gap:4px;transition:background .12s,border-color .12s}
 .bfs-choice:not(.active):hover,.bfs-choice:not(.active):focus-visible{background:#213248;border-color:#7fb4ec;outline:none}
 .bfs-choice.active{cursor:default;color:#f4f8fc}
+.bfs-choice.locked{opacity:.56;filter:grayscale(.45);cursor:default;border-style:dashed;border-color:#36475a;background:#131b26}
+.bfs-choice.locked:hover{background:#131b26;border-color:#36475a}
+.bfs-lock-badge{margin-left:auto;white-space:nowrap;font:bold 11px sans-serif;padding:2px 7px;border-radius:999px;background:rgba(242,193,78,.14);color:#f2c14e;border:1px solid rgba(242,193,78,.4)}
+.bfs-prog{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:10px 14px;margin-bottom:14px;border-radius:8px;background:#141e2b;border:1px solid #2b415a}
+.bfs-prog-lv{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.bfs-prog-tag{font:bold 11px monospace;letter-spacing:.1em;padding:2px 7px;border-radius:4px;color:#0a121a}
+.bfs-prog-lvnum{font:bold 18px sans-serif;color:#f4f8fc}
+.bfs-prog-barwrap{flex:1 1 180px;min-width:150px;display:flex;flex-direction:column;gap:4px}
+.bfs-prog-track{height:7px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden}
+.bfs-prog-fill{height:100%;border-radius:4px}
+.bfs-prog-xptxt{font:11px monospace;color:#9bb2c9}
+.bfs-prog-next{flex:2 1 260px;font:12px/1.45 sans-serif;color:#c7d8ea;display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.bfs-prog-next-lbl{font-weight:bold;color:#f2c14e;white-space:nowrap}
+.bfs-prog-chip{padding:2px 7px;border-radius:4px;background:rgba(242,193,78,.12);border:1px solid rgba(242,193,78,.32);color:#ffe79e;font-size:11px;white-space:nowrap}
+.bfs-prog-sandbox{padding:2px 8px;border-radius:4px;background:rgba(92,214,125,.16);border:1px solid rgba(92,214,125,.45);color:#8ff0a8;font:bold 11px monospace}
+.bfs-loadout{margin-bottom:16px;background:#141d29;border:1px solid #2b3f56;border-radius:8px;padding:10px 14px}
+.bfs-loadout>summary{cursor:pointer;font:bold 14px sans-serif;color:#dce8f5;letter-spacing:.04em;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none}
+.bfs-loadout>summary::-webkit-details-marker{display:none}
+.bfs-loadout-body{margin-top:12px;display:flex;flex-direction:column;gap:12px}
+.bfs-lo-sec{display:flex;flex-direction:column;gap:6px}
+.bfs-lo-title{font:bold 12px sans-serif;color:#9cb4cc;letter-spacing:.06em;display:flex;align-items:center;gap:8px}
+.bfs-lo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px}
+.bfs-lo-btn{text-align:left;padding:8px 10px;border-radius:6px;background:#192534;border:1.5px solid #34495f;color:#dce6f2;cursor:pointer;font:12px/1.35 sans-serif;display:flex;flex-direction:column;gap:2px;transition:background .12s,border-color .12s}
+.bfs-lo-btn:not(.active):not(:disabled):hover{background:#22344a;border-color:#7fb4ec}
+.bfs-lo-btn.active{border-color:#56c8d8;background:rgba(86,200,216,.16);color:#f4f8fc}
+.bfs-lo-btn.active.suspect{border-color:#ff7b7b;background:rgba(255,123,123,.16)}
+.bfs-lo-btn:disabled{opacity:.52;filter:grayscale(.45);cursor:default;border-style:dashed;border-color:#344456;background:#121923}
+.bfs-lo-name{font:bold 13px sans-serif;display:flex;align-items:center;justify-content:space-between;gap:4px}
+.bfs-lo-sub{font-size:11px;color:#93a8be}
+.bfs-lo-lock{font:bold 11px sans-serif;color:#f2c14e}
+.bfs-sq-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.bfs-sq-card{background:#111923;border:1px solid #2a3c52;border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.bfs-sq-card.locked{opacity:.58}
+.bfs-sq-head{font:bold 12px monospace;color:#9fd8ff;display:flex;justify-content:space-between;align-items:center}
+.bfs-sq-row{display:flex;align-items:center;justify-content:space-between;gap:6px;font:12px sans-serif;color:#b8cbe0}
+.bfs-sq-sel{flex:1;min-width:0;padding:4px 6px;border-radius:4px;background:#192534;border:1px solid #3a516c;color:#e6eef8;font:12px sans-serif}
+.bfs-sq-sel:disabled{opacity:.6;cursor:default}
+.bfs-sq-cnt{display:inline-flex;align-items:center;gap:4px}
+.bfs-sq-step{width:22px;height:22px;padding:0;border-radius:4px;background:#1d2b3c;border:1px solid #405874;color:#e6eef8;font:bold 12px monospace;cursor:pointer}
+.bfs-sq-step:disabled{opacity:.4;cursor:default}
 .bfs-choice-name{font:bold 18px sans-serif;display:flex;align-items:center;gap:8px}
 .bfs-choice-desc{font-size:13px;color:#9fb2c6}
 .bfs-choice.active .bfs-choice-desc{color:#c9d8e8}
@@ -67,6 +129,8 @@ export interface BriefingScreenOptions {
   onOpenSettings?: () => void;
   /** シード共有 URL 生成用情報 */
   seedShareInfo?: SeedShareInfo;
+  /** ロードアウト変更時のコールバック */
+  onLoadoutChange?: () => void;
 }
 
 function formatRange(range: BriefingRange | undefined): string {
@@ -89,15 +153,20 @@ export class BriefingScreen {
   readonly stageSlot = document.createElement('div');
   /** ランダム生成ステージのシード表示・再生成 UI */
   private readonly seedRow = document.createElement('div');
+  private readonly loadoutSlot = document.createElement('div');
   private modeSlot: HTMLElement | null = null;
   private readonly stageBtnCleanups: (() => void)[] = [];
   private visible = false;
   private disposed = false;
   private readonly onStart: () => void;
+  private readonly mode: GameMode;
+  private readonly onLoadoutChange?: () => void;
 
   constructor(parent: HTMLElement, map: MapData, options: BriefingScreenOptions) {
     this.onStart = options.onStart;
-    const suspectMode = options.mode === 'suspect';
+    this.mode = options.mode ?? 'swat';
+    this.onLoadoutChange = options.onLoadoutChange;
+    const suspectMode = this.mode === 'suspect';
 
     if (!document.getElementById(STYLE_ID)) {
       const style = document.createElement('style');
@@ -156,6 +225,9 @@ export class BriefingScreen {
       topbar.appendChild(settingsBtn);
     }
     card.appendChild(topbar);
+
+    // 進行度バナー（現在モードの Lv・XP バー・次の解放プレビュー）
+    card.appendChild(this.buildProgressionBanner(this.mode));
 
     // 上段: ミッション設定（① モード ② マップの広さ）
     const setup = document.createElement('div');
@@ -396,9 +468,443 @@ export class BriefingScreen {
     this.startBtn.addEventListener('click', this.handleStart);
     footer.appendChild(this.startBtn);
 
-    card.append(setup, header, body, footer);
+    // ロードアウト選択パネル
+    this.renderLoadoutPanel();
+
+    card.append(setup, header, this.loadoutSlot, body, footer);
     this.root.appendChild(card);
     parent.appendChild(this.root);
+  }
+
+  private buildProgressionBanner(mode: GameMode): HTMLElement {
+    const state = getProgression();
+    const prog = state[mode];
+    const xpInfo = xpProgressInLevel(prog.xp);
+    const sandbox = isUnlockAll(state);
+    const accent = mode === 'suspect' ? '#ff7b7b' : '#56c8d8';
+
+    const bar = document.createElement('div');
+    bar.className = 'bfs-prog';
+
+    const lv = document.createElement('div');
+    lv.className = 'bfs-prog-lv';
+    const tag = document.createElement('span');
+    tag.className = 'bfs-prog-tag';
+    tag.style.background = accent;
+    tag.textContent = mode === 'suspect' ? 'SUSPECT' : 'SWAT';
+    const lvNum = document.createElement('span');
+    lvNum.className = 'bfs-prog-lvnum';
+    lvNum.textContent = `Lv.${prog.level}`;
+    lv.append(tag, lvNum);
+    if (sandbox) {
+      const sb = document.createElement('span');
+      sb.className = 'bfs-prog-sandbox';
+      sb.textContent = t('SANDBOX 全解放', 'SANDBOX');
+      lv.appendChild(sb);
+    }
+
+    const barWrap = document.createElement('div');
+    barWrap.className = 'bfs-prog-barwrap';
+    const track = document.createElement('div');
+    track.className = 'bfs-prog-track';
+    const fill = document.createElement('div');
+    fill.className = 'bfs-prog-fill';
+    fill.style.width = `${Math.round(xpInfo.ratio * 100)}%`;
+    fill.style.background = accent;
+    track.appendChild(fill);
+    const xpTxt = document.createElement('div');
+    xpTxt.className = 'bfs-prog-xptxt';
+    xpTxt.textContent = xpInfo.isMax
+      ? t(`MAX LEVEL · 総 XP ${prog.xp}`, `MAX LEVEL · Total XP ${prog.xp}`)
+      : t(`XP ${xpInfo.current} / ${xpInfo.required} (次: Lv.${prog.level + 1})`, `XP ${xpInfo.current} / ${xpInfo.required} (Next: Lv.${prog.level + 1})`);
+    barWrap.append(track, xpTxt);
+
+    const nextBox = document.createElement('div');
+    nextBox.className = 'bfs-prog-next';
+    const nextItems = getNextUnlockPreview(mode, state);
+    if (sandbox) {
+      nextBox.textContent = t('サンドボックス有効: すべての装備・マップ・交渉カードが使用可能', 'Sandbox active: all gear, maps & negotiation cards unlocked');
+    } else if (nextItems.length === 0) {
+      nextBox.textContent = t('★ このモードの全要素を解放済み', '★ All unlocks completed for this mode');
+    } else {
+      const lbl = document.createElement('span');
+      lbl.className = 'bfs-prog-next-lbl';
+      lbl.textContent = t(`次の解放 (Lv.${prog.level + 1}):`, `Next (Lv.${prog.level + 1}):`);
+      nextBox.appendChild(lbl);
+      for (const item of nextItems.slice(0, 4)) {
+        const chip = document.createElement('span');
+        chip.className = 'bfs-prog-chip';
+        chip.textContent = isEn() ? item.labelEn : item.labelJa;
+        nextBox.appendChild(chip);
+      }
+      if (nextItems.length > 4) {
+        const more = document.createElement('span');
+        more.className = 'bfs-prog-chip';
+        more.textContent = `+${nextItems.length - 4}`;
+        nextBox.appendChild(more);
+      }
+    }
+
+    bar.append(lv, barWrap, nextBox);
+    return bar;
+  }
+
+  private renderLoadoutPanel(): void {
+    this.loadoutSlot.textContent = '';
+    const details = document.createElement('details');
+    details.className = 'bfs-loadout';
+    details.open = true;
+
+    const summary = document.createElement('summary');
+    summary.textContent =
+      this.mode === 'suspect'
+        ? t('🎒 ロードアウト & 仲間方針（クリックで開閉）', '🎒 Loadout & Crew Policy (Click to Toggle)')
+        : t('🎒 ロードアウト & 分隊装備（クリックで開閉）', '🎒 Loadout & Squad Gear (Click to Toggle)');
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'bfs-loadout-body';
+    if (this.mode === 'suspect') {
+      this.buildSuspectLoadout(body);
+    } else {
+      this.buildSwatLoadout(body);
+    }
+    details.appendChild(body);
+    this.loadoutSlot.appendChild(details);
+  }
+
+  private makeLoadoutBtn(
+    opts: {
+      name: string;
+      sub: string;
+      active: boolean;
+      locked: boolean;
+      lockLabel: string;
+      suspectStyle?: boolean;
+      onClick: () => void;
+    },
+  ): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `bfs-lo-btn${opts.active ? (opts.suspectStyle ? ' active suspect' : ' active') : ''}`;
+    b.disabled = opts.locked;
+    const head = document.createElement('div');
+    head.className = 'bfs-lo-name';
+    head.appendChild(document.createTextNode(opts.locked ? `🔒 ${opts.name}` : opts.name));
+    if (opts.active && !opts.locked) {
+      const ck = document.createElement('span');
+      ck.textContent = '✓';
+      ck.style.color = opts.suspectStyle ? '#ff9a9a' : '#7ce2f0';
+      head.appendChild(ck);
+    }
+    b.appendChild(head);
+    const sub = document.createElement('div');
+    sub.className = opts.locked ? 'bfs-lo-lock' : 'bfs-lo-sub';
+    sub.textContent = opts.locked ? opts.lockLabel : opts.sub;
+    b.appendChild(sub);
+    if (!opts.locked) {
+      b.addEventListener('click', () => {
+        if (this.disposed) return;
+        opts.onClick();
+        this.renderLoadoutPanel();
+        this.onLoadoutChange?.();
+      });
+    }
+    return b;
+  }
+
+  private buildSwatLoadout(container: HTMLElement): void {
+    const state = getProgression();
+    const u = getSwatUnlocks(state);
+    const lo = getEffectiveSwatLoadout(state);
+
+    // 1. Primary weapon
+    const wSec = document.createElement('div');
+    wSec.className = 'bfs-lo-sec';
+    const wTitle = document.createElement('div');
+    wTitle.className = 'bfs-lo-title';
+    wTitle.textContent = t('主武器 (Primary Weapon)', 'PRIMARY WEAPON');
+    const wGrid = document.createElement('div');
+    wGrid.className = 'bfs-lo-grid';
+    const swatWeapons: { id: SwatPrimaryWeaponId; name: string; sub: string; reqLv: number }[] = [
+      { id: 'rifle', name: t('カービン', 'Carbine'), sub: t('万能・高精度', 'Balanced & accurate'), reqLv: 1 },
+      { id: 'smg', name: t('短機関銃 (SMG)', 'SMG'), sub: t('機動力 +12%・高連射', 'Speed +12%, high ROF'), reqLv: 2 },
+      { id: 'suppressed_rifle', name: t('消音カービン', 'Suppressed Carbine'), sub: t('低騒音・警戒度上昇小', 'Low noise, low alert'), reqLv: 3 },
+      { id: 'shotgun', name: t('ショットガン', 'Shotgun'), sub: t('近距離8散弾・高火力', '8-pellet CQB power'), reqLv: 4 },
+    ];
+    for (const w of swatWeapons) {
+      wGrid.appendChild(
+        this.makeLoadoutBtn({
+          name: w.name,
+          sub: w.sub,
+          active: lo.primaryWeapon === w.id,
+          locked: !u.weapons[w.id],
+          lockLabel: t(`SWAT Lv.${w.reqLv} で解放`, `SWAT Lv.${w.reqLv}`),
+          onClick: () => updateSwatLoadout({ primaryWeapon: w.id }),
+        }),
+      );
+    }
+    wSec.append(wTitle, wGrid);
+    container.appendChild(wSec);
+
+    // 2. Armor vest
+    const vSec = document.createElement('div');
+    vSec.className = 'bfs-lo-sec';
+    const vTitle = document.createElement('div');
+    vTitle.className = 'bfs-lo-title';
+    vTitle.textContent = t('防弾ベスト (Armor Vest)', 'ARMOR VEST');
+    const vGrid = document.createElement('div');
+    vGrid.className = 'bfs-lo-grid';
+    const swatVests: { id: SwatVestTier; name: string; sub: string; reqLv: number }[] = [
+      { id: 'light', name: t('軽量ベスト', 'Light Vest'), sub: t('高速移動・静音', 'Fast & quiet'), reqLv: 2 },
+      { id: 'standard', name: t('標準ベスト', 'Standard Vest'), sub: t('防御と機動の均衡', 'Balanced protection'), reqLv: 1 },
+      { id: 'heavy', name: t('重装ベスト', 'Heavy Vest'), sub: t('高耐久・低速', 'Max armor, heavier'), reqLv: 4 },
+    ];
+    for (const v of swatVests) {
+      vGrid.appendChild(
+        this.makeLoadoutBtn({
+          name: v.name,
+          sub: v.sub,
+          active: lo.vest === v.id,
+          locked: !u.vests[v.id],
+          lockLabel: t(`SWAT Lv.${v.reqLv} で解放`, `SWAT Lv.${v.reqLv}`),
+          onClick: () => updateSwatLoadout({ vest: v.id }),
+        }),
+      );
+    }
+    vSec.append(vTitle, vGrid);
+    container.appendChild(vSec);
+
+    // 3. Squad customization (4 members)
+    const sqSec = document.createElement('div');
+    sqSec.className = 'bfs-lo-sec';
+    const sqTitle = document.createElement('div');
+    sqTitle.className = 'bfs-lo-title';
+    sqTitle.textContent = t('分隊装備 (Squad Loadout — 4名)', 'SQUAD LOADOUT (4 MEMBERS)');
+    if (!u.squadLoadoutCustom) {
+      const lk = document.createElement('span');
+      lk.className = 'bfs-lo-lock';
+      lk.textContent = t('🔒 SWAT Lv.3 で解放（盾持ち隊員 & 個別装備）', '🔒 Unlocks at SWAT Lv.3 (Shield & Custom Gear)');
+      sqTitle.appendChild(lk);
+    } else if (!u.squadGadgetCustom) {
+      const lk = document.createElement('span');
+      lk.className = 'bfs-lo-lock';
+      lk.textContent = t('🔒 ガジェット個別配分は SWAT Lv.4 で解放', '🔒 Custom Gadgets unlock at SWAT Lv.4');
+      sqTitle.appendChild(lk);
+    }
+    const sqGrid = document.createElement('div');
+    sqGrid.className = 'bfs-sq-grid';
+    const callsigns = ['Alpha-1', 'Alpha-2', 'Bravo-1', 'Bravo-2'];
+    const memberWeapons: { id: SquadMemberWeaponId; label: string; locked: boolean; reqLv: number }[] = [
+      { id: 'rifle', label: t('カービン', 'Carbine'), locked: false, reqLv: 1 },
+      { id: 'smg', label: t('短機関銃 (SMG)', 'SMG'), locked: !u.weapons.smg, reqLv: 2 },
+      { id: 'suppressed_rifle', label: t('消音カービン', 'Suppressed'), locked: !u.weapons.suppressed_rifle, reqLv: 3 },
+      { id: 'shotgun', label: t('ショットガン', 'Shotgun'), locked: !u.weapons.shotgun, reqLv: 4 },
+      { id: 'pepperball', label: t('ペッパーボール', 'Pepperball'), locked: false, reqLv: 1 },
+      { id: 'shield', label: t('防弾盾 + 拳銃', 'Ballistic Shield'), locked: !u.shieldMember, reqLv: 3 },
+    ];
+    const memberVests: { id: SwatVestTier; label: string; locked: boolean; reqLv: number }[] = [
+      { id: 'light', label: t('軽量', 'Light'), locked: !u.vests.light, reqLv: 2 },
+      { id: 'standard', label: t('標準', 'Standard'), locked: false, reqLv: 1 },
+      { id: 'heavy', label: t('重装', 'Heavy'), locked: !u.vests.heavy, reqLv: 4 },
+    ];
+
+    for (let i = 0; i < 4; i++) {
+      const m = lo.squad[i]!;
+      const card = document.createElement('div');
+      card.className = `bfs-sq-card${u.squadLoadoutCustom ? '' : ' locked'}`;
+      const head = document.createElement('div');
+      head.className = 'bfs-sq-head';
+      head.textContent = `#${i + 1} ${callsigns[i]}`;
+      card.appendChild(head);
+
+      // Weapon select
+      const wRow = document.createElement('div');
+      wRow.className = 'bfs-sq-row';
+      const wLbl = document.createElement('span');
+      wLbl.textContent = t('武器', 'Wpn');
+      const wSel = document.createElement('select');
+      wSel.className = 'bfs-sq-sel';
+      wSel.disabled = !u.squadLoadoutCustom;
+      for (const opt of memberWeapons) {
+        const o = document.createElement('option');
+        o.value = opt.id;
+        o.disabled = opt.locked;
+        o.textContent = opt.locked ? `🔒 ${opt.label} (Lv.${opt.reqLv})` : opt.label;
+        if (m.weapon === opt.id) o.selected = true;
+        wSel.appendChild(o);
+      }
+      wSel.addEventListener('change', () => {
+        updateSquadMemberLoadout(i, { weapon: wSel.value as SquadMemberWeaponId });
+        this.renderLoadoutPanel();
+        this.onLoadoutChange?.();
+      });
+      wRow.append(wLbl, wSel);
+      card.appendChild(wRow);
+
+      // Vest select
+      const vRow = document.createElement('div');
+      vRow.className = 'bfs-sq-row';
+      const vLbl = document.createElement('span');
+      vLbl.textContent = t('防弾', 'Vest');
+      const vSel = document.createElement('select');
+      vSel.className = 'bfs-sq-sel';
+      vSel.disabled = !u.squadLoadoutCustom;
+      for (const opt of memberVests) {
+        const o = document.createElement('option');
+        o.value = opt.id;
+        o.disabled = opt.locked;
+        o.textContent = opt.locked ? `🔒 ${opt.label} (Lv.${opt.reqLv})` : opt.label;
+        if (m.vest === opt.id) o.selected = true;
+        vSel.appendChild(o);
+      }
+      vSel.addEventListener('change', () => {
+        updateSquadMemberLoadout(i, { vest: vSel.value as SwatVestTier });
+        this.renderLoadoutPanel();
+        this.onLoadoutChange?.();
+      });
+      vRow.append(vLbl, vSel);
+      card.appendChild(vRow);
+
+      // Gadget row (Flash / Gas)
+      const gRow = document.createElement('div');
+      gRow.className = 'bfs-sq-row';
+      const makeStepper = (label: string, val: number, canEdit: boolean, onDelta: (d: number) => void): HTMLElement => {
+        const wrap = document.createElement('span');
+        wrap.className = 'bfs-sq-cnt';
+        const lbl = document.createElement('span');
+        lbl.textContent = `${label}:${val}`;
+        const minus = document.createElement('button');
+        minus.type = 'button';
+        minus.className = 'bfs-sq-step';
+        minus.textContent = '-';
+        minus.disabled = !canEdit || val <= 0;
+        minus.addEventListener('click', () => {
+          onDelta(-1);
+          this.renderLoadoutPanel();
+          this.onLoadoutChange?.();
+        });
+        const plus = document.createElement('button');
+        plus.type = 'button';
+        plus.className = 'bfs-sq-step';
+        plus.textContent = '+';
+        plus.disabled = !canEdit || val >= 4;
+        plus.addEventListener('click', () => {
+          onDelta(1);
+          this.renderLoadoutPanel();
+          this.onLoadoutChange?.();
+        });
+        wrap.append(lbl, minus, plus);
+        return wrap;
+      };
+      gRow.append(
+        makeStepper(t('閃光', 'FB'), m.flashbangs, u.squadGadgetCustom, (d) =>
+          updateSquadMemberLoadout(i, { flashbangs: Math.max(0, Math.min(4, m.flashbangs + d)) }),
+        ),
+        makeStepper(t('ガス', 'CS'), m.gas, u.squadGadgetCustom && u.teargas, (d) =>
+          updateSquadMemberLoadout(i, { gas: Math.max(0, Math.min(4, m.gas + d)) }),
+        ),
+      );
+      card.appendChild(gRow);
+      sqGrid.appendChild(card);
+    }
+    sqSec.append(sqTitle, sqGrid);
+    container.appendChild(sqSec);
+  }
+
+  private buildSuspectLoadout(container: HTMLElement): void {
+    const state = getProgression();
+    const u = getSuspectUnlocks(state);
+    const lo = getEffectiveSuspectLoadout(state);
+
+    // 1. Primary weapon
+    const wSec = document.createElement('div');
+    wSec.className = 'bfs-lo-sec';
+    const wTitle = document.createElement('div');
+    wTitle.className = 'bfs-lo-title';
+    wTitle.textContent = t('主武器 (Primary Weapon)', 'PRIMARY WEAPON');
+    const wGrid = document.createElement('div');
+    wGrid.className = 'bfs-lo-grid';
+    const suspectWeaponsList: { id: SuspectPrimaryWeaponId; name: string; sub: string; reqLv: number }[] = [
+      { id: 'machine_pistol', name: t('改造オート拳銃', 'Modded Auto Pistol'), sub: t('高機動・軽量', 'Agile & compact'), reqLv: 1 },
+      { id: 'suspect_smg', name: t('密輸 SMG', 'Smuggled SMG'), sub: t('高連射・中距離対応', 'Fast ROF, mid-range'), reqLv: 2 },
+      { id: 'suspect_shotgun', name: t('ソードオフ SG', 'Sawed-off Shotgun'), sub: t('近距離7散弾・室内制圧', '7-pellet room defense'), reqLv: 3 },
+      { id: 'suspect_ar', name: t('軍用アサルトライフル', 'Military AR'), sub: t('高威力・中長距離', 'High damage, rifle range'), reqLv: 4 },
+    ];
+    for (const w of suspectWeaponsList) {
+      wGrid.appendChild(
+        this.makeLoadoutBtn({
+          name: w.name,
+          sub: w.sub,
+          active: lo.primaryWeapon === w.id,
+          locked: !u.weapons[w.id],
+          lockLabel: t(`容疑者 Lv.${w.reqLv} で解放`, `Suspect Lv.${w.reqLv}`),
+          suspectStyle: true,
+          onClick: () => updateSuspectLoadout({ primaryWeapon: w.id }),
+        }),
+      );
+    }
+    wSec.append(wTitle, wGrid);
+    container.appendChild(wSec);
+
+    // 2. Armor vest
+    const vSec = document.createElement('div');
+    vSec.className = 'bfs-lo-sec';
+    const vTitle = document.createElement('div');
+    vTitle.className = 'bfs-lo-title';
+    vTitle.textContent = t('防弾ベスト (Armor Vest)', 'ARMOR VEST');
+    const vGrid = document.createElement('div');
+    vGrid.className = 'bfs-lo-grid';
+    const suspectVests: { id: SuspectVestTier; name: string; sub: string; reqLv: number }[] = [
+      { id: 'none', name: t('ベストなし', 'No Vest'), sub: t('最軽量・交渉で後から入手可', 'Lightest; can trade later'), reqLv: 1 },
+      { id: 'light', name: t('軽量ベスト', 'Light Vest'), sub: t('機動維持・軽防御', 'Light armor, agile'), reqLv: 2 },
+      { id: 'standard', name: t('標準ベスト', 'Standard Vest'), sub: t('実用防御・やや重い', 'Solid defense'), reqLv: 2 },
+      { id: 'heavy', name: t('重装ベスト', 'Heavy Vest'), sub: t('最大耐久・移動低下', 'Max durability, heavy'), reqLv: 4 },
+    ];
+    for (const v of suspectVests) {
+      vGrid.appendChild(
+        this.makeLoadoutBtn({
+          name: v.name,
+          sub: v.sub,
+          active: lo.vest === v.id,
+          locked: !u.vests[v.id],
+          lockLabel: t(`容疑者 Lv.${v.reqLv} で解放`, `Suspect Lv.${v.reqLv}`),
+          suspectStyle: true,
+          onClick: () => updateSuspectLoadout({ vest: v.id }),
+        }),
+      );
+    }
+    vSec.append(vTitle, vGrid);
+    container.appendChild(vSec);
+
+    // 3. Ally policy
+    const pSec = document.createElement('div');
+    pSec.className = 'bfs-lo-sec';
+    const pTitle = document.createElement('div');
+    pTitle.className = 'bfs-lo-title';
+    pTitle.textContent = t('仲間の行動方針 (Ally Policy)', 'ALLY POLICY');
+    const pGrid = document.createElement('div');
+    pGrid.className = 'bfs-lo-grid';
+    const policies: { id: SuspectAllyPolicy; name: string; sub: string; reqLv: number }[] = [
+      { id: 'balanced', name: t('バランス (標準)', 'Balanced'), sub: t('補強と迎撃をバランス良く実行', 'Balanced defense & fortify'), reqLv: 1 },
+      { id: 'aggressive', name: t('攻撃重視', 'Aggressive'), sub: t('積極迎撃・武器改造を優先', 'Aggressive ambush & mods'), reqLv: 3 },
+      { id: 'fortify', name: t('籠城・補強重視', 'Fortify'), sub: t('バリケード・トラップ設置を優先', 'Prioritize barricades & traps'), reqLv: 3 },
+    ];
+    for (const p of policies) {
+      pGrid.appendChild(
+        this.makeLoadoutBtn({
+          name: p.name,
+          sub: p.sub,
+          active: lo.allyPolicy === p.id,
+          locked: p.reqLv > 1 && !u.allyPolicyCustom,
+          lockLabel: t(`容疑者 Lv.${p.reqLv} で解放`, `Suspect Lv.${p.reqLv}`),
+          suspectStyle: true,
+          onClick: () => updateSuspectLoadout({ allyPolicy: p.id }),
+        }),
+      );
+    }
+    pSec.append(pTitle, pGrid);
+    container.appendChild(pSec);
   }
 
   private stepTitle(num: number, text: string): HTMLElement {
@@ -453,33 +959,52 @@ export class BriefingScreen {
     const cols = stages.length === 4 ? 2 : Math.min(stages.length, 3);
     grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
     const color = '#f2c14e';
+    const modeLabelJa = this.mode === 'suspect' ? '容疑者' : 'SWAT';
+    const modeLabelEn = this.mode === 'suspect' ? 'Suspect' : 'SWAT';
     for (const stage of stages) {
       const active = stage.id === currentStageId;
+      const locked = !isStageUnlocked(this.mode, stage.id);
+      const reqLv = getStageUnlockLevel(stage.id);
       const btn = this.choiceButton(
         active,
         color,
         (b) => {
           b.dataset.stageId = stage.id;
-          b.title = tStageDesc(stage.id, stage.description ?? stage.name);
+          b.title = locked
+            ? t(`${modeLabelJa} Lv.${reqLv} で解放`, `Unlocks at ${modeLabelEn} Lv.${reqLv}`)
+            : tStageDesc(stage.id, stage.description ?? stage.name);
+          if (locked) {
+            b.classList.add('locked');
+            b.disabled = true;
+          }
           const head = document.createElement('div');
           head.className = 'bfs-choice-name';
           if (stage.size) {
             const sz = document.createElement('span');
             sz.className = 'bfs-size';
             sz.textContent = tStageSize(stage.id, stage.size);
-            sz.style.color = active ? color : '#cfe0f0';
+            sz.style.color = locked ? '#6e7f92' : active ? color : '#cfe0f0';
             head.appendChild(sz);
           } else {
             head.appendChild(document.createTextNode(tStageName(stage.id, stage.name)));
           }
-          if (active) head.appendChild(this.checkBadge(color));
+          if (locked) {
+            const lk = document.createElement('span');
+            lk.className = 'bfs-lock-badge';
+            lk.textContent = t(`🔒 ${modeLabelJa} Lv.${reqLv} で解放`, `🔒 ${modeLabelEn} Lv.${reqLv}`);
+            head.appendChild(lk);
+          } else if (active) {
+            head.appendChild(this.checkBadge(color));
+          }
           b.appendChild(head);
           const desc = document.createElement('div');
           desc.className = 'bfs-choice-desc';
           desc.textContent = tStageTagline(stage.id, stage.tagline ?? stage.description ?? '');
           b.appendChild(desc);
         },
-        () => onSelectStage(stage.id),
+        () => {
+          if (!locked) onSelectStage(stage.id);
+        },
       );
       grid.appendChild(btn);
     }
@@ -496,24 +1021,39 @@ export class BriefingScreen {
       ['swat', t('🛡 SWAT（突入側）', '🛡 SWAT (Assaulter)'), t('隊長として部隊を指揮。人質を救出し容疑者を制圧する', 'Lead your squad, rescue hostages, and neutralize threats'), '#56c8d8'],
       ['suspect', t('🔒 容疑者（籠城側）', '🔒 Suspect (Defender)'), t('立てこもり犯として突入してくる SWAT をしのぐ', 'Hold out against an incoming SWAT tactical raid'), '#ff7b7b'],
     ];
+    const suspectUnlocked = isSuspectModeUnlocked();
     for (const [m, name, descText, color] of items) {
       const active = m === mode;
+      const locked = m === 'suspect' && !suspectUnlocked;
       grid.appendChild(
         this.choiceButton(
           active,
           color,
           (b) => {
             b.dataset.mode = m;
+            if (locked) {
+              b.classList.add('locked');
+              b.disabled = true;
+            }
             const head = document.createElement('div');
             head.className = 'bfs-choice-name';
             head.textContent = name;
-            if (active) head.appendChild(this.checkBadge(color));
+            if (locked) {
+              const lk = document.createElement('span');
+              lk.className = 'bfs-lock-badge';
+              lk.textContent = t('🔒 SWAT Lv.2 で解放', '🔒 Unlocks at SWAT Lv.2');
+              head.appendChild(lk);
+            } else if (active) {
+              head.appendChild(this.checkBadge(color));
+            }
             const desc = document.createElement('div');
             desc.className = 'bfs-choice-desc';
             desc.textContent = descText;
             b.append(head, desc);
           },
-          () => onSelectMode(m),
+          () => {
+            if (!locked) onSelectMode(m);
+          },
         ),
       );
     }
@@ -637,6 +1177,7 @@ export class BriefingScreen {
         e.target instanceof Node &&
         (this.stageSlot.contains(e.target) ||
           this.seedRow.contains(e.target) ||
+          this.loadoutSlot.contains(e.target) ||
           Boolean(this.modeSlot?.contains(e.target)))
       ) {
         return;

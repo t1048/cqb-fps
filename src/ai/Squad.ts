@@ -45,7 +45,8 @@ import {
   type CombatContext,
   type XZ,
 } from './EngageBehavior';
-import type { EntryMode } from './cqbEntry';
+import { resolveEntryMode, type EntryMode } from './cqbEntry';
+import type { SquadMemberLoadout, SquadMemberWeaponId, SwatVestTier } from '../rules/Progression';
 import { shieldBlocks } from './ShieldGuard';
 import { HumanoidBody } from './HumanoidBody';
 import type { EntityManager } from './EntityManager';
@@ -226,6 +227,7 @@ export class SquadSystem implements SquadContext {
   readonly portalGroups = new Map<string, PortalGroup>();
   /** 突入モード: dynamic = ダイナミック強行突入, stealth = ステルス慎重突入（Tab 切替） */
   entryMode: EntryMode = 'dynamic';
+  readonly stealthEntryAllowed: boolean;
   quickHintCache = '';
   quickHintTimer = 0;
   disposed = false;
@@ -252,11 +254,35 @@ export class SquadSystem implements SquadContext {
       windows?: readonly WindowDef[];
       intel?: ScoutIntel;
       traps?: DoorTrapSystem | null;
+      /** 隊員ごとの個別ロードアウト（未指定時は従来互換） */
+      memberLoadouts?: readonly SquadMemberLoadout[];
+      /** ステルス突入モードが解放されているか（未指定時は true で後方互換） */
+      allowStealthEntry?: boolean;
+      /** memberLoadouts 未指定時に先頭盾持ちを許可するか（未指定時は true で後方互換） */
+      allowShield?: boolean;
+      /** CS ガスが解放されているか（false のとき分隊のガス携行数を 0 に制限） */
+      allowGas?: boolean;
     },
   ) {
     this.intel = gadgets?.intel ?? new ScoutIntel();
     this.traps = gadgets?.traps ?? null;
-    this.inventory = scaleInventory(cfg.inventory, defs.length);
+    this.stealthEntryAllowed = gadgets?.allowStealthEntry ?? true;
+    const memberLoadouts = gadgets?.memberLoadouts;
+    const allowShield = gadgets?.allowShield ?? true;
+    const allowGas = gadgets?.allowGas ?? true;
+    if (memberLoadouts && defs.length > 0) {
+      let flashTotal = 0;
+      let gasTotal = 0;
+      for (let i = 0; i < defs.length; i++) {
+        const ml = memberLoadouts[i];
+        flashTotal += ml ? ml.flashbangs : 1;
+        gasTotal += allowGas ? (ml ? ml.gas : 0) : 0;
+      }
+      this.inventory = { flashbang: flashTotal, gas: gasTotal };
+    } else {
+      const scaled = scaleInventory(cfg.inventory, defs.length);
+      this.inventory = { flashbang: scaled.flashbang, gas: allowGas ? scaled.gas : 0 };
+    }
     this.flashesLeft = this.inventory.flashbang;
     this.gasLeft = this.inventory.gas;
     this.flashbang = gadgets?.flashbang;
@@ -301,9 +327,17 @@ export class SquadSystem implements SquadContext {
     });
 
     defs.forEach((def, index) => {
-      const shielded = isShieldRole(index, defs.length);
+      const ml = memberLoadouts?.[index];
+      const weaponId: SquadMemberWeaponId = ml
+        ? ml.weapon
+        : allowShield && isShieldRole(index, defs.length)
+          ? 'shield'
+          : 'rifle';
+      const vestTier: SwatVestTier = ml?.vest ?? 'standard';
+      const shielded = weaponId === 'shield';
       const combat = cloneCombatProfile(shielded ? BASE_SHIELD_COMBAT : BASE_SWAT_COMBAT);
       const mobility = cloneMobilityProfile(shielded ? BASE_SHIELD_MOBILITY : BASE_SWAT_MOBILITY);
+      const memberHp = applySquadMemberLoadout(weaponId, vestTier, combat);
       const body = new HumanoidBody(def.x, def.z, def.yaw ?? 0, SWAT_UNIFORM_COLOR, true, {
         role: 'ally',
         footY: def.y ?? 0,
@@ -328,7 +362,7 @@ export class SquadSystem implements SquadContext {
         allies: () => hostileSuspectTargetsFor(this, ally),
       };
       const nav = new SuspectNavigator(body, allyCtx);
-      const engageBus = createAllyEngageBus(this, shielded);
+      const engageBus = createAllyEngageBus(this, weaponId);
       const eyeScratch = new THREE.Vector3();
       const chestScratch: Vec3 = { x: 0, y: 0, z: 0 };
       const aabbScratch: AABB = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
@@ -360,6 +394,10 @@ export class SquadSystem implements SquadContext {
         roleIndex: index,
         groupSize: defs.length,
         shielded,
+        weaponId,
+        vestTier,
+        primaryNonlethal: weaponId === 'pepperball',
+        suppressed: weaponId === 'suppressed_rifle',
         combat,
         mobility,
         body,
@@ -396,8 +434,8 @@ export class SquadSystem implements SquadContext {
         holdTime: 0,
         fireCd: 0,
         warnCd: 0,
-        hp: SWAT_HP,
-        maxHp: SWAT_HP,
+        hp: memberHp,
+        maxHp: memberHp,
         wounded: false,
         down: false,
         engaging: false,
@@ -671,7 +709,7 @@ export class SquadSystem implements SquadContext {
   }
 
   setEntryMode(mode: EntryMode): void {
-    this.entryMode = mode;
+    this.entryMode = resolveEntryMode(mode, this.stealthEntryAllowed);
   }
 
   toggleEntryMode(): EntryMode {
@@ -1060,4 +1098,65 @@ export function scaleInventory(
 ): { flashbang: number; gas: number } {
   const k = Math.max(1, members / INVENTORY_BASE_MEMBERS);
   return { flashbang: Math.ceil(inv.flashbang * k), gas: Math.ceil(inv.gas * k) };
+}
+
+/** 分隊員 1 名分の武器・ベスト設定を CombatParams と最大 HP に反映する。 */
+export function applySquadMemberLoadout(
+  weapon: SquadMemberWeaponId,
+  vest: SwatVestTier,
+  combat: {
+    moveSpeed: number;
+    fireInterval: number;
+    shotsPerPeek: number;
+    magazineSize: number;
+    reloadSec: number;
+    engageRange: number;
+    flinchSec: number;
+    gunshotNoiseRadius: number;
+    shotDamage: number;
+    baseSpreadDeg: number;
+  },
+): number {
+  if (weapon === 'smg') {
+    combat.moveSpeed *= 1.12;
+    combat.fireInterval = 0.14;
+    combat.shotsPerPeek = 5;
+    combat.reloadSec = 1.8;
+    combat.engageRange = 14;
+    combat.gunshotNoiseRadius = 34;
+    combat.shotDamage = 10;
+    combat.baseSpreadDeg = 3.6;
+  } else if (weapon === 'suppressed_rifle') {
+    combat.gunshotNoiseRadius = 12;
+    combat.shotDamage = 12;
+    combat.baseSpreadDeg = 2.8;
+  } else if (weapon === 'shotgun') {
+    combat.moveSpeed *= 0.96;
+    combat.fireInterval = 0.85;
+    combat.shotsPerPeek = 2;
+    combat.magazineSize = 8;
+    combat.reloadSec = 2.8;
+    combat.engageRange = 12;
+    combat.gunshotNoiseRadius = 52;
+    combat.shotDamage = 24;
+    combat.baseSpreadDeg = 4.5;
+  } else if (weapon === 'pepperball') {
+    combat.fireInterval = 0.35;
+    combat.magazineSize = 12;
+    combat.reloadSec = 2.5;
+    combat.engageRange = 16;
+    combat.gunshotNoiseRadius = 15;
+    combat.shotDamage = 0;
+  }
+
+  let maxHp = SWAT_HP;
+  if (vest === 'light') {
+    maxHp = 85;
+    combat.moveSpeed *= 1.08;
+  } else if (vest === 'heavy') {
+    maxHp = 135;
+    combat.moveSpeed *= 0.88;
+    combat.flinchSec *= 0.6;
+  }
+  return maxHp;
 }

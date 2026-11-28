@@ -35,6 +35,8 @@ export interface NegotiationOption {
   chance?(): number | null;
   /** 選択不可の理由（null = 選択可） */
   disabledReason(): string | null;
+  /** 進行度によるロック理由（指定時はグレーアウト + 🔒 表示し選択不可・オート交渉スキップ） */
+  lockedReason?: string;
   /** 実行して交渉ログに出す結果を返す */
   run(): NegotiationLine[];
 }
@@ -95,6 +97,8 @@ const CSS = `
 .ngp-opt{text-align:left;padding:12px 14px;border-radius:8px;font:15px/1.5 sans-serif;color:#e6eef8;background:#192534;border:2px solid #3d5672;cursor:pointer;display:flex;flex-direction:column;gap:8px;transition:background .12s,border-color .12s,transform .12s}
 .ngp-opt:not(:disabled):hover,.ngp-opt:not(:disabled):focus-visible{background:#213248;border-color:#7fb4ec;outline:none;transform:translateY(-1px)}
 .ngp-opt:disabled{color:#6d7d8f;background:#121a24;border-color:#223143;cursor:default}
+.ngp-opt.ngp-locked{opacity:.58;filter:grayscale(.45);border-style:dashed;border-color:#3a4a5e}
+.ngp-locked-reason{font:bold 13px sans-serif;color:#f2c14e;background:rgba(242,193,78,.1);border:1px solid rgba(242,193,78,.35);border-radius:5px;padding:4px 8px;display:inline-flex;align-items:center;gap:5px;align-self:flex-start}
 .ngp-opt-head{display:flex;align-items:center;gap:10px}
 .ngp-key{flex:none;width:32px;height:32px;border-radius:6px;background:#f2c14e;color:#0a121a;font:bold 18px monospace;display:flex;align-items:center;justify-content:center}
 .ngp-opt:disabled .ngp-key{background:#2a3646;color:#6d7d8f}
@@ -282,7 +286,7 @@ export class NegotiationPhase {
 
   private choose(i: number): void {
     const opt = this.scenario.options[i];
-    if (!opt || this.scenario.isOver() || this.scenario.turnsLeft() <= 0 || opt.disabledReason() !== null) return;
+    if (!opt || opt.lockedReason || this.scenario.isOver() || this.scenario.turnsLeft() <= 0 || opt.disabledReason() !== null) return;
     const sep = document.createElement('div');
     sep.style.cssText = 'border-top:1px dashed #2a3c52;margin:8px 0';
     this.logEl.appendChild(sep);
@@ -337,21 +341,29 @@ export class NegotiationPhase {
     const over = this.scenario.isOver() || this.scenario.turnsLeft() <= 0;
     this.optionsEl.textContent = '';
     this.scenario.options.forEach((opt, i) => {
-      const reason = over ? t('交渉は終了した', 'Negotiation ended') : opt.disabledReason();
-      const btn = el('button', 'ngp-opt');
+      const locked = Boolean(opt.lockedReason);
+      const reason = locked ? null : over ? t('交渉は終了した', 'Negotiation ended') : opt.disabledReason();
+      const btn = el('button', locked ? 'ngp-opt ngp-locked' : 'ngp-opt');
       btn.type = 'button';
-      btn.disabled = reason !== null;
+      btn.disabled = locked || reason !== null;
 
       const head = el('div', 'ngp-opt-head');
-      head.append(el('span', 'ngp-key', String(i + 1)), el('span', 'ngp-opt-label', `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`));
+      head.append(
+        el('span', 'ngp-key', locked ? '🔒' : String(i + 1)),
+        el('span', 'ngp-opt-label', `${opt.icon ? opt.icon + ' ' : ''}${opt.label}`),
+      );
       const chance = opt.chance?.() ?? null;
       const pill = el(
         'span',
         'ngp-chance',
-        chance === null ? t('確実', 'Guaranteed') : t(`成功率 ${Math.round(chance * 100)}%`, `${Math.round(chance * 100)}% Chance`),
+        locked
+          ? t('未解放', 'Locked')
+          : chance === null
+            ? t('確実', 'Guaranteed')
+            : t(`成功率 ${Math.round(chance * 100)}%`, `${Math.round(chance * 100)}% Chance`),
       );
       const c = chance ?? 1;
-      const pc = c >= 0.65 ? '#5cd67d' : c >= 0.4 ? '#f2c14e' : '#ff6b6b';
+      const pc = locked ? '#8b9db0' : c >= 0.65 ? '#5cd67d' : c >= 0.4 ? '#f2c14e' : '#ff6b6b';
       pill.style.cssText = `color:${pc};background:${pc}22;border:1px solid ${pc}88`;
       head.appendChild(pill);
       btn.appendChild(head);
@@ -370,8 +382,12 @@ export class NegotiationPhase {
         this.chips(row, fx.fail, 'ngp-fail', '');
         btn.appendChild(row);
       }
-      if (fx.warn && reason === null) btn.appendChild(el('div', 'ngp-warn', `⚠ ${fx.warn}`));
-      btn.appendChild(reason === null ? el('div', 'ngp-desc', opt.desc) : el('div', 'ngp-reason', `× ${reason}`));
+      if (fx.warn && !locked && reason === null) btn.appendChild(el('div', 'ngp-warn', `⚠ ${fx.warn}`));
+      if (locked) {
+        btn.appendChild(el('div', 'ngp-locked-reason', `🔒 ${opt.lockedReason}`));
+      } else {
+        btn.appendChild(reason === null ? el('div', 'ngp-desc', opt.desc) : el('div', 'ngp-reason', `× ${reason}`));
+      }
       btn.addEventListener('click', () => this.choose(i));
       this.optionsEl.appendChild(btn);
     });
@@ -425,7 +441,7 @@ export class NegotiationPhase {
   private pickAuto(used: ReadonlySet<number>): number {
     const all: { i: number; w: number; c: number }[] = [];
     this.scenario.options.forEach((opt, i) => {
-      if (opt.disabledReason() !== null) return;
+      if (opt.lockedReason || opt.disabledReason() !== null) return;
       const fx = opt.effects?.() ?? {};
       if (fx.warn) return; // 決裂リスクのある手は避ける
       const c = opt.chance?.() ?? 1;

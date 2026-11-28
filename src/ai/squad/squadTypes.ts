@@ -36,6 +36,7 @@ import type { TacticalOptics } from '../TacticalOptics';
 import type { FlankDoorSample, FlashDoorSample } from '../SwatTactics';
 import type { ScoutIntel } from '../ScoutIntel';
 import type { DoorTrapSystem } from '../../world/DoorTraps';
+import type { SquadMemberWeaponId, SwatVestTier } from '../../rules/Progression';
 
 export const MAX_DT = 0.05;
 /** 追従隊列の列間隔（m） */
@@ -161,6 +162,14 @@ export interface AllyUnit extends HitTarget {
   roleIndex: number;
   groupSize: number;
   shielded: boolean;
+  /** この隊員の装備武器 ID（個別ロードアウト） */
+  weaponId: SquadMemberWeaponId;
+  /** この隊員の防弾ベスト段階（個別ロードアウト） */
+  vestTier: SwatVestTier;
+  /** 主武器が非致死（pepperball）か */
+  primaryNonlethal: boolean;
+  /** サプレッサー付き武器か */
+  suppressed: boolean;
   combat: CombatParams;
   mobility: MobilityParams;
   body: HumanoidBody;
@@ -420,6 +429,7 @@ export interface SquadContext {
   followHeading: XZ;
   lastPlayerPos: XZ;
   entryMode: EntryMode;
+  readonly stealthEntryAllowed: boolean;
   quickHintCache: string;
   quickHintTimer: number;
   disposed: boolean;

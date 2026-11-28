@@ -71,10 +71,18 @@ export function tStageDesc(id: string, fallback: string): string {
 }
 
 const WEAPON_EN: Record<string, string> = {
+  rifle: 'Carbine',
   carbine: 'Carbine',
+  smg: 'SMG',
+  suppressed_rifle: 'Suppressed Carbine',
+  shotgun: 'Tactical Shotgun',
   pepperball: 'Pepperball Gun',
   taser: 'Taser',
+  machine_pistol: 'Modded Auto Pistol',
   auto_pistol: 'Modded Auto Pistol',
+  suspect_smg: 'Smuggled SMG',
+  suspect_shotgun: 'Sawed-off Shotgun',
+  suspect_ar: 'Military Assault Rifle',
   flashbang: 'Flashbang',
   teargas: 'CS Gas Canister',
 };
@@ -211,6 +219,12 @@ const ROE_EN: Record<string, string> = {
   allyDown: 'Officer Down',
   playerInjury: 'Player Wounded',
   civilianGassed: 'Civilian Gassed',
+  swatNeutralized: 'SWAT Officer Neutralized',
+  trapHit: 'Booby Trap Hit',
+  hostageUnharmed: 'Hostage Unharmed',
+  survivalBonus: 'Siege Survival Bonus',
+  siegeVictory: 'SWAT Repelled (Siege Victory)',
+  hostageKilled: 'Hostage Killed',
 };
 
 export function tRoeLabel(key: string, fallback: string): string {

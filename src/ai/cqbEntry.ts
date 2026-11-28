@@ -36,6 +36,12 @@ export interface CqbRoom {
 /** 突入スタイル: dynamic = 強行突入、stealth = 慎重（半開き・パイ切り・静音進入） */
 export type EntryMode = 'dynamic' | 'stealth';
 
+/** ステルス突入が未解放のときは常に 'dynamic' に制限する。 */
+export function resolveEntryMode(requested: EntryMode, stealthUnlocked: boolean): EntryMode {
+  if (!stealthUnlocked && requested === 'stealth') return 'dynamic';
+  return requested;
+}
+
 export interface EntryPlan {
   /** axis 方向の符号。スタック枠の lateral 符号と同じ（0 は左 = -1 扱い） */
   side: -1 | 1;

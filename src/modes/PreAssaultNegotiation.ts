@@ -5,6 +5,7 @@ import { t, tRoomName } from '../core/i18n';
 import type { SuspectAlertConfig } from '../core/types';
 import { negotiationAlertBaseline, type NegotiationAlertInfo } from '../ai/SuspectAlert';
 import type { NegotiationLine, NegotiationOption, NegotiationScenario } from '../ui/NegotiationPhase';
+import type { SuspectNegotiationCardId, SwatNegotiationCardId } from '../rules/Progression';
 
 const pick = <T>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -48,6 +49,8 @@ export interface SuspectNegotiationContext {
   fatigueTier(): 0 | 1 | 2;
   /** 差し入れに乗じて偵察された（突入時に SWAT がプレイヤーの部屋を知る） */
   markScouted(): void;
+  /** 進行度に応じたカード解放マップ（省略時は全解放） */
+  unlockedCards?: Partial<Record<SuspectNegotiationCardId, boolean>>;
 }
 
 const FATIGUE_COLORS = ['#5cd67d', '#f2c14e', '#ff5555'] as const;
@@ -270,6 +273,8 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
     {
       icon: '🦺',
       label: t('人質と交換: 防弾チョッキ', 'Trade Hostage: Body Armor'),
+      lockedReason:
+        ctx.unlockedCards?.trade_vest === false ? t('容疑者 Lv.2 で解放', 'Unlocks at Suspect Lv.2') : undefined,
       desc: (() => {
         const v = ctx.vestSpec();
         const move = Math.round((1 - v.speedMul) * 100);
@@ -388,6 +393,8 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
     {
       icon: '📣',
       label: t('強気の要求で仲間を鼓舞', 'Rally Crew with Bold Demands'),
+      lockedReason:
+        ctx.unlockedCards?.rally === false ? t('容疑者 Lv.2 で解放', 'Unlocks at Suspect Lv.2') : undefined,
       desc: t(
         '通話を仲間に聞かせて奮い立たせる。士気が高い仲間は投降しにくく粘り強く戦う。繰り返すほど効果は薄れる',
         'Let your crew hear you stand firm. High-morale allies resist surrender and fight harder. Diminishing returns.',
@@ -466,6 +473,8 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
     {
       icon: '☠',
       label: t('脅迫して包囲を緩めさせる', 'Threaten to Pull Back Perimeter'),
+      lockedReason:
+        ctx.unlockedCards?.threaten === false ? t('容疑者 Lv.3 で解放', 'Unlocks at Suspect Lv.3') : undefined,
       desc: t(
         '人質の命を盾に突入班を下げさせる。人質が多いほど成功しやすい',
         'Use hostages as leverage to force SWAT to pull back an officer. More hostages improve odds.',
@@ -638,6 +647,8 @@ export interface SwatNegotiationContext {
   siegeHour(): number;
   /** 消耗の段階（表示の色分け用） */
   fatigueTier(): 0 | 1 | 2;
+  /** 進行度に応じたカード解放マップ（省略時は全解放） */
+  unlockedCards?: Partial<Record<SwatNegotiationCardId, boolean>>;
 }
 
 /**
@@ -882,6 +893,8 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
     {
       icon: '👂',
       label: t('内部の様子を聞き出す', 'Gather Interior Intel'),
+      lockedReason:
+        ctx.unlockedCards?.intel === false ? t('SWAT Lv.2 で解放', 'Unlocks at SWAT Lv.2') : undefined,
       desc: t(
         '会話の背後の声から、抵抗を続ける犯人の人数と居場所を探る',
         'Listen for background voices to estimate active suspect count and locations.',
@@ -939,6 +952,8 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
     {
       icon: '⚡',
       label: t('最後通告（威圧）', 'Ultimatum (Intimidate)'),
+      lockedReason:
+        ctx.unlockedCards?.ultimatum === false ? t('SWAT Lv.3 で解放', 'Unlocks at SWAT Lv.3') : undefined,
       desc: t(
         '全犯人を動揺させ、突入時に投降しやすくする。緊張が大きく上がるので使いどころに注意',
         'Rattle all suspects so they surrender more easily during breach. Spikes tension sharply — use with care.',

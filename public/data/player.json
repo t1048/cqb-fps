@@ -33,6 +33,19 @@
     "weight": {
       "swatIssue": { "speedMul": 0.95, "footstepRadiusMul": 1.0, "leanSpeedMul": 1.0 },
       "suspectVest": { "speedMul": 0.88, "footstepRadiusMul": 1.25, "leanSpeedMul": 0.8 }
+    },
+    "vests": {
+      "swat": {
+        "light": { "durability": 30, "absorb": 0.45, "minAbsorb": 0.25, "speedMul": 1.03, "footstepRadiusMul": 0.9, "leanSpeedMul": 1.08 },
+        "standard": { "durability": 50, "absorb": 0.6, "minAbsorb": 0.35, "speedMul": 0.95, "footstepRadiusMul": 1.0, "leanSpeedMul": 1.0 },
+        "heavy": { "durability": 90, "absorb": 0.72, "minAbsorb": 0.45, "speedMul": 0.84, "footstepRadiusMul": 1.2, "leanSpeedMul": 0.82 }
+      },
+      "suspect": {
+        "none": { "durability": 0, "absorb": 0, "minAbsorb": 0, "speedMul": 1.0, "footstepRadiusMul": 1.0, "leanSpeedMul": 1.0 },
+        "light": { "durability": 35, "absorb": 0.45, "minAbsorb": 0.25, "speedMul": 0.96, "footstepRadiusMul": 1.05, "leanSpeedMul": 0.96 },
+        "standard": { "durability": 80, "absorb": 0.6, "minAbsorb": 0.35, "speedMul": 0.88, "footstepRadiusMul": 1.25, "leanSpeedMul": 0.8 },
+        "heavy": { "durability": 115, "absorb": 0.72, "minAbsorb": 0.45, "speedMul": 0.8, "footstepRadiusMul": 1.35, "leanSpeedMul": 0.72 }
+      }
     }
   },
   "medkit": { "holdSec": 2.0, "heal": 45, "tradeCount": 1 },

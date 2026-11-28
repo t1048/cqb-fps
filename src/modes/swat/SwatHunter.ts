@@ -51,6 +51,7 @@ import type { HitTarget } from '../../weapons/WeaponSystem';
 import type { Door } from '../../world/Door';
 import type { TextureLibrary } from '../../world/Materials';
 import type { AABB, Collider } from '../../world/WorldBuilder';
+import type { BarricadeInfo } from '../Fortify';
 import { lerp } from './swatHelpers';
 import {
   COVER_NEAR,
@@ -158,6 +159,10 @@ export class SwatHunter implements HitTarget {
   breachDoor: Door | null = null;
   get breachDoorId(): string | null {
     return this.breachDoor?.id ?? null;
+  }
+  breachBarricade: BarricadeInfo | null = null;
+  get breachBarricadeId(): string | null {
+    return this.breachBarricade?.id ?? null;
   }
   breachApproach: Vec3 | null = null;
   breachWait = 0;
@@ -350,6 +355,7 @@ export class SwatHunter implements HitTarget {
       this.team.saveC2PlantProgress(this.breachDoor.id, this.c2Timer);
     }
     this.breachDoor = null;
+    this.breachBarricade = null;
     this.breachApproach = null;
     this.breachWait = 0;
     this.breachMode = 'kick';
@@ -453,7 +459,46 @@ export class SwatHunter implements HitTarget {
     const sx = this.body.px;
     const sz = this.body.pz;
     this.updateInner(dt);
+    this.enforceOneWayBarricades(sx, sz);
     this.trackMotion(sx, sz, dt);
+  }
+
+  /** 一方通行バリケード（容疑者側のみ通過可）に対する SWAT の進入阻止と即時ブリーチ遷移 */
+  private enforceOneWayBarricades(prevX: number, prevZ: number): void {
+    if (!this.alive || this.state === 'staging') return;
+    const arches = this.team.listArchBarricades();
+    if (arches.length === 0) return;
+    const px = this.body.px;
+    const pz = this.body.pz;
+    const fy = this.body.footY;
+    const r = 0.32;
+    for (const b of arches) {
+      if (b.kind !== 'arch_one_way' || !b.aabb) continue;
+      if (Math.abs(b.floorY - fy) > 0.85) continue;
+      const a = b.aabb;
+      const inBox =
+        px >= a.min.x - r && px <= a.max.x + r && pz >= a.min.z - r && pz <= a.max.z + r;
+      // 1 フレームで跨ぎ越したケースも検知（中心面の符号反転 + 幅内）
+      const dPrev = (prevX - b.center.x) * b.normal.x + (prevZ - b.center.z) * b.normal.z;
+      const dCur = (px - b.center.x) * b.normal.x + (pz - b.center.z) * b.normal.z;
+      const crossed =
+        dPrev * dCur < 0 &&
+        Math.hypot(px - b.center.x, pz - b.center.z) <= Math.max(1.0, (b.width ?? 1.4) / 2 + r);
+      if (!inBox && !crossed) continue;
+      // 前の位置がバリケード外ならそこへ押し戻す
+      const prevInBox =
+        prevX >= a.min.x - r && prevX <= a.max.x + r && prevZ >= a.min.z - r && prevZ <= a.max.z + r;
+      if (!prevInBox) {
+        this.body.setPosition(prevX, prevZ, fy, false);
+      } else {
+        const side = dPrev >= 0 ? 1 : -1;
+        this.body.setPosition(b.center.x + b.normal.x * side * 0.55, b.center.z + b.normal.z * side * 0.55, fy, false);
+      }
+      if (this.state !== 'breach' && this.state !== 'engage' && this.state !== 'disarm') {
+        this.beginArchBreach(b);
+      }
+      return;
+    }
   }
 
   /** 進行方向を姿勢ヨーから初期化する（突入開始時など） */
@@ -1380,6 +1425,17 @@ export class SwatHunter implements HitTarget {
       this.routeWaitSec = 0;
       return false;
     }
+    if (plan.barricade) {
+      if (this.team.isBarricadeBeingBreached(plan.barricade.id, this)) {
+        this.routeWaitSec = Math.max(this.routeWaitSec, 0.01);
+        return this.waitingForBreach(dt);
+      }
+      if (this.beginArchBreach(plan.barricade)) {
+        this.routeWaitSec = 0;
+        return true;
+      }
+      return false;
+    }
     if (!plan.door) return 'unreachable';
     if (this.team.isDoorBeingBreached(plan.door.id, this)) {
       // 別の隊員が蹴破っている最中: 近くで待つ（長すぎれば諦めて別の動きに戻る）
@@ -1681,6 +1737,10 @@ export class SwatHunter implements HitTarget {
       // 経路計画が「最初に塞いでいる施錠ドア」を知っているときはそれを優先する（近くの無関係な施錠ドアを蹴らない）。
       // どの施錠ドアを開けても届かない目標へは、ブリーチを繰り返さず諦める。
       const plan = this.team.planRoute({ x: this.body.px, y: this.body.footY, z: this.body.pz }, goal, this.skipDoors);
+      if (plan.barricade) {
+        if (this.team.isBarricadeBeingBreached(plan.barricade.id, this)) return false;
+        return this.beginArchBreach(plan.barricade);
+      }
       if (plan.door) {
         if (this.team.trapHeld(plan.door) || this.team.isDoorBeingBreached(plan.door.id, this)) return false;
         door = plan.door;
@@ -1715,7 +1775,29 @@ export class SwatHunter implements HitTarget {
     return true;
   }
 
+  /** ドアなし開口のバリケード（板張り・一方通行）を蹴り破るブリーチを開始する。 */
+  beginArchBreach(b: BarricadeInfo): boolean {
+    if (this.team.isBarricadeBeingBreached(b.id, this)) return false;
+    const side =
+      (this.body.px - b.center.x) * b.normal.x + (this.body.pz - b.center.z) * b.normal.z >= 0 ? 1 : -1;
+    this.breachDoor = null;
+    this.breachBarricade = b;
+    this.breachWait = 0;
+    this.breachMode = 'kick';
+    this.breachApproach = {
+      x: b.center.x + b.normal.x * side * 0.95,
+      y: b.floorY,
+      z: b.center.z + b.normal.z * side * 0.95,
+    };
+    this.setState('breach');
+    return true;
+  }
+
   private updateBreach(dt: number): void {
+    if (this.breachBarricade) {
+      this.updateArchBarricadeBreach(dt, this.breachBarricade);
+      return;
+    }
     const door = this.breachDoor;
     const ap = this.breachApproach;
     if (!door || !ap) {
@@ -1761,6 +1843,43 @@ export class SwatHunter implements HitTarget {
       }
     } else if (res === 'blocked' || this.stateTime > 20) {
       this.skipDoor(door.id);
+      this.clearBreachState();
+      this.setState('sweep');
+    }
+  }
+
+  /** アーチバリケード（板張り・一方通行）の蹴破りブリーチ */
+  private updateArchBarricadeBreach(dt: number, b: BarricadeInfo): void {
+    const active = this.team.listArchBarricades().find((x) => x.id === b.id);
+    const ap = this.breachApproach;
+    if (!active || !active.boarded || active.hp <= 0 || !ap) {
+      this.clearBreachState();
+      this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      return;
+    }
+    const nearArch =
+      Math.abs(this.body.footY - active.floorY) < 0.85 &&
+      Math.hypot(this.body.px - active.center.x, this.body.pz - active.center.z) < 1.5;
+    const res = nearArch
+      ? 'arrived'
+      : this.nav.step(ap, this.combat.moveSpeed * HUNT_SPEED, dt, {
+          canOpenDoors: true,
+          canUseStairs: true,
+          faceTravel: true,
+          arriveDist: 0.75,
+          smooth: NAV_SMOOTH,
+        });
+    if (res === 'arrived') {
+      this.breachWait += dt;
+      this.body.faceToward(active.center.x, active.center.z);
+      if (this.breachWait < 0.65) return;
+      this.breachWait = 0;
+      const broken = this.team.damageBarricade(active.id, 90);
+      if (broken && this.state === 'breach') {
+        this.clearBreachState();
+        this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      }
+    } else if (res === 'blocked' || this.stateTime > 20) {
       this.clearBreachState();
       this.setState('sweep');
     }

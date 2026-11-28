@@ -37,6 +37,7 @@ const STYLE = `
 .cqb-hud .roster-mode{padding:1px 5px;border-radius:3px;font-size:10px;border:1px solid transparent}
 .cqb-hud .roster-mode.dynamic{background:rgba(242,193,78,.18);border-color:rgba(242,193,78,.5);color:#ffd978}
 .cqb-hud .roster-mode.stealth{background:rgba(86,200,216,.18);border-color:rgba(86,200,216,.5);color:#8be4f2}
+.cqb-hud .roster-mode.locked{background:rgba(140,160,180,.14);border-color:rgba(140,160,180,.35);color:#9bb0c6}
 .cqb-hud .roster-el{color:#f2c14e}
 .cqb-hud .ally-row{display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:3px;font-size:12px;margin-top:2px;border-left:3px solid transparent}
 .cqb-hud .ally-row.selected{background:rgba(86,200,216,.14);border-left-color:#56c8d8}
@@ -228,6 +229,8 @@ export class Hud {
   medkitProvider: (() => number) | null = null;
   /** 容疑者の警戒度（SWAT モードのみ）。value 0〜100、tier 0〜4、threat=人質処刑の脅迫中 */
   alertProvider: (() => { value: number; tier: number; threat: boolean } | null) | null = null;
+  /** 進行度による装備/機能ロック状態（SWAT モードのみ） */
+  private featureLocks: { stealthLocked?: boolean; gasLocked?: boolean; optiwandLocked?: boolean } = {};
   private readonly gearEl = document.createElement('div');
   private readonly alertWrapEl = document.createElement('div');
   private readonly alertLabelEl = document.createElement('div');
@@ -442,9 +445,12 @@ export class Hud {
   }
 
   private applyStaticLabels(): void {
+    const wandHint = this.featureLocks.optiwandLocked
+      ? t(' / 🔒ワンド(Lv.2)', ' / 🔒Wand(Lv.2)')
+      : t(' / 中クリック・4ワンド', ' / MMB·4 Wand');
     this.rosterTitleEl.textContent = t(
-      'SQUAD [右クリック指示 / Z簡易 / X集合 / 中クリック・4ワンド]',
-      'SQUAD [RMB Order / Z Quick / X Fall In / MMB·4 Wand]',
+      `SQUAD [右クリック指示 / Z簡易 / X集合${wandHint}]`,
+      `SQUAD [RMB Order / Z Quick / X Fall In${wandHint}]`,
     );
     this.objTitleEl.textContent = t('作戦目標 / OBJECTIVES', 'OBJECTIVES');
     this.promptEl.textContent = t(
@@ -468,6 +474,14 @@ export class Hud {
       this.lastPromptVisible = false;
       this.promptEl.style.display = 'none';
     }
+  }
+
+  /** 進行度によるロック状態を HUD に反映する（ステルス突入・CSガス・オプティワンド） */
+  setFeatureLocks(locks: { stealthLocked?: boolean; gasLocked?: boolean; optiwandLocked?: boolean }): void {
+    this.featureLocks = { ...locks };
+    this.lastEntryMode = '';
+    this.lastGearKey = '';
+    this.applyStaticLabels();
   }
 
   refreshLocale(): void {
@@ -517,12 +531,16 @@ export class Hud {
   private updateGearAndAlert(): void {
     const gear = this.squad?.getGear();
     if (gear) {
-      const key = `${getLocale()}|${gear.flash}|${gear.gas}`;
+      const gasLocked = this.featureLocks.gasLocked === true;
+      const key = `${getLocale()}|${gear.flash}|${gear.gas}|${gasLocked ? 1 : 0}`;
       if (key !== this.lastGearKey) {
         this.lastGearKey = key;
         const part = (label: string, n: number, max: number): string =>
           `${label} <b class="${n <= 0 ? 'out' : ''}">${n}</b>/${max}`;
-        this.gearEl.innerHTML = `${part(t('閃光', 'Flash'), gear.flash, gear.flashMax)}　${part(t('ガス', 'Gas'), gear.gas, gear.gasMax)}`;
+        const gasHtml = gasLocked
+          ? `${t('ガス', 'Gas')} <span style="opacity:.65">🔒 Lv.2</span>`
+          : part(t('ガス', 'Gas'), gear.gas, gear.gasMax);
+        this.gearEl.innerHTML = `${part(t('閃光', 'Flash'), gear.flash, gear.flashMax)}　${gasHtml}`;
         this.gearEl.style.display = 'block';
       }
     }
@@ -633,10 +651,17 @@ export class Hud {
       }
       if (showRoster) {
         const entryMode = this.squad.getEntryMode();
-        if (entryMode !== this.lastEntryMode) {
-          this.lastEntryMode = entryMode;
-          this.rosterModeEl.textContent = entryMode === 'stealth' ? '[Tab] STEALTH' : '[Tab] DYNAMIC';
-          this.rosterModeEl.className = `roster-mode ${entryMode}`;
+        const stealthLocked = this.featureLocks.stealthLocked === true;
+        const entryModeKey = `${entryMode}|${stealthLocked ? 1 : 0}`;
+        if (entryModeKey !== this.lastEntryMode) {
+          this.lastEntryMode = entryModeKey;
+          if (stealthLocked) {
+            this.rosterModeEl.textContent = 'DYNAMIC · 🔒STEALTH(Lv.3)';
+            this.rosterModeEl.className = 'roster-mode locked';
+          } else {
+            this.rosterModeEl.textContent = entryMode === 'stealth' ? '[Tab] STEALTH' : '[Tab] DYNAMIC';
+            this.rosterModeEl.className = `roster-mode ${entryMode}`;
+          }
         }
         const elLbl = `[T] ${this.squad.elementLabel}`;
         if (elLbl !== this.lastElementLabel) {

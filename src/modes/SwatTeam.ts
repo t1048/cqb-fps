@@ -882,6 +882,18 @@ export class SwatTeam implements SwatTeamHost {
     return this.hunters.some((h) => h !== exclude && h.alive && h.state === 'breach' && h.breachDoorId === doorId);
   }
 
+  isBarricadeBeingBreached(barricadeId: string, exclude?: SwatHunter): boolean {
+    return this.hunters.some((h) => h !== exclude && h.alive && h.state === 'breach' && h.breachBarricadeId === barricadeId);
+  }
+
+  listArchBarricades(): readonly BarricadeInfo[] {
+    return this.obstacles.listArchBarricades();
+  }
+
+  damageBarricade(barricadeId: string, damage: number): boolean {
+    return this.obstacles.damageBarricade(barricadeId, damage);
+  }
+
   /** 目標が施錠ドアの向こうか（歩いて届くか）。届かなければ最初に破るべき施錠ドアを返す */
   planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan {
     return this.routePlanner.plan(from, goal, skip);
@@ -924,6 +936,7 @@ export class SwatTeam implements SwatTeamHost {
 
   attachBarricades(hooks: BarricadeHooks): void {
     this.obstacles.attachBarricades(hooks);
+    this.routePlanner.attachBarricades(hooks);
   }
 
   tryShootBarricade(h: SwatHunter, dt: number): boolean {

@@ -1,32 +1,74 @@
 {
   "weapons": [
     {
-      "id": "rifle", "name": "カービン", "category": "primary", "slot": 1,
+      "id": "rifle", "name": "カービン", "category": "primary", "slot": 1, "faction": "swat",
       "damage": 34, "fireRate": 10, "magazineSize": 30, "reloadTime": 2.2, "range": 60,
       "hipSpread": 0.4, "adsSpread": 0.4, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 2.5,
       "recoilPitch": 0.9, "recoilYawRange": 0.35, "recoilRecovery": 6,
-      "moraleDamage": 0, "noiseRadius": 40
+      "moraleDamage": 0, "noiseRadius": 40, "moveSpeedMul": 1.0, "unlockLevel": 1
+    },
+    {
+      "id": "smg", "name": "短機関銃", "category": "primary", "slot": 1, "faction": "swat",
+      "damage": 24, "fireRate": 13.5, "magazineSize": 30, "reloadTime": 1.8, "range": 35,
+      "hipSpread": 0.55, "adsSpread": 0.45, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 1.8,
+      "recoilPitch": 0.65, "recoilYawRange": 0.3, "recoilRecovery": 7,
+      "moraleDamage": 0, "noiseRadius": 34, "moveSpeedMul": 1.12, "unlockLevel": 2
+    },
+    {
+      "id": "suppressed_rifle", "name": "消音カービン", "category": "primary", "slot": 1, "faction": "swat",
+      "damage": 30, "fireRate": 9.5, "magazineSize": 30, "reloadTime": 2.2, "range": 52,
+      "hipSpread": 0.38, "adsSpread": 0.32, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 2.2,
+      "recoilPitch": 0.78, "recoilYawRange": 0.3, "recoilRecovery": 6.5,
+      "moraleDamage": 0, "noiseRadius": 12, "moveSpeedMul": 1.0, "suppressed": true, "unlockLevel": 3
+    },
+    {
+      "id": "shotgun", "name": "ショットガン", "category": "primary", "slot": 1, "faction": "swat",
+      "damage": 16, "fireRate": 1.35, "magazineSize": 8, "reloadTime": 2.8, "range": 18,
+      "hipSpread": 3.4, "adsSpread": 2.6, "adsMoveSpeedMultiplier": 0.95, "moveSpreadPenalty": 1.5,
+      "recoilPitch": 2.6, "recoilYawRange": 0.7, "recoilRecovery": 5,
+      "moraleDamage": 18, "noiseRadius": 52, "pellets": 8, "moveSpeedMul": 0.96, "unlockLevel": 4
     },
     {
       "id": "pepperball", "name": "ペッパーボール銃", "category": "nonlethal", "slot": 2,
       "damage": 0, "fireRate": 3, "magazineSize": 12, "reloadTime": 2.5, "range": 25,
       "hipSpread": 0.5, "adsSpread": 0.5, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 2.0,
       "recoilPitch": 0.5, "recoilYawRange": 0.2, "recoilRecovery": 6,
-      "moraleDamage": 30, "noiseRadius": 15
+      "moraleDamage": 30, "noiseRadius": 15, "unlockLevel": 1
     },
     {
       "id": "machine_pistol", "name": "改造フルオート拳銃", "category": "primary", "slot": 1, "faction": "suspect",
       "damage": 19, "fireRate": 13, "magazineSize": 15, "reloadTime": 2.0, "range": 28, "reserveMagazines": 3,
       "hipSpread": 2.6, "adsSpread": 2.6, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 3.5,
       "recoilPitch": 1.7, "recoilYawRange": 1.1, "recoilRecovery": 5,
-      "moraleDamage": 0, "noiseRadius": 32
+      "moraleDamage": 0, "noiseRadius": 32, "moveSpeedMul": 1.06, "unlockLevel": 1
+    },
+    {
+      "id": "suspect_smg", "name": "密輸SMG", "category": "primary", "slot": 1, "faction": "suspect",
+      "damage": 22, "fireRate": 12.5, "magazineSize": 25, "reloadTime": 2.0, "range": 32, "reserveMagazines": 3,
+      "hipSpread": 1.6, "adsSpread": 1.2, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 2.6,
+      "recoilPitch": 1.1, "recoilYawRange": 0.65, "recoilRecovery": 6,
+      "moraleDamage": 0, "noiseRadius": 35, "moveSpeedMul": 1.08, "unlockLevel": 2
+    },
+    {
+      "id": "suspect_shotgun", "name": "ソードオフ・ショットガン", "category": "primary", "slot": 1, "faction": "suspect",
+      "damage": 17, "fireRate": 1.2, "magazineSize": 4, "reloadTime": 2.6, "range": 15, "reserveMagazines": 4,
+      "hipSpread": 4.2, "adsSpread": 3.3, "adsMoveSpeedMultiplier": 0.95, "moveSpreadPenalty": 2.0,
+      "recoilPitch": 3.0, "recoilYawRange": 0.9, "recoilRecovery": 4.5,
+      "moraleDamage": 15, "noiseRadius": 50, "pellets": 7, "moveSpeedMul": 1.0, "unlockLevel": 3
+    },
+    {
+      "id": "suspect_ar", "name": "軍用アサルトライフル", "category": "primary", "slot": 1, "faction": "suspect",
+      "damage": 32, "fireRate": 9.5, "magazineSize": 30, "reloadTime": 2.4, "range": 55, "reserveMagazines": 3,
+      "hipSpread": 1.1, "adsSpread": 0.65, "adsMoveSpeedMultiplier": 0.95, "moveSpreadPenalty": 2.8,
+      "recoilPitch": 1.25, "recoilYawRange": 0.55, "recoilRecovery": 5.5,
+      "moraleDamage": 0, "noiseRadius": 44, "moveSpeedMul": 0.96, "unlockLevel": 4
     },
     {
       "id": "flashbang", "name": "フラッシュバン", "category": "throwable", "slot": 3,
       "damage": 0, "fireRate": 0.5, "magazineSize": 2, "reloadTime": 0, "range": 12,
       "hipSpread": 0, "adsSpread": 0, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 0,
       "recoilPitch": 0, "recoilYawRange": 0, "recoilRecovery": 0,
-      "moraleDamage": 52, "noiseRadius": 50,
+      "moraleDamage": 52, "noiseRadius": 50, "unlockLevel": 1,
       "throwable": {
         "throwSpeed": 11, "upwardBiasDeg": 6, "gravity": 9.8, "restitution": 0.45, "friction": 0.7,
         "fuseTime": 2.0, "ballRadius": 0.05, "stopSpeed": 0.5,
@@ -39,7 +81,7 @@
       "damage": 0, "fireRate": 0.5, "magazineSize": 2, "reloadTime": 0, "range": 4.2,
       "hipSpread": 0, "adsSpread": 0, "adsMoveSpeedMultiplier": 1.0, "moveSpreadPenalty": 0,
       "recoilPitch": 0, "recoilYawRange": 0, "recoilRecovery": 0,
-      "moraleDamage": 0, "noiseRadius": 20,
+      "moraleDamage": 0, "noiseRadius": 20, "unlockLevel": 2,
       "throwable": {
         "throwSpeed": 10, "upwardBiasDeg": 6, "gravity": 14, "restitution": 0.35, "friction": 0.65,
         "fuseTime": 1.6, "ballRadius": 0.06, "stopSpeed": 0.25,

@@ -25,6 +25,7 @@ import type { StairMark } from '../../world/Walk';
 import type { Collider } from '../../world/WorldBuilder';
 import type { FlashOverlay } from '../../ui/FlashOverlay';
 import type { Subtitle } from '../../ui/Subtitle';
+import type { BarricadeInfo } from '../Fortify';
 import type { SwatHunter } from './SwatHunter';
 import type { RoutePlan } from './swatRoutePlanner';
 
@@ -377,6 +378,9 @@ export interface SwatTeamHost {
   planRoute(from: Vec3, goal: Vec3, skip?: ReadonlySet<string>): RoutePlan;
   trapHeld(door: Door): boolean;
   isDoorBeingBreached(doorId: string, exclude?: SwatHunter): boolean;
+  isBarricadeBeingBreached(barricadeId: string, exclude?: SwatHunter): boolean;
+  listArchBarricades(): readonly BarricadeInfo[];
+  damageBarricade(barricadeId: string, damage: number): boolean;
   findLockedDoor(h: SwatHunter, goal: Vec3, skip: ReadonlySet<string>): Door | null;
   shouldUseC2(doorId: string): boolean;
   onBreach(by: SwatHunter, door: Door): void;

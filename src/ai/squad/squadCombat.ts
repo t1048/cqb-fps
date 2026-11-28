@@ -14,6 +14,7 @@ import {
   pickRadio,
 } from '../radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
+import type { SquadMemberWeaponId } from '../../rules/Progression';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import { collidersNear } from '../../world/ColliderIndex';
 import type { AABB, Collider } from '../../world/WorldBuilder';
@@ -99,17 +100,32 @@ export function tryWarn(ctx: SquadContext, ally: AllyUnit): void {
   }
 }
 
-export function createAllyEngageBus(ctx: SquadContext, shielded: boolean): GameEventBus {
+export function createAllyEngageBus(ctx: SquadContext, weapon: SquadMemberWeaponId | boolean): GameEventBus {
   const realBus = ctx.bus;
-  const weaponId = shielded ? 'pistol' : 'rifle';
+  const weaponKind: SquadMemberWeaponId = typeof weapon === 'boolean' ? (weapon ? 'shield' : 'rifle') : weapon;
+  const weaponId = weaponKind === 'shield' ? 'pistol' : weaponKind;
+  const suppressed = weaponKind === 'suppressed_rifle';
+  const nonlethal = weaponKind === 'pepperball';
   return {
     emit(event: string, payload: Record<string, unknown>) {
       if (event === 'suspectFired') return;
       if (event === 'noise') {
-        realBus.emit('noise', { ...(payload as Parameters<GameEventBus['emit']>[1] & object), source: 'ally' } as never);
+        const base = payload as { pos: Vec3; radius: number; kind: string };
+        const radius = suppressed ? Math.min(base.radius, 12) : base.radius;
+        realBus.emit('noise', { ...base, radius, source: 'ally' } as never);
         return;
       }
       if (event === 'entityHit') {
+        if (nonlethal) {
+          realBus.emit('entityHit', {
+            ...(payload as Parameters<GameEventBus['emit']>[1] & object),
+            damage: 0,
+            weaponId: 'pepperball',
+            nonlethal: true,
+            moraleScale: 0.7,
+          } as never);
+          return;
+        }
         realBus.emit('entityHit', { ...(payload as Parameters<GameEventBus['emit']>[1] & object), weaponId } as never);
         return;
       }
@@ -504,6 +520,10 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
       ally.body.aimAt(best.pos.x, best.pos.y, best.pos.z, dt);
     } else if (block === 'friendly' || block === 'otherSuspect') {
       ally.holdingFire = true;
+      ally.body.aimAt(best.pos.x, best.pos.y, best.pos.z, dt);
+    } else if (ally.primaryNonlethal) {
+      // ペッパーボール装備隊員は通常交戦でも非致死で制圧する
+      ally.pepperTarget = { id: best.id, pos: best.pos };
       ally.body.aimAt(best.pos.x, best.pos.y, best.pos.z, dt);
     } else {
       ally.sees = true;
@@ -951,12 +971,14 @@ export function updateAllyFootstep(ctx: SquadContext, ally: AllyUnit): void {
     ally.stepAccum -= stride;
     const heavy =
       !quiet &&
-      (ally.shielded ||
+      (ally.vestTier === 'heavy' ||
+        ally.shielded ||
         ally.rushTimer > 0 ||
-        ally.phase === 'stacking' ||
-        ally.phase === 'door_prep' ||
-        ally.phase === 'c2_plant' ||
-        ally.phase === 'c2_standoff');
+        (ally.vestTier !== 'light' &&
+          (ally.phase === 'stacking' ||
+            ally.phase === 'door_prep' ||
+            ally.phase === 'c2_plant' ||
+            ally.phase === 'c2_standoff')));
     ctx.bus.emit('swatFootstep', {
       pos: { x: ally.body.px, y: ally.body.footY, z: ally.body.pz },
       heavy,

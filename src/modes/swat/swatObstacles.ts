@@ -3,7 +3,7 @@ import { BARRICADE, BLAST_DOWN, BLAST_WARN, TRAP_CLEAR, TRAP_FAIL, TRAP_SPOT, pi
 import type { Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
-import type { BarricadeHooks } from '../Fortify';
+import type { BarricadeHooks, BarricadeInfo } from '../Fortify';
 import { findObstructingBarricade } from './swatHelpers';
 import type { SwatHunter } from './SwatHunter';
 import {
@@ -52,6 +52,27 @@ export class SwatObstacles {
 
   attachBarricades(hooks: BarricadeHooks): void {
     this.barricades = hooks;
+  }
+
+  /** 現在設置中のアーチバリケード（板張り・一方通行）を返す */
+  listArchBarricades(): BarricadeInfo[] {
+    if (!this.barricades) return [];
+    const out: BarricadeInfo[] = [];
+    for (const b of this.barricades.listBoarded()) {
+      if (b.boarded && b.hp > 0 && (b.kind === 'arch_full' || b.kind === 'arch_one_way')) out.push(b);
+    }
+    return out;
+  }
+
+  /** SWAT が蹴り/ブリーチでバリケードにダメージを与える（破壊したら true） */
+  damageBarricade(id: string, damage: number): boolean {
+    if (!this.barricades?.damageBarricade) return false;
+    if (this.barricadeRadioCd <= 0) {
+      this.barricadeRadioCd = 12;
+      const [boardJa, boardEn] = pickRadio(BARRICADE);
+      this.host.radio(this.host.firstAlive(), boardJa, boardEn);
+    }
+    return this.barricades.damageBarricade(id, damage, true);
   }
 
   /**

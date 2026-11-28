@@ -64,6 +64,10 @@ export interface MenuGearProvider {
   gear(): { flash: number; gas: number };
   /** そのドアのブービートラップを発見済み（未解除）か */
   trapKnown(doorId: string): boolean;
+  /** 進行度により CS ガスが未解放か */
+  gasLocked?: boolean;
+  /** 進行度によりオプティワンド（ミラー確認）が未解放か */
+  optiwandLocked?: boolean;
 }
 
 interface MenuItem {
@@ -178,6 +182,7 @@ export class CommandMenu {
 
   private items: MenuItem[] = [];
   private gearProvider: MenuGearProvider | null = null;
+  private featureLocks: { gasLocked?: boolean; optiwandLocked?: boolean } = {};
   private offsetPx = 0;
   private selectedIdx = 0;
   private open = false;
@@ -621,6 +626,11 @@ export class CommandMenu {
     this.gearProvider = p;
   }
 
+  /** 進行度に応じたロック状態（CSガス・オプティワンド）を設定する。 */
+  setFeatureLocks(locks: { gasLocked?: boolean; optiwandLocked?: boolean }): void {
+    this.featureLocks = { ...locks };
+  }
+
   private buildMenuItems(ctx: OrderContext): MenuItem[] {
     // 流れの順に追加し、区分で画面上の配置を決める
     type Zone = 'prep' | 'entry' | 'general';
@@ -629,11 +639,18 @@ export class CommandMenu {
       flow.push({ item: { order, label, enabled }, zone });
     };
     const gear = this.gearProvider?.gear() ?? null;
+    const gasLocked = this.featureLocks.gasLocked === true || this.gearProvider?.gasLocked === true;
+    const optiwandLocked = this.featureLocks.optiwandLocked === true || this.gearProvider?.optiwandLocked === true;
     const flashOk = gear === null || gear.flash > 0;
-    const gasOk = gear === null || gear.gas > 0;
+    const gasOk = !gasLocked && (gear === null || gear.gas > 0);
     const flashLabel = (base: string): string =>
       gear ? `${base} ${t(`[残 ${gear.flash}]`, `[${gear.flash} left]`)}` : base;
-    const gasLabel = (base: string): string => (gear ? `${base} ${t(`[残 ${gear.gas}]`, `[${gear.gas} left]`)}` : base);
+    const gasLabel = (base: string): string =>
+      gasLocked
+        ? `🔒 ${base} ${t('(SWAT Lv.2)', '(SWAT Lv.2)')}`
+        : gear
+          ? `${base} ${t(`[残 ${gear.gas}]`, `[${gear.gas} left]`)}`
+          : base;
     const moveLabel = (g: { dist: number }): string =>
       t(`指定位置へ移動・警戒 (${g.dist.toFixed(1)}m)`, `Move & Cover (${g.dist.toFixed(1)}m)`);
     const overwatchLabel = t('現在位置から照準方向をロック', 'Cover Aimed Direction');
@@ -647,7 +664,14 @@ export class CommandMenu {
       );
     } else if (ctx.door) {
       add('prep', 'stack', t('スタックアップ（扉脇で待機）', 'Stack Up (Hold by Door)'), true);
-      add('prep', 'mirror', t('ミラー確認（ドア下を隊員が確認・約4秒）', 'Mirror Under Door (Ally Wand, ~4s)'), true);
+      add(
+        'prep',
+        'mirror',
+        optiwandLocked
+          ? `🔒 ${t('ミラー確認（SWAT Lv.2 で解放）', 'Mirror Under Door (SWAT Lv.2)')}`
+          : t('ミラー確認（ドア下を隊員が確認・約4秒）', 'Mirror Under Door (Ally Wand, ~4s)'),
+        !optiwandLocked,
+      );
       add('prep', 'check', t('ドアチェック（施錠・トラップ確認）', 'Check Door (Lock & Trap)'), true);
       if (this.gearProvider?.trapKnown(ctx.door.id)) {
         add('prep', 'disarm', t('トラップ解除（確認済み・数秒）', 'Disarm Trap (Found, a few sec)'), true);

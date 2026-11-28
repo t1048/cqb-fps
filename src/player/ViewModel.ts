@@ -428,7 +428,11 @@ export class ViewModel {
     else if (style === 'teargas') this.buildGas();
     else if (style === 'taser') this.buildTaser();
     else if (style === 'pepperball') this.buildPepper();
-    else if (style === 'smg') this.buildGun(0.28, 0.16);
+    else if (style === 'smg' || style === 'suspect_smg') this.buildGun(0.28, 0.16);
+    else if (style === 'suppressed_rifle') this.buildSuppressedGun();
+    else if (style === 'shotgun') this.buildShotgun(false);
+    else if (style === 'suspect_shotgun') this.buildShotgun(true);
+    else if (style === 'suspect_ar') this.buildSuspectAr();
     else if (style === 'machine_pistol') this.buildPistol();
     else this.buildGun(0.46, 0.22);
   }
@@ -497,6 +501,53 @@ export class ViewModel {
     });
     this.add(new THREE.BoxGeometry(0.022, 0.035, 0.055), dark, 0, 0.05, -0.08);
     this.add(new THREE.BoxGeometry(0.05, 0.095, 0.055), metal, 0, -0.065, 0.012);
+    this.buildHand(0.015, -0.08, 0.026);
+  }
+
+  /** 消音カービン: 通常カービン＋銃口サプレッサー */
+  private buildSuppressedGun(): void {
+    this.buildGun(0.42, 0.22);
+    const supp = this.metal(0x252a30);
+    this.add(new THREE.CylinderGeometry(0.019, 0.019, 0.17, 14).rotateX(Math.PI / 2), supp, 0, 0, -0.52);
+  }
+
+  /** ショットガン（sawedOff=true で容疑者用ソードオフ） */
+  private buildShotgun(sawedOff: boolean): void {
+    const metal = this.metal(sawedOff ? 0x3b3f44 : 0x454e57);
+    const dark = this.metal(0x282d33);
+    const woodMat = this.wood();
+    const barrelLen = sawedOff ? 0.34 : 0.56;
+    this.add(new THREE.BoxGeometry(0.062, 0.07, 0.19), metal, 0, 0, -0.07);
+    if (sawedOff) {
+      // 二連バレル＋切り詰め木製ストック
+      this.add(new THREE.CylinderGeometry(0.014, 0.014, barrelLen, 12).rotateX(Math.PI / 2), metal, -0.015, 0.012, -0.14 - barrelLen / 2);
+      this.add(new THREE.CylinderGeometry(0.014, 0.014, barrelLen, 12).rotateX(Math.PI / 2), metal, 0.015, 0.012, -0.14 - barrelLen / 2);
+      this.add(new THREE.BoxGeometry(0.056, 0.044, 0.15), woodMat, 0, -0.018, -0.22);
+      this.add(new THREE.BoxGeometry(0.052, 0.085, 0.11).rotateX(-0.35), woodMat, 0, -0.055, 0.055);
+    } else {
+      // タクティカル・ポンプアクション（銃身＋チューブ弾倉＋フォアエンド）
+      this.add(new THREE.CylinderGeometry(0.015, 0.015, barrelLen, 12).rotateX(Math.PI / 2), metal, 0, 0.015, -0.14 - barrelLen / 2);
+      this.add(new THREE.CylinderGeometry(0.013, 0.013, barrelLen * 0.85, 12).rotateX(Math.PI / 2), dark, 0, -0.015, -0.14 - barrelLen * 0.42);
+      this.add(new THREE.BoxGeometry(0.058, 0.048, 0.18), dark, 0, -0.018, -0.34);
+      this.add(new THREE.BoxGeometry(0.058, 0.068, 0.22), dark, 0, -0.012, 0.13);
+    }
+    this.add(new THREE.BoxGeometry(0.046, 0.09, 0.052), dark, 0, -0.062, 0.01);
+    this.buildHand(0.015, -0.078, 0.024);
+  }
+
+  /** 軍用アサルトライフル（容疑者 Lv.4 用） */
+  private buildSuspectAr(): void {
+    const steel = this.metal(0x343a40);
+    const dark = this.metal(0x23272b);
+    const woodMat = this.wood();
+    this.add(new THREE.BoxGeometry(0.064, 0.074, 0.22), steel, 0, 0, -0.075);
+    this.add(new THREE.BoxGeometry(0.054, 0.056, 0.24), woodMat, 0, -0.004, -0.27);
+    this.add(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 12).rotateX(Math.PI / 2), steel, 0, 0.004, -0.46);
+    this.add(new THREE.BoxGeometry(0.058, 0.066, 0.23), woodMat, 0, -0.014, 0.135);
+    this.withMag(0, -0.028, -0.11, 0.22, () => {
+      this.add(new THREE.BoxGeometry(0.036, 0.13, 0.058).rotateX(0.22), dark, 0, -0.06, -0.012);
+    });
+    this.add(new THREE.BoxGeometry(0.046, 0.095, 0.05), woodMat, 0, -0.065, 0.012);
     this.buildHand(0.015, -0.08, 0.026);
   }
 

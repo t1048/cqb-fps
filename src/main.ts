@@ -51,7 +51,18 @@ import { HostageThreat } from './ai/HostageThreat';
 import { DoorTrapSystem, rigCount, type BlastVictim } from './world/DoorTraps';
 import { SquadSystem, scaleInventory, type Cell } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
-import { applyMissionRoster } from './rules/MissionRoster';
+import { applyMissionRoster, indoorFloorArea } from './rules/MissionRoster';
+import {
+  getAllowedMotifsForStage,
+  getEffectiveSuspectLoadout,
+  getEffectiveSwatLoadout,
+  getSuspectUnlocks,
+  getSwatUnlocks,
+  isStageUnlocked,
+  isSuspectModeUnlocked,
+  recordMissionResult,
+} from './rules/Progression';
+import { computeSuspectScore } from './rules/SuspectScore';
 import { PauseMenu } from './ui/PauseMenu';
 import type { SeedShareInfo } from './ui/shareLinks';
 import { TitleScreen } from './ui/TitleScreen';
@@ -67,7 +78,7 @@ import {
   type ResultReport,
 } from './modes/SuspectMode';
 import { SuspectAllyDirector } from './modes/SuspectAllies';
-import type { SuspectLoadout } from './modes/SuspectLoadout';
+import { suspectLoadout, type SuspectLoadout } from './modes/SuspectLoadout';
 
 type AppPhase = 'briefing' | 'negotiation' | 'playing' | 'paused' | 'ended';
 
@@ -205,6 +216,7 @@ class App {
   private siegeFatigue: number;
   private negotiationInfo: NegotiationAlertInfo = { tension: 0, trust: 0, ultimatums: 0, broken: false };
   private readonly mapId: string;
+  private readonly initialHostageCount: number;
   private phase: AppPhase = 'briefing';
 
   constructor(
@@ -232,6 +244,10 @@ class App {
     this.siegeFatigue = siegeCfg.startFatigue;
     this.squadCfg = squadCfg;
     const suspect = mode === 'suspect';
+    const swatUnlocks = getSwatUnlocks();
+    const suspectUnlocks = getSuspectUnlocks();
+    const swatLoadout = getEffectiveSwatLoadout();
+    const suspectLoadoutCfg = getEffectiveSuspectLoadout();
     map = applyMissionRoster(map);
     let swatSpawns: { x: number; y: number; z: number }[] = [];
     let swatCount = 0;
@@ -241,9 +257,14 @@ class App {
       map = setup.map;
       swatSpawns = setup.swatSpawns;
       swatCount = setup.swatCount;
-      loadout = setup.loadout;
+      loadout = suspectLoadout(indoorFloorArea(map.rooms), {
+        primaryWeapon: suspectLoadoutCfg.primaryWeapon,
+        vest: suspectLoadoutCfg.vest,
+        allyPolicy: suspectLoadoutCfg.allyPolicy,
+      });
     }
     this.mapId = map.id;
+    this.initialHostageCount = map.entities.filter((e) => e.type === 'civilian').length;
     const initialSettings = getSettings();
     const shared = acquireSharedRenderer(container);
     this.renderer = shared.renderer;
@@ -279,8 +300,12 @@ class App {
     this.player = new PlayerController(this.camera, this.input, this.world.colliders, playerCfg, this.bus, map);
     // 負傷モデル（被弾で速度低下・照準乱れ）は SWAT モードのみ。頭部倍率と防弾チョッキの式は両モード共通
     this.player.woundsEnabled = !suspect;
-    // SWAT 隊員は標準装備として防弾チョッキを着用。容疑者は交渉（人質交換）で入手する
-    if (!suspect) this.player.equipArmor(playerCfg.armor.swatIssue, 'swatIssue');
+    // ロードアウトに応じて防弾ベストを着用
+    if (!suspect) {
+      this.player.equipVest('swat', swatLoadout.vest, true);
+    } else if (suspectLoadoutCfg.vest !== 'none') {
+      this.player.equipVest('suspect', suspectLoadoutCfg.vest, true);
+    }
     this.audio = acquireSharedAudio();
     this.audio.stopAll();
     this.audio.setMasterVolume(initialSettings.masterVolume);
@@ -301,7 +326,14 @@ class App {
       suspect ? 'suspect' : 'swat',
     );
     this.scene.add(this.doors.root);
-    this.weapons = new WeaponSystem(this.player, this.input, this.world.colliders, suspect ? suspectWeapons(weaponDefs, loadout?.reserveMagazines) : swatWeapons(weaponDefs), this.bus);
+    this.weapons = new WeaponSystem(
+      this.player,
+      this.input,
+      this.world.colliders,
+      suspect ? suspectWeapons(weaponDefs, loadout?.reserveMagazines) : swatWeapons(weaponDefs),
+      this.bus,
+      suspect ? suspectLoadoutCfg.primaryWeapon : swatLoadout.primaryWeapon,
+    );
     this.roe = new RoE(roeCfg, this.bus); // EntityManager より先に entityHit を購読する
     this.flashOverlay = new FlashOverlay(document.body);
     this.tearGas = new TearGas(this.world.colliders, this.bus, map.ceilingHeight, map.rooms);
@@ -353,14 +385,31 @@ class App {
       { range: flashDef?.range ?? 8, blindSec: flashDef?.throwable?.blindMaxSec ?? 2 },
       map.rooms,
       playerCfg.arrest,
-      { flashbang: this.flashbang, tearGas: this.tearGas, intel: this.scoutIntel, traps: this.doorTraps },
+      {
+        flashbang: this.flashbang,
+        tearGas: this.tearGas,
+        intel: this.scoutIntel,
+        traps: this.doorTraps,
+        memberLoadouts: swatLoadout.squad,
+        allowStealthEntry: swatUnlocks.stealthEntry,
+        allowShield: swatUnlocks.shieldMember,
+        allowGas: swatUnlocks.teargas,
+      },
     );
+    if (!suspect) {
+      this.squad.menu.setFeatureLocks({
+        gasLocked: !swatUnlocks.teargas,
+        optiwandLocked: !swatUnlocks.optiwand,
+      });
+    }
     this.entities.attachSquad(this.squad, squadCfg.presenceBonusPerAlly);
     {
       // 隊員が増えた分、プレイヤーの携行数も比例して増やす（4 人編成が基準）
       const pf = scaleInventory({ flashbang: this.flashbang.remaining, gas: 0 }, map.allies.length).flashbang;
       this.flashbang.setCount(pf);
-      this.flashbang.setGasCount(scaleInventory({ flashbang: 0, gas: this.flashbang.remainingGas }, map.allies.length).gas);
+      this.flashbang.setGasCount(
+        swatUnlocks.teargas ? scaleInventory({ flashbang: 0, gas: this.flashbang.remainingGas }, map.allies.length).gas : 0,
+      );
     }
     this.scene.add(this.squad.root);
     this.viewModel = new ViewModel(this.textures);
@@ -381,21 +430,23 @@ class App {
       this.scoutIntel.onContact = (c) => {
         if (c.kind === 'suspect') this.recordEnemySighting(c.id, c.x, c.y, c.z);
       };
-      this.optiwand = new Optiwand({
-        player: this.player,
-        input: this.input,
-        colliders: this.world.colliders,
-        cfg: playerCfg.optiwand,
-        doorThickness: doorCfg.thickness,
-        doors: this.doors,
-        entities: this.entities,
-        rooms: map.rooms,
-        intel: this.scoutIntel,
-        bus: this.bus,
-        subtitle: this.subtitle,
-        weapons: this.weapons,
-        host: document.body,
-      });
+      if (swatUnlocks.optiwand) {
+        this.optiwand = new Optiwand({
+          player: this.player,
+          input: this.input,
+          colliders: this.world.colliders,
+          cfg: playerCfg.optiwand,
+          doorThickness: doorCfg.thickness,
+          doors: this.doors,
+          entities: this.entities,
+          rooms: map.rooms,
+          intel: this.scoutIntel,
+          bus: this.bus,
+          subtitle: this.subtitle,
+          weapons: this.weapons,
+          host: document.body,
+        });
+      }
     }
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {
       const reply =
@@ -517,6 +568,7 @@ class App {
         team: this.swatTeam,
         colliders: this.world.colliders,
         showGauge: (label, ratio) => sm.showGauge(label, ratio),
+        allyPolicy: suspectLoadoutCfg.allyPolicy,
       });
       this.hostageGrab = new HostageGrab(
         this.player,
@@ -560,6 +612,8 @@ class App {
         isPrep: () => sm.preparing,
         showGauge: (label, ratio) => sm.showGauge(label, ratio),
         loadout: loadout ?? undefined,
+        unlocks: suspectUnlocks.fortify,
+        rooms: map.rooms,
         onCivilianKilled: (c) => sm.addEntry(t(`民間人殺害・トラップ (${c.id})`, `Civilian Killed by Trap (${c.id})`), -400),
       });
       sm.attachFortify(this.fortify);
@@ -596,6 +650,7 @@ class App {
           siegeHour: () => this.siegeCfg.startHour,
           fatigueTier: () => fatigueTier(this.siegeFatigue, this.siegeCfg.player.tiers),
           markScouted: () => team.setScouted(true),
+          unlockedCards: getSuspectUnlocks().negotiationCards,
         }),
         () => this.startMission(),
       );
@@ -622,6 +677,7 @@ class App {
           supplyFatigue: () => this.siegeCfg.supplyFatigue,
           siegeHour: () => this.siegeCfg.startHour,
           fatigueTier: () => fatigueTier(this.siegeFatigue, this.siegeCfg.player.tiers),
+          unlockedCards: getSwatUnlocks().negotiationCards,
           roomName: (s) => {
             const raw =
               map.rooms.find(
@@ -670,6 +726,13 @@ class App {
       const th = this.hostageThreat;
       this.hud.alertProvider = () => ({ value: al.value, tier: al.tier, threat: th?.isActive === true });
     }
+    if (!suspect) {
+      this.hud.setFeatureLocks({
+        stealthLocked: !swatUnlocks.stealthEntry,
+        gasLocked: !swatUnlocks.teargas,
+        optiwandLocked: !swatUnlocks.optiwand,
+      });
+    }
     this.minimap = new Minimap(
       document.body,
       map,
@@ -694,6 +757,9 @@ class App {
       onRetry: () => onRetry(),
       onBackToBriefing: () => onRetry(),
       onBackToTitle,
+      onProgressionChange: () => {
+        if (this.phase === 'briefing') this.relocalizeBriefing();
+      },
       seedInfo: seedShareInfo,
     });
 
@@ -705,6 +771,7 @@ class App {
         onBackToTitle,
         onOpenSettings: () => this.pauseMenu.open('settings'),
         seedShareInfo,
+        onLoadoutChange: () => this.applyBriefingLoadout(),
       });
     this.briefingScreen = this.makeBriefing();
     this.briefingScreen.show();
@@ -719,6 +786,7 @@ class App {
       onSelectStage,
       seedShareInfo,
       onBackToTitle,
+      mode,
     });
 
     this.unsubSettings = subscribeSettings((s, prev) => {
@@ -780,6 +848,19 @@ class App {
   }
 
   /** ブリーフィング → 突入前交渉 */
+  /** ブリーフィング中のロードアウト変更を即座にプレイヤー武器・ベストへ反映する */
+  private applyBriefingLoadout(): void {
+    if (this.mode === 'suspect') {
+      const lo = getEffectiveSuspectLoadout();
+      this.weapons.selectWeapon(lo.primaryWeapon);
+      this.player.equipVest('suspect', lo.vest, true);
+    } else {
+      const lo = getEffectiveSwatLoadout();
+      this.weapons.selectWeapon(lo.primaryWeapon);
+      this.player.equipVest('swat', lo.vest, true);
+    }
+  }
+
   /** ブリーフィング中の言語切替: ブリーフィングと（まだ始まっていない）交渉画面だけを作り直す */
   private relocalizeBriefing(): void {
     this.briefingScreen.dispose();
@@ -928,7 +1009,48 @@ class App {
     this.squadTour?.finish();
     this.squadTour = null;
     if (document.pointerLockElement) document.exitPointerLock();
-    this.resultScreen.show(failed, report);
+
+    let finalReport = report;
+    let rankForXp: string = failed ? 'D' : this.roe.board.rank;
+    let scoreForXp: number = this.roe.board.total;
+
+    if (this.mode === 'suspect' && report && this.swatTeam) {
+      let aliveCivs = 0;
+      let deadCivs = 0;
+      for (const c of this.entities.civilians.values()) {
+        if (c.alive) aliveCivs++;
+        else deadCivs++;
+      }
+      const suspectScore = computeSuspectScore({
+        victory: !failed,
+        swatNeutralized: this.swatTeam.kills,
+        totalSwat: this.swatTeam.total,
+        survivalSec: this.roe.elapsed,
+        hostagesUnharmed: aliveCivs,
+        totalHostages: this.initialHostageCount,
+        hostagesKilled: deadCivs,
+        trapHits: this.swatTeam.trapKills,
+      });
+      rankForXp = suspectScore.rank;
+      scoreForXp = suspectScore.total;
+      finalReport = {
+        ...report,
+        scoreText: t(
+          `総合スコア ${suspectScore.total} / ${suspectScore.maxPossibleScore}`,
+          `Total Score ${suspectScore.total} / ${suspectScore.maxPossibleScore}`,
+        ),
+        rankText: failed ? `FAILED (${suspectScore.rank})` : `RANK ${suspectScore.rank}`,
+      };
+    }
+
+    const reward = recordMissionResult({
+      mode: this.mode,
+      cleared: !failed,
+      rank: rankForXp,
+      score: scoreForXp,
+      stageId: this.mapId,
+    });
+    this.resultScreen.show(failed, finalReport, reward);
   }
 
   private update(dt: number): void {
@@ -1437,6 +1559,10 @@ function closeTitle(): void {
 
 function start(mapId?: string, seed?: number, mode?: GameMode): void {
   if (mode !== undefined) currentMode = mode;
+  // 通常起動（シード未指定）時は未解放モードを SWAT へ丸める
+  if (seed === undefined && currentMode === 'suspect' && !isSuspectModeUnlocked()) {
+    currentMode = 'swat';
+  }
   const runMode = currentMode;
   app?.destroy();
   app = null;
@@ -1451,7 +1577,10 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
       if (!firstStage) throw new Error('ステージ一覧が空です');
       const requestedId = mapId !== undefined ? mapId : (currentMapId ?? firstStage.id);
       // 存在しない ID（廃止した固定ステージの URL など）は先頭ステージにフォールバック
-      const stage = loadedStages.find((s) => s.id === requestedId) ?? firstStage;
+      let stage = loadedStages.find((s) => s.id === requestedId) ?? firstStage;
+      if (seed === undefined && !isStageUnlocked(runMode, stage.id)) {
+        stage = firstStage;
+      }
       const targetId = stage.id;
       if (targetId !== requestedId) console.warn(`[data] ステージ "${requestedId}" は存在しないため "${stage.id}" を使用します`);
       // シード: 明示シード > リトライ（同ステージ・mapId 省略）は前回シード > 新規シード
@@ -1461,7 +1590,8 @@ function start(mapId?: string, seed?: number, mode?: GameMode): void {
           : mapId === undefined && targetId === currentMapId && currentSeed !== undefined
             ? currentSeed
             : randomSeed();
-      const data = await DataLoader.loadAll(stage, useSeed);
+      const allowedMotifs = seed !== undefined ? undefined : getAllowedMotifsForStage(runMode, targetId);
+      const data = await DataLoader.loadAll(stage, useSeed, allowedMotifs);
       if (token !== startToken) return; // 再 start された場合は破棄
       currentMapId = targetId;
       currentSeed = useSeed;

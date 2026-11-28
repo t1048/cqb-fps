@@ -811,7 +811,8 @@ export function updateDoorPrepPhase(ctx: SquadContext, ally: AllyUnit, dt: numbe
     body.aimAt(stackLook.x, stackLook.y, stackLook.z, dt, Math.PI * 2 * dt);
   }
 
-  const useStealth = ally.order === 'pieDoor' || (ally.order === 'clear' && ctx.entryMode === 'stealth');
+  const useStealth =
+    ally.order === 'pieDoor' || (ally.order === 'clear' && ctx.stealthEntryAllowed && ctx.entryMode === 'stealth');
 
   if (door) {
     if (ally.order === 'pieDoor' && door.locked) {

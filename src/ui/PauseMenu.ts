@@ -1,4 +1,5 @@
 import { getSettings, resetSettings, subscribeSettings, updateSettings, type GameSettings, type Locale } from '../core/Settings';
+import { isUnlockAll, resetProgression, setUnlockAll, subscribeProgression } from '../rules/Progression';
 import { t } from '../core/i18n';
 import { buildSeedShareUrl, copyToClipboard, KOFI_URL, type SeedShareInfo } from './shareLinks';
 
@@ -11,6 +12,8 @@ export interface PauseMenuOptions {
   /** タイトル画面へ戻る（指定時のみボタンを表示） */
   onBackToTitle?: () => void;
   onCloseSettings?: () => void;
+  /** サンドボックス切替や進行度リセット時に呼ばれる */
+  onProgressionChange?: () => void;
   seedInfo?: SeedShareInfo;
 }
 
@@ -254,7 +257,11 @@ export class PauseMenu {
   private mode: PauseMenuMode = 'pause';
   private visible = false;
   private unsubSettings: (() => void) | null = null;
+  private unsubProgression: (() => void) | null = null;
   private copyTimer: ReturnType<typeof setTimeout> | null = null;
+  private resetConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+  private resetConfirmArmed = false;
+  private resetDoneFlash = false;
 
   private readonly titleEl: HTMLHeadingElement;
   private readonly subEl: HTMLSpanElement;
@@ -284,6 +291,12 @@ export class PauseMenu {
   private readonly langLabelEl: HTMLSpanElement;
   private readonly langJaBtn: HTMLButtonElement;
   private readonly langEnBtn: HTMLButtonElement;
+
+  private readonly progHeadingEl: HTMLSpanElement;
+  private readonly unlockAllLabelEl: HTMLSpanElement;
+  private readonly unlockAllBtn: HTMLButtonElement;
+  private readonly resetProgLabelEl: HTMLSpanElement;
+  private readonly resetProgBtn: HTMLButtonElement;
 
   private readonly footEl: HTMLDivElement;
   private readonly copySeedBtn: HTMLButtonElement | null = null;
@@ -458,6 +471,61 @@ export class PauseMenu {
 
     card.appendChild(sec);
 
+    // Progression / Sandbox section
+    const progSec = document.createElement('div');
+    progSec.className = 'cqb-pause-section';
+    const progHead = document.createElement('div');
+    progHead.className = 'cqb-pause-section-head';
+    this.progHeadingEl = document.createElement('span');
+    this.progHeadingEl.className = 'cqb-pause-section-title';
+    progHead.appendChild(this.progHeadingEl);
+    progSec.appendChild(progHead);
+
+    const unlockRow = this.makeRow();
+    this.unlockAllLabelEl = unlockRow.label;
+    this.unlockAllBtn = document.createElement('button');
+    this.unlockAllBtn.type = 'button';
+    this.unlockAllBtn.className = 'cqb-toggle-btn';
+    this.unlockAllBtn.addEventListener('click', () => {
+      setUnlockAll(!isUnlockAll());
+      this.opts.onProgressionChange?.();
+    });
+    unlockRow.ctrl.appendChild(this.unlockAllBtn);
+    progSec.appendChild(unlockRow.row);
+
+    const resetProgRow = this.makeRow();
+    this.resetProgLabelEl = resetProgRow.label;
+    this.resetProgBtn = document.createElement('button');
+    this.resetProgBtn.type = 'button';
+    this.resetProgBtn.className = 'cqb-toggle-btn';
+    this.resetProgBtn.addEventListener('click', () => {
+      if (!this.resetConfirmArmed) {
+        this.resetConfirmArmed = true;
+        this.resetDoneFlash = false;
+        this.syncProgressionUI();
+        if (this.resetConfirmTimer) clearTimeout(this.resetConfirmTimer);
+        this.resetConfirmTimer = setTimeout(() => {
+          this.resetConfirmArmed = false;
+          this.syncProgressionUI();
+        }, 4000);
+        return;
+      }
+      if (this.resetConfirmTimer) clearTimeout(this.resetConfirmTimer);
+      this.resetConfirmArmed = false;
+      this.resetDoneFlash = true;
+      resetProgression();
+      this.opts.onProgressionChange?.();
+      this.syncProgressionUI();
+      this.resetConfirmTimer = setTimeout(() => {
+        this.resetDoneFlash = false;
+        this.syncProgressionUI();
+      }, 2200);
+    });
+    resetProgRow.ctrl.appendChild(this.resetProgBtn);
+    progSec.appendChild(resetProgRow.row);
+
+    card.appendChild(progSec);
+
     // Settings-only close button
     this.settingsCloseEl = document.createElement('div');
     this.settingsCloseEl.className = 'cqb-pause-actions';
@@ -502,6 +570,7 @@ export class PauseMenu {
     container.appendChild(this.root);
 
     this.unsubSettings = subscribeSettings((s) => this.syncUI(s));
+    this.unsubProgression = subscribeProgression(() => this.syncProgressionUI());
     this.syncUI(getSettings());
   }
 
@@ -575,6 +644,11 @@ export class PauseMenu {
     this.shadowLabelEl.textContent = t('リアルタイム影', 'Shadows');
     this.langLabelEl.textContent = t('言語 / Language', 'Language');
 
+    this.progHeadingEl.textContent = t('進行度 / サンドボックス', 'Progression / Sandbox');
+    this.unlockAllLabelEl.textContent = t('全要素を解放 (サンドボックス)', 'Unlock All (Sandbox)');
+    this.resetProgLabelEl.textContent = t('進行度をリセット', 'Reset Progression');
+    this.syncProgressionUI();
+
     if (this.copySeedBtn && this.opts.seedInfo) {
       this.copySeedBtn.textContent = t(
         `📋 シードをコピー (#${this.opts.seedInfo.seed})`,
@@ -610,10 +684,29 @@ export class PauseMenu {
     this.langEnBtn.className = s.language === 'en' ? 'active' : '';
   }
 
+  private syncProgressionUI(): void {
+    const unlocked = isUnlockAll();
+    this.unlockAllBtn.textContent = unlocked ? 'ON' : 'OFF';
+    this.unlockAllBtn.className = `cqb-toggle-btn${unlocked ? ' active' : ''}`;
+    if (this.resetConfirmArmed) {
+      this.resetProgBtn.textContent = t('本当にリセット？ (もう一度押す)', 'Confirm? (Click Again)');
+      this.resetProgBtn.className = 'cqb-toggle-btn warn';
+    } else if (this.resetDoneFlash) {
+      this.resetProgBtn.textContent = t('✓ リセットしました', '✓ Reset Done');
+      this.resetProgBtn.className = 'cqb-toggle-btn active';
+    } else {
+      this.resetProgBtn.textContent = t('リセット', 'Reset');
+      this.resetProgBtn.className = 'cqb-toggle-btn';
+    }
+  }
+
   dispose(): void {
     if (this.copyTimer) clearTimeout(this.copyTimer);
+    if (this.resetConfirmTimer) clearTimeout(this.resetConfirmTimer);
     this.unsubSettings?.();
     this.unsubSettings = null;
+    this.unsubProgression?.();
+    this.unsubProgression = null;
     this.root.remove();
   }
 }

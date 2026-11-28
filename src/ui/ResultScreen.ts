@@ -1,8 +1,14 @@
 import type { StageEntry } from '../core/types';
 import type { RoE } from '../rules/RoE';
 import type { ScoreEntry } from '../rules/ScoreBoard';
-import type { ResultReport } from '../modes/SuspectMode';
-import { t, tRoeLabel, tStageDesc, tStageName } from '../core/i18n';
+import type { GameMode, ResultReport } from '../modes/SuspectMode';
+import {
+  getStageUnlockLevel,
+  isStageUnlocked,
+  xpProgressInLevel,
+  type ProgressionReward,
+} from '../rules/Progression';
+import { isEn, t, tRoeLabel, tStageDesc, tStageName } from '../core/i18n';
 import { buildSeedShareUrl, copyToClipboard, KOFI_URL, type SeedShareInfo } from './shareLinks';
 
 const ROW_STYLE = 'display:flex;justify-content:space-between;gap:24px;padding:2px 0';
@@ -64,6 +70,8 @@ export interface ResultScreenOptions {
   seedShareInfo?: SeedShareInfo;
   /** タイトル画面へ戻る（指定時はリトライの下にボタンを表示） */
   onBackToTitle?: () => void;
+  /** 現在のゲームモード（ステージ解放判定に使用） */
+  mode?: GameMode;
 }
 
 /** ミッション終了時のリザルト画面。リトライボタン / R / Enter で onRetry、または別ステージへ切替。 */
@@ -80,8 +88,8 @@ export class ResultScreen {
     private readonly options?: ResultScreenOptions,
   ) {}
 
-  /** report 指定時（容疑者モード）は RoE スコアの代わりにその内容を表示する。 */
-  show(failed = false, report?: ResultReport): void {
+  /** report 指定時（容疑者モード）は RoE スコアの代わりにその内容を表示する。reward 指定時は XP・レベルアップ・新規解放を表示。 */
+  show(failed = false, report?: ResultReport, reward?: ProgressionReward): void {
     if (this.el || this.disposed) return;
     const b = this.roe.board;
     const el = document.createElement('div');
@@ -127,6 +135,10 @@ export class ResultScreen {
     rank.style.cssText = `font:bold 30px sans-serif;color:${report ? report.rankColor : failed ? '#ff6b6b' : '#ffd24d'}`;
     summary.append(score, rank);
     panel.appendChild(summary);
+
+    if (reward) {
+      panel.appendChild(this.buildProgressionBox(reward));
+    }
 
     const stats: [string, string][] = report?.stats ?? [
       [t('クリアタイム', 'Clear Time'), fmtTime(this.roe.elapsed)],
@@ -253,20 +265,31 @@ export class ResultScreen {
       const stageRow = document.createElement('div');
       stageRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px';
       const currentId = this.options?.currentStageId;
+      const mode = this.options?.mode ?? 'swat';
       for (const stage of stages) {
         const active = stage.id === currentId;
+        const locked = !isStageUnlocked(mode, stage.id);
+        const reqLv = getStageUnlockLevel(stage.id);
         const sBtn = document.createElement('button');
         sBtn.type = 'button';
         const sName = tStageName(stage.id, stage.name);
-        sBtn.textContent = active ? `${sName} ${t('(現在)', '(Current)')}` : sName;
-        sBtn.title = tStageDesc(stage.id, stage.description ?? stage.name);
+        sBtn.textContent = locked
+          ? `🔒 ${sName} (Lv.${reqLv})`
+          : active
+            ? `${sName} ${t('(現在)', '(Current)')}`
+            : sName;
+        sBtn.title = locked
+          ? t(`${mode === 'suspect' ? '容疑者' : 'SWAT'} Lv.${reqLv} で解放`, `Unlocks at ${mode === 'suspect' ? 'Suspect' : 'SWAT'} Lv.${reqLv}`)
+          : tStageDesc(stage.id, stage.description ?? stage.name);
         sBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
         sBtn.dataset.stageId = stage.id;
-        sBtn.disabled = active;
-        sBtn.style.cssText = active
-          ? 'flex:1 1 auto;padding:7px 10px;font:bold 13px sans-serif;color:#0a121a;background:#56c8d8;border:1px solid #56c8d8;border-radius:4px;cursor:default'
-          : 'flex:1 1 auto;padding:7px 10px;font:13px sans-serif;color:#dce6f2;background:#1d2733;border:1px solid #445870;border-radius:4px;cursor:pointer';
-        if (!active) {
+        sBtn.disabled = active || locked;
+        sBtn.style.cssText = locked
+          ? 'flex:1 1 auto;padding:7px 10px;font:13px sans-serif;color:#78889a;background:#141b24;border:1px dashed #324255;border-radius:4px;cursor:default;opacity:.65'
+          : active
+            ? 'flex:1 1 auto;padding:7px 10px;font:bold 13px sans-serif;color:#0a121a;background:#56c8d8;border:1px solid #56c8d8;border-radius:4px;cursor:default'
+            : 'flex:1 1 auto;padding:7px 10px;font:13px sans-serif;color:#dce6f2;background:#1d2733;border:1px solid #445870;border-radius:4px;cursor:pointer';
+        if (!active && !locked) {
           const onClick = (): void => {
             if (!this.disposed) onSelectStage(stage.id);
           };
@@ -285,6 +308,85 @@ export class ResultScreen {
     this.el = el;
     window.addEventListener('keydown', this.onKey);
     btn.focus();
+  }
+
+  private buildProgressionBox(reward: ProgressionReward): HTMLElement {
+    const box = document.createElement('div');
+    const accent = reward.mode === 'suspect' ? '#ff7b7b' : '#56c8d8';
+    box.style.cssText = `margin-bottom:14px;padding:12px 14px;background:#101924;border:1px solid ${reward.leveledUp ? '#ffd24d' : '#2d4159'};border-radius:7px`;
+
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px';
+    const lvWrap = document.createElement('div');
+    lvWrap.style.cssText = 'display:flex;align-items:center;gap:8px';
+    const modeTag = document.createElement('span');
+    modeTag.textContent = reward.mode === 'suspect' ? 'SUSPECT' : 'SWAT';
+    modeTag.style.cssText = `font:bold 11px monospace;letter-spacing:.1em;padding:2px 6px;border-radius:3px;color:#0a121a;background:${accent}`;
+    const lvText = document.createElement('span');
+    lvText.textContent = reward.leveledUp ? `Lv.${reward.prevLevel} → Lv.${reward.newLevel}` : `Lv.${reward.newLevel}`;
+    lvText.style.cssText = 'font:bold 16px sans-serif;color:#f4f8fc';
+    lvWrap.append(modeTag, lvText);
+    if (reward.leveledUp) {
+      const badge = document.createElement('span');
+      badge.textContent = '★ LEVEL UP!';
+      badge.style.cssText =
+        'font:bold 12px monospace;padding:2px 8px;border-radius:999px;background:#ffd24d;color:#0a121a;letter-spacing:.06em';
+      lvWrap.appendChild(badge);
+    }
+
+    const xpGain = document.createElement('span');
+    xpGain.textContent = `+${reward.xpGained} XP`;
+    xpGain.style.cssText = 'font:bold 15px monospace;color:#8ff0a8';
+    head.append(lvWrap, xpGain);
+    box.appendChild(head);
+
+    const prevProg = xpProgressInLevel(reward.prevXp);
+    const newProg = xpProgressInLevel(reward.newXp);
+    const startPct = reward.leveledUp ? 0 : Math.round(prevProg.ratio * 100);
+    const endPct = Math.round(newProg.ratio * 100);
+
+    const track = document.createElement('div');
+    track.style.cssText = 'height:8px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden';
+    const fill = document.createElement('div');
+    fill.style.cssText = `height:100%;width:${startPct}%;background:${reward.leveledUp ? '#ffd24d' : accent};border-radius:4px;transition:width .7s ease-out`;
+    track.appendChild(fill);
+    box.appendChild(track);
+    requestAnimationFrame(() => {
+      if (!this.disposed) fill.style.width = `${endPct}%`;
+    });
+
+    const sub = document.createElement('div');
+    sub.style.cssText = 'margin-top:4px;font:12px monospace;color:#9bb2c9;display:flex;justify-content:space-between';
+    sub.textContent = newProg.isMax
+      ? t(`総 XP: ${reward.newXp} — MAX LEVEL`, `Total XP: ${reward.newXp} — MAX LEVEL`)
+      : t(
+          `次のレベルまで ${newProg.current} / ${newProg.required} XP (総 ${reward.newXp})`,
+          `Next level: ${newProg.current} / ${newProg.required} XP (Total ${reward.newXp})`,
+        );
+    box.appendChild(sub);
+
+    if (reward.unlockedItems.length > 0) {
+      const unlockBox = document.createElement('div');
+      unlockBox.style.cssText =
+        'margin-top:10px;padding:8px 10px;background:rgba(255,210,77,.1);border:1px solid rgba(255,210,77,.45);border-radius:5px';
+      const uTitle = document.createElement('div');
+      uTitle.textContent = t('🔓 新規解放アイテム', '🔓 NEW UNLOCKS');
+      uTitle.style.cssText = 'font:bold 12px sans-serif;color:#ffd24d;margin-bottom:5px;letter-spacing:.05em';
+      unlockBox.appendChild(uTitle);
+      const ul = document.createElement('div');
+      ul.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px';
+      for (const item of reward.unlockedItems) {
+        const chip = document.createElement('span');
+        chip.textContent = `✦ ${isEn() ? item.labelEn : item.labelJa}`;
+        chip.style.cssText =
+          'font:bold 12px sans-serif;padding:3px 8px;border-radius:4px;background:rgba(255,210,77,.18);color:#fff2bd;border:1px solid rgba(255,210,77,.4)';
+        ul.appendChild(chip);
+      }
+      unlockBox.appendChild(ul);
+      box.appendChild(unlockBox);
+    }
+
+    return box;
   }
 
   private retry = (): void => {

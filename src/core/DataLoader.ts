@@ -3,6 +3,8 @@ import type {
   MedkitConfig,
   ArmorKind,
   ArmorWeight,
+  VestSpec,
+  VestTier,
   AllyWoundsConfig,
   DoorCheckConfig,
   DoorTrapConfig,
@@ -1409,6 +1411,12 @@ export function validateWeapons(raw: unknown, source = 'weapons'): WeaponDef[] {
         afterglowOpacity: r.num(t, 'afterglowOpacity', tp, 0, 1),
       };
     }
+    const moveSpeedMul = r.optNum(e, 'moveSpeedMul', p, 0.3, 2);
+    const pellets = r.optNum(e, 'pellets', p, 1, 32);
+    if (pellets !== undefined && !Number.isInteger(pellets)) r.fail(`${p}.pellets`, '整数が必要です');
+    const suppressed = e.suppressed !== undefined ? r.bool(e, 'suppressed', p) : undefined;
+    const unlockLevel = r.optNum(e, 'unlockLevel', p, 1, 5);
+    if (unlockLevel !== undefined && !Number.isInteger(unlockLevel)) r.fail(`${p}.unlockLevel`, '整数が必要です');
     return {
       id: r.str(e, 'id', p),
       name: r.str(e, 'name', p),
@@ -1431,6 +1439,10 @@ export function validateWeapons(raw: unknown, source = 'weapons'): WeaponDef[] {
       noiseRadius: r.num(e, 'noiseRadius', p, 0),
       ...(e.faction !== undefined ? { faction: r.oneOf(e, 'faction', p, ['swat', 'suspect'] as const) } : {}),
       ...(e.reserveMagazines !== undefined ? { reserveMagazines: r.num(e, 'reserveMagazines', p, 0, 99) } : {}),
+      ...(moveSpeedMul !== undefined ? { moveSpeedMul } : {}),
+      ...(pellets !== undefined ? { pellets } : {}),
+      ...(suppressed !== undefined ? { suppressed } : {}),
+      ...(unlockLevel !== undefined ? { unlockLevel } : {}),
     };
   });
   r.uniqueIds(weapons, 'weapons');
@@ -1749,6 +1761,19 @@ export const DEFAULT_ARMOR: ArmorConfig = {
     swatIssue: { speedMul: 0.95, footstepRadiusMul: 1.0, leanSpeedMul: 1.0 },
     suspectVest: { speedMul: 0.88, footstepRadiusMul: 1.25, leanSpeedMul: 0.8 },
   },
+  vests: {
+    swat: {
+      light: { durability: 30, absorb: 0.45, minAbsorb: 0.25, speedMul: 1.03, footstepRadiusMul: 0.9, leanSpeedMul: 1.08 },
+      standard: { durability: 50, absorb: 0.6, minAbsorb: 0.35, speedMul: 0.95, footstepRadiusMul: 1.0, leanSpeedMul: 1.0 },
+      heavy: { durability: 90, absorb: 0.72, minAbsorb: 0.45, speedMul: 0.84, footstepRadiusMul: 1.2, leanSpeedMul: 0.82 },
+    },
+    suspect: {
+      none: { durability: 0, absorb: 0, minAbsorb: 0, speedMul: 1.0, footstepRadiusMul: 1.0, leanSpeedMul: 1.0 },
+      light: { durability: 35, absorb: 0.45, minAbsorb: 0.25, speedMul: 0.96, footstepRadiusMul: 1.05, leanSpeedMul: 0.96 },
+      standard: { durability: 80, absorb: 0.6, minAbsorb: 0.35, speedMul: 0.88, footstepRadiusMul: 1.25, leanSpeedMul: 0.8 },
+      heavy: { durability: 115, absorb: 0.72, minAbsorb: 0.45, speedMul: 0.8, footstepRadiusMul: 1.35, leanSpeedMul: 0.72 },
+    },
+  },
 };
 
 function readArmorWeight(r: Reader, parent: Record<string, unknown>, key: ArmorKind): ArmorWeight {
@@ -1757,20 +1782,58 @@ function readArmorWeight(r: Reader, parent: Record<string, unknown>, key: ArmorK
   const path = `armor.weight.${key}`;
   const w = r.obj(parent[key], path);
   return {
-    speedMul: r.numOr(w, 'speedMul', path, d.speedMul, 0.3, 1),
-    footstepRadiusMul: r.numOr(w, 'footstepRadiusMul', path, d.footstepRadiusMul, 1, 3),
-    leanSpeedMul: r.numOr(w, 'leanSpeedMul', path, d.leanSpeedMul, 0.2, 1),
+    speedMul: r.numOr(w, 'speedMul', path, d.speedMul, 0.3, 1.3),
+    footstepRadiusMul: r.numOr(w, 'footstepRadiusMul', path, d.footstepRadiusMul, 0.5, 3),
+    leanSpeedMul: r.numOr(w, 'leanSpeedMul', path, d.leanSpeedMul, 0.2, 1.5),
+  };
+}
+
+function readVestSpec(r: Reader, parent: Record<string, unknown>, key: VestTier, pathPrefix: string, d: VestSpec): VestSpec {
+  if (parent[key] === undefined) return { ...d };
+  const path = `${pathPrefix}.${key}`;
+  const v = r.obj(parent[key], path);
+  const absorb = r.numOr(v, 'absorb', path, d.absorb, 0, 1);
+  const minAbsorb = r.numOr(v, 'minAbsorb', path, d.minAbsorb, 0, 1);
+  if (minAbsorb > absorb) r.fail(`${path}.minAbsorb`, 'absorb 以下である必要があります');
+  return {
+    durability: r.numOr(v, 'durability', path, d.durability, 0, 500),
+    absorb,
+    minAbsorb,
+    speedMul: r.numOr(v, 'speedMul', path, d.speedMul, 0.3, 1.3),
+    footstepRadiusMul: r.numOr(v, 'footstepRadiusMul', path, d.footstepRadiusMul, 0.5, 3),
+    leanSpeedMul: r.numOr(v, 'leanSpeedMul', path, d.leanSpeedMul, 0.2, 1.5),
+  };
+}
+
+function cloneDefaultVests(): ArmorConfig['vests'] {
+  return {
+    swat: {
+      light: { ...DEFAULT_ARMOR.vests.swat.light },
+      standard: { ...DEFAULT_ARMOR.vests.swat.standard },
+      heavy: { ...DEFAULT_ARMOR.vests.swat.heavy },
+    },
+    suspect: {
+      none: { ...DEFAULT_ARMOR.vests.suspect.none },
+      light: { ...DEFAULT_ARMOR.vests.suspect.light },
+      standard: { ...DEFAULT_ARMOR.vests.suspect.standard },
+      heavy: { ...DEFAULT_ARMOR.vests.suspect.heavy },
+    },
   };
 }
 
 function readArmor(r: Reader, o: Record<string, unknown>): ArmorConfig {
-  if (o.armor === undefined) return { ...DEFAULT_ARMOR, weight: { ...DEFAULT_ARMOR.weight } };
+  if (o.armor === undefined) {
+    return { ...DEFAULT_ARMOR, weight: { ...DEFAULT_ARMOR.weight }, vests: cloneDefaultVests() };
+  }
   const a = r.obj(o.armor, 'armor');
   const d = DEFAULT_ARMOR;
   const absorb = r.numOr(a, 'absorb', 'armor', d.absorb, 0, 1);
   const minAbsorb = r.numOr(a, 'minAbsorb', 'armor', d.minAbsorb, 0, 1);
   if (minAbsorb > absorb) r.fail('armor.minAbsorb', 'absorb 以下である必要があります');
   const weightObj = a.weight === undefined ? {} : r.obj(a.weight, 'armor.weight');
+  const vestsObj = a.vests === undefined ? {} : r.obj(a.vests, 'armor.vests');
+  const swatVestsObj = vestsObj.swat === undefined ? {} : r.obj(vestsObj.swat, 'armor.vests.swat');
+  const suspectVestsObj = vestsObj.suspect === undefined ? {} : r.obj(vestsObj.suspect, 'armor.vests.suspect');
   return {
     absorb,
     minAbsorb,
@@ -1779,6 +1842,19 @@ function readArmor(r: Reader, o: Record<string, unknown>): ArmorConfig {
     weight: {
       swatIssue: readArmorWeight(r, weightObj, 'swatIssue'),
       suspectVest: readArmorWeight(r, weightObj, 'suspectVest'),
+    },
+    vests: {
+      swat: {
+        light: readVestSpec(r, swatVestsObj, 'light', 'armor.vests.swat', d.vests.swat.light),
+        standard: readVestSpec(r, swatVestsObj, 'standard', 'armor.vests.swat', d.vests.swat.standard),
+        heavy: readVestSpec(r, swatVestsObj, 'heavy', 'armor.vests.swat', d.vests.swat.heavy),
+      },
+      suspect: {
+        none: readVestSpec(r, suspectVestsObj, 'none', 'armor.vests.suspect', d.vests.suspect.none),
+        light: readVestSpec(r, suspectVestsObj, 'light', 'armor.vests.suspect', d.vests.suspect.light),
+        standard: readVestSpec(r, suspectVestsObj, 'standard', 'armor.vests.suspect', d.vests.suspect.standard),
+        heavy: readVestSpec(r, suspectVestsObj, 'heavy', 'armor.vests.suspect', d.vests.suspect.heavy),
+      },
     },
   };
 }
@@ -2447,12 +2523,28 @@ export const DataLoader = {
     seed: number | undefined,
     profiles: AIProfile[],
     doorConfig?: DoorConfig,
+    allowedMotifs?: readonly MotifId[],
   ): Promise<MapData> {
     if (seed === undefined || !Number.isFinite(seed)) {
       throw new DataError('map', 'seed', `ランダム生成ステージ "${stage.id}" には有限数値のシードが必要です (現在 ${String(seed)})`);
     }
+    let effectiveStage = stage;
+    if (allowedMotifs && allowedMotifs.length > 0 && stage.variants && stage.variants.length > 0) {
+      const allow = new Set<MotifId>(allowedMotifs);
+      effectiveStage = {
+        ...stage,
+        variants: stage.variants.map((v) => {
+          if (!v.motifs) return v;
+          const filtered: Partial<Record<MotifId, number>> = {};
+          for (const [k, w] of Object.entries(v.motifs) as [MotifId, number][]) {
+            if (allow.has(k) && w > 0) filtered[k] = w;
+          }
+          return Object.keys(filtered).length > 0 ? { ...v, motifs: filtered } : v;
+        }),
+      };
+    }
     // 同じ規模の中の建物候補（住宅・銀行・機内など）をシードで 1 つ選ぶ
-    const picked = pickStageVariant(stage, seed);
+    const picked = pickStageVariant(effectiveStage, seed);
     const tpl = await DataLoader.loadGeneratorTemplate(picked.generator);
     validateGeneratorReferences(tpl, profiles);
     if (tpl.type === 'modular') {
@@ -2468,7 +2560,7 @@ export const DataLoader = {
     return validateMap(generateMap(tpl, seed, stage.id, undefined, picked.motif), `generator:${tpl.id}#${seed}`);
   },
   /** 共通JSONを並列ロードし検証、続いてステージのマップを読み込み/生成。不正なら DataError を throw。 */
-  async loadAll(stage: StageEntry, seed?: number): Promise<GameData> {
+  async loadAll(stage: StageEntry, seed?: number, allowedMotifs?: readonly MotifId[]): Promise<GameData> {
     const [player, doors, weapons, aiProfiles, roe, perception, squad, suspectAlert, swatAimSettle, siege] = await Promise.all([
       DataLoader.loadPlayerConfig(),
       DataLoader.loadDoorConfig(),
@@ -2481,7 +2573,7 @@ export const DataLoader = {
       DataLoader.loadSwatAimSettle(),
       DataLoader.loadSiege(),
     ]);
-    const map = await DataLoader.loadStageMap(stage, seed, aiProfiles, doors);
+    const map = await DataLoader.loadStageMap(stage, seed, aiProfiles, doors, allowedMotifs);
     validateCrossReferences(map, aiProfiles);
     return { player, doors, map, weapons, aiProfiles, roe, perception, squad, suspectAlert, swatAimSettle, siege };
   },

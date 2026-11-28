@@ -77,15 +77,37 @@ export class WeaponSystem {
     private readonly colliders: readonly Collider[],
     weapons: readonly WeaponDef[],
     private readonly bus: GameEventBus,
+    initialWeaponId?: string,
   ) {
     this.weapons = [...weapons];
-    const first = weapons.find((w) => w.category !== 'throwable');
+    const requested = initialWeaponId
+      ? this.weapons.find((w) => w.id === initialWeaponId && w.category !== 'throwable')
+      : undefined;
+    const first = requested ?? this.weapons.find((w) => w.category !== 'throwable');
     if (!first) throw new Error('[WeaponSystem] no fireable weapon defined in weapons.json');
     this.current = first;
+    this.player.speedMultiplier = first.moveSpeedMul ?? 1;
     for (const w of weapons) {
       this.ammo.set(w.id, w.magazineSize);
       if (w.reserveMagazines !== undefined) this.reserve.set(w.id, w.reserveMagazines * w.magazineSize);
     }
+  }
+
+  /** 指定 ID の射撃武器へ切り替える（ロードアウト選択・テスト用）。 */
+  selectWeapon(id: string): boolean {
+    const found = this.weapons.find((w) => w.id === id && w.category !== 'throwable');
+    if (!found) return false;
+    this.current = found;
+    this.reloadLeft = 0;
+    this.reloadTotal = 0;
+    this.cooldown = 0;
+    this.player.speedMultiplier = found.moveSpeedMul ?? 1;
+    return true;
+  }
+
+  /** 現在の武器がサプレッサー装着か */
+  get isSuppressed(): boolean {
+    return this.current.suppressed === true;
   }
 
   /** 現在武器の予備弾数（無限なら null） */
@@ -179,7 +201,7 @@ export class WeaponSystem {
     const w = this.current;
 
     if (!this.input.isOrderMenuOpen) this.handleSlotSwitch();
-    this.player.speedMultiplier = 1;
+    this.player.speedMultiplier = this.current.moveSpeedMul ?? 1;
 
     this.currentSpread = this.computeSpread();
 
@@ -217,7 +239,7 @@ export class WeaponSystem {
     this.extraSpread = 0;
   }
 
-  /** 1発発射（視点方向 + 拡散）。テストや外部からも呼べる。 */
+  /** 1発発射（視点方向 + 拡散）。散弾武器(pellets > 1)はペレット数ぶん独立にレイを飛ばす。テストや外部からも呼べる。 */
   fire(): ShotResult {
     const w = this.current;
     this.ammo.set(w.id, Math.max(0, this.ammoInMagazine - 1));
@@ -225,28 +247,41 @@ export class WeaponSystem {
     const spread = this.computeSpread();
     this.currentSpread = spread;
     this.player.getEyePosition(this.origin);
-    this.computeShotDirection(spread);
-    const result = this.trace(this.origin, this.dir, w.range);
-
     const pos = { x: this.origin.x, y: this.origin.y, z: this.origin.z };
+    const pellets = Math.max(1, Math.floor(w.pellets ?? 1));
+
+    let primaryResult: ShotResult | null = null;
+    for (let i = 0; i < pellets; i++) {
+      this.computeShotDirection(spread);
+      const r = this.trace(this.origin, this.dir, w.range);
+      if (primaryResult === null || (primaryResult.targetId === null && r.targetId !== null)) {
+        primaryResult = r;
+      }
+      if (r.targetId === null && r.distance < w.range - 1e-3 && w.damage > 0) {
+        this.bus.emit('bulletImpact', {
+          shooter: PLAYER_ID,
+          pos: { x: r.point.x, y: r.point.y, z: r.point.z },
+          damage: w.damage,
+        });
+      }
+      if (r.targetId !== null) {
+        this.bus.emit('entityHit', {
+          targetId: r.targetId,
+          shooter: PLAYER_ID,
+          damage: w.damage,
+          pos: { x: r.point.x, y: r.point.y, z: r.point.z },
+          weaponId: w.id,
+          ...(w.category === 'nonlethal' ? { nonlethal: true, moraleScale: w.moraleDamage / 50 } : {}),
+        });
+      }
+    }
+
     this.bus.emit('shotFired', { shooter: PLAYER_ID, pos });
-    this.bus.emit('noise', { pos, radius: w.noiseRadius, kind: 'gunshot' });
-    if (result.targetId === null && result.distance < w.range - 1e-3 && w.damage > 0) {
-      this.bus.emit('bulletImpact', { shooter: PLAYER_ID, pos: { x: result.point.x, y: result.point.y, z: result.point.z }, damage: w.damage });
-    }
-    if (result.targetId !== null) {
-      this.bus.emit('entityHit', {
-        targetId: result.targetId,
-        shooter: PLAYER_ID,
-        damage: w.damage,
-        pos: { x: result.point.x, y: result.point.y, z: result.point.z },
-        weaponId: w.id,
-        ...(w.category === 'nonlethal' ? { nonlethal: true, moraleScale: w.moraleDamage / 50 } : {}),
-      });
-    }
+    const noiseRadius = w.suppressed ? Math.min(w.noiseRadius, 14) : w.noiseRadius;
+    this.bus.emit('noise', { pos, radius: noiseRadius, kind: 'gunshot', source: 'player' });
 
     this.applyRecoil();
-    return result;
+    return primaryResult!;
   }
 
   /** origin から dir へ最大 range までのレイを壁/遮蔽物/標的に対して判定し、最も近い命中を返す。 */
@@ -334,6 +369,7 @@ export class WeaponSystem {
       const idx = list.findIndex((x) => x.id === this.current.id);
       this.current = list[(idx + 1) % list.length];
       this.cooldown = 0;
+      this.player.speedMultiplier = this.current.moveSpeedMul ?? 1;
       return;
     }
   }

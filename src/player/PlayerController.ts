@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { getSettings } from '../core/Settings';
 import type { InputManager } from '../core/InputManager';
 import type { GameEventBus } from '../core/events';
-import type { ArmorKind, ArmorWeight, MapData, MoveMode, PlayerConfig } from '../core/types';
+import type { ArmorKind, ArmorWeight, MapData, MoveMode, PlayerConfig, VestSpec, VestTier } from '../core/types';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import { collidersNear } from '../world/ColliderIndex';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT } from '../world/Walk';
@@ -105,17 +105,60 @@ export class PlayerController {
     this.armor = points;
     this.armorMax = points;
     this.armorKindValue = kind;
+    this.vestSpec = null;
+  }
+
+  /**
+   * 選択された防弾ベスト（light / standard / heavy / none）を装着する。
+   * player.json の armor.vests[mode][tier] から耐久・肩代わり率・重量補正をすべて適用する。
+   */
+  equipVest(mode: 'swat' | 'suspect', tier: VestTier, force = false): void {
+    if (!force && this.armorKindValue !== null) return;
+    if (tier === 'none') {
+      if (force) {
+        this.armor = 0;
+        this.armorMax = 0;
+        this.armorKindValue = null;
+        this.vestSpec = null;
+      }
+      this.vestTierValue = 'none';
+      return;
+    }
+    const spec =
+      mode === 'swat'
+        ? this.config.armor.vests?.swat?.[tier]
+        : this.config.armor.vests?.suspect?.[tier];
+    if (!spec || !(spec.durability > 0)) return;
+    this.armor = spec.durability;
+    this.armorMax = spec.durability;
+    this.armorKindValue = mode === 'swat' ? 'swatIssue' : 'suspectVest';
+    this.vestTierValue = tier;
+    this.vestSpec = spec;
   }
 
   private armorKindValue: ArmorKind | null = null;
+  private vestTierValue: VestTier | null = null;
+  private vestSpec: VestSpec | null = null;
 
   /** 装着中のベストの種類（未装着は null。耐久が尽きても残る） */
   get armorKind(): ArmorKind | null {
     return this.armorKindValue;
   }
 
+  /** 装着中のベスト段階（equipVest 未使用時は null） */
+  get vestTier(): VestTier | null {
+    return this.vestTierValue;
+  }
+
   /** 装着中のベストの重さ（未装着は等倍） */
   get armorWeight(): ArmorWeight {
+    if (this.vestSpec) {
+      return {
+        speedMul: this.vestSpec.speedMul,
+        footstepRadiusMul: this.vestSpec.footstepRadiusMul,
+        leanSpeedMul: this.vestSpec.leanSpeedMul,
+      };
+    }
     return this.armorKindValue === null ? NO_ARMOR_WEIGHT : this.config.armor.weight[this.armorKindValue];
   }
 
@@ -146,9 +189,10 @@ export class PlayerController {
   /** 現在の肩代わり率。耐久残量に比例して absorb → minAbsorb へ劣化する */
   get armorAbsorb(): number {
     if (this.armor <= 0) return 0;
-    const a = this.config.armor;
+    const absorb = this.vestSpec ? this.vestSpec.absorb : this.config.armor.absorb;
+    const minAbsorb = this.vestSpec ? this.vestSpec.minAbsorb : this.config.armor.minAbsorb;
     const max = Math.max(this.armorMax, this.armor);
-    return a.minAbsorb + (a.absorb - a.minAbsorb) * (this.armor / max);
+    return minAbsorb + (absorb - minAbsorb) * (this.armor / max);
   }
 
   /** 現在の負傷レベル（woundsEnabled=false の間は常に 0） */
