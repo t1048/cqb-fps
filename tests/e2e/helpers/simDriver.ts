@@ -220,7 +220,6 @@ export function createSwatHarness(opts: {
   playerHp?: number;
   playerYawRad?: number;
   startAssault?: boolean;
-  reinforcements?: boolean;
   tearGas?: TearGasInstance;
   tearGasFactory?: (colliders: readonly Collider[], bus: GameEventBus, ceilingHeight: number) => TearGasInstance;
   urlSearch?: string;
@@ -271,7 +270,6 @@ export function createSwatHarness(opts: {
     civilians: () => [],
     textures: hw.textures,
     onPepper: (target) => pepperHits.push(target),
-    reinforcements: opts.reinforcements,
     flashOverlay: overlay,
     tearGas,
     suspects: opts.suspects,

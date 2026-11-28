@@ -142,10 +142,10 @@ describe('i18n & shareLinks', () => {
   it('builds shareable seed URLs and exports the Ko-fi URL', () => {
     expect(KOFI_URL).toBe('https://ko-fi.com/t1048');
     expect(
-      buildSeedShareUrl({ stage: 'random_house', seed: 12345, mode: 'swat', reinforcements: false }),
+      buildSeedShareUrl({ stage: 'random_house', seed: 12345, mode: 'swat' }),
     ).toBe('https://t1048.github.io/cqb-fps/?stage=random_house&seed=12345');
     expect(
-      buildSeedShareUrl({ stage: 'random_embassy', seed: 999, mode: 'suspect', reinforcements: true }),
-    ).toBe('https://t1048.github.io/cqb-fps/?stage=random_embassy&seed=999&mode=suspect&waves=1');
+      buildSeedShareUrl({ stage: 'random_embassy', seed: 999, mode: 'suspect' }),
+    ).toBe('https://t1048.github.io/cqb-fps/?stage=random_embassy&seed=999&mode=suspect');
   });
 });

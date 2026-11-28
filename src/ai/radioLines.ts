@@ -74,10 +74,6 @@ export function cellSetLine(cell: string, dirJa: string, dirEn: string): RadioLi
   return pickRadio(CELL_SET, { cell, dirJa, dirEn });
 }
 
-export function reinforceLine(cell: string): RadioLine {
-  return pickRadio(REINFORCE, { cell });
-}
-
 export function dugInGasLine(roomName: string): RadioLine {
   return pickRadio(DUG_IN_GAS, { room: roomName, roomEn: voiceRoom(roomName) });
 }
@@ -558,11 +554,6 @@ export const PRESS_BY_STEP: Record<number, readonly RadioLine[]> = {
   3: PRESS_3,
   4: PRESS_4,
 };
-
-const REINFORCE: readonly RadioLine[] = [
-  ['増援、{cell}班。外周から突入する。', 'Reinforcements. {cell} is making entry.'],
-  ['{cell}班が増援だ。突入する。', '{cell} reinforcements, moving in.'],
-];
 
 const RESCAN_LINES: readonly RadioLine[] = [
   ['全区を見たが容疑者はいない。再捜索する。', 'Nobody found. Searching again.'],

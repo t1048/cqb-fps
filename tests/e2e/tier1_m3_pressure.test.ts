@@ -50,7 +50,7 @@ function countLightsInGraph(root: THREE.Object3D): number {
   return lights;
 }
 
-describe('Tier 1 — M3 Pressure, Visuals, Audio & Reinforcements (F10–F13)', () => {
+describe('Tier 1 — M3 Pressure, Visuals, Audio (F10–F13)', () => {
   // =========================================================================
   // F10: Tear Gas (CS Gas) & Anti-Camping (催涙ガスによる強制あぶり出し)
   // =========================================================================
@@ -359,86 +359,27 @@ describe('Tier 1 — M3 Pressure, Visuals, Audio & Reinforcements (F10–F13)', 
   });
 
   // =========================================================================
-  // F13: Reinforcement Waves Option (増援ウェーブ（オプション）)
+  // F13: 増援ウェーブは廃止（容疑者モードは最初の突入班だけと戦う）
   // =========================================================================
-  describe('F13: Reinforcement Waves Option', () => {
-    it('F13.1: BriefingScreen renders reinforcements toggle in Suspect Mode and invokes onToggleReinforcements', () => {
+  describe('F13: Reinforcement Waves Removed', () => {
+    it('F13.1: BriefingScreen in Suspect Mode renders no reinforcements toggle', () => {
       const dom = installDomShim();
       const map = makeSingleRoomMap();
-      let toggledValue: boolean | null = null;
-      const opts: BriefingOptionsWithM3 = {
-        onStart: () => {},
-        mode: 'suspect',
-        reinforcements: false,
-        onToggleReinforcements: (enabled: boolean) => {
-          toggledValue = enabled;
-        },
-      };
-      const screen = new BriefingScreen(dom.document.body as unknown as HTMLElement, map, opts);
-      // Locate checkbox or button mentioning reinforcements / 増援
-      const controls = dom.document.body.findAll(
-        (el) =>
-          (el.tagName === 'INPUT' && el.type === 'checkbox') ||
-          (el.tagName === 'BUTTON' && /増援|reinforce|wave/i.test(el.textContent)),
-      );
-      expect(controls.length, 'BriefingScreen must render a reinforcements toggle in M3').toBeGreaterThanOrEqual(1);
-      controls[0]!.click();
-      expect(toggledValue).toBe(true);
+      const screen = new BriefingScreen(dom.document.body as unknown as HTMLElement, map, { onStart: () => {}, mode: 'suspect' });
+      const toggles = dom.document.body.findAll((el) => /増援|reinforce|wave/i.test(el.textContent));
+      expect(toggles.length).toBe(0);
       screen.dispose();
     });
 
-    it('F13.2: SwatTeam with reinforcements: true exposes hasPendingReinforcements === true initially', () => {
-      const h = track(
-        createSwatHarness({
-          map: makeSingleRoomMap(),
-          spawns: [
-            { x: 0, y: 0, z: 6 },
-            { x: 1, y: 0, z: 6 },
-          ],
-          count: 2,
-          startAssault: true,
-          reinforcements: true,
-        }),
-      );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(team.hasPendingReinforcements, 'SwatTeam.hasPendingReinforcements must be true when enabled').toBe(true);
-    });
-
-    it('F13.3: SwatTeam.spawnReinforcements() spawns a 2-man exterior cell including 1 shielded unit', () => {
-      const h = track(
-        createSwatHarness({
-          map: makeSingleRoomMap(),
-          spawns: [
-            { x: 0, y: 0, z: 6 },
-            { x: 1, y: 0, z: 6 },
-          ],
-          count: 2,
-          startAssault: true,
-          reinforcements: true,
-        }),
-      );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(typeof team.spawnReinforcements, 'SwatTeam.spawnReinforcements() must be implemented in M3').toBe('function');
-      const beforeTotal = team.total;
-      team.spawnReinforcements!();
-      expect(team.total).toBe(beforeTotal + 2);
-      const newUnits = team.hunters.slice(beforeTotal);
-      expect(newUnits.some((u) => u.shielded)).toBe(true);
-      expect(newUnits.some((u) => !u.shielded)).toBe(true);
-    });
-
-    it('F13.4: SuspectMission does NOT end with repelled while hasPendingReinforcements is true', () => {
+    it('F13.2: SuspectMission ends with repelled as soon as the initial SWAT team is down', () => {
       const h = track(
         createSwatHarness({
           map: makeSingleRoomMap(),
           spawns: [{ x: 0, y: 0, z: 6 }],
           count: 1,
           startAssault: true,
-          reinforcements: true,
         }),
       );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(team.hasPendingReinforcements).toBe(true);
       let ended = false;
       const interaction = new Interaction(createHeadlessInput(), 100);
       const entities = { civilians: new Map(), suspects: new Map() } as unknown as EntityManager;
@@ -455,45 +396,14 @@ describe('Tier 1 — M3 Pressure, Visuals, Audio & Reinforcements (F10–F13)', 
           ended = true;
         },
       );
-      // Eliminate initial SWAT
       h.bus.emit('entityHit', { targetId: 'swat_1', shooter: 'player', damage: 200, pos: { x: 0, y: 1, z: 6 } });
       for (let i = 0; i < 60; i++) {
         h.step(0.05, 0.05);
         mission.update(0.05);
       }
-      // Reinforcements should spawn rather than ending mission prematurely
-      expect(ended).toBe(false);
-      expect(h.team.aliveCount).toBeGreaterThanOrEqual(1);
+      expect(h.team.total).toBe(1);
+      expect(ended).toBe(true);
       mission.dispose();
-    });
-
-    it('F13.5: Spawning a reinforcement wave emits a tactical radio callout and newly spawned units actively enter assault', () => {
-      const h = track(
-        createSwatHarness({
-          map: makeTwoDoorHouseMap(),
-          spawns: [{ x: 0, y: 0, z: 7 }],
-          count: 1,
-          startAssault: true,
-          reinforcements: true,
-        }),
-      );
-      const team = h.team as SwatTeamWithM2M3;
-      expect(typeof team.spawnReinforcements, 'SwatTeam.spawnReinforcements() must be implemented in M3').toBe('function');
-      const beforeRadio = h.recorder.count('allyRadio');
-      const beforeTotal = team.total;
-      team.spawnReinforcements!();
-      expect(team.total).toBe(beforeTotal + 2);
-      const spawned = team.hunters.slice(beforeTotal);
-      const initPositions = spawned.map((u) => ({ x: u.body.px, z: u.body.pz }));
-      h.step(2.0, 0.05);
-      // Radio callout announces reinforcement entry
-      expect(h.recorder.count('allyRadio')).toBeGreaterThan(beforeRadio);
-      // Spawned reinforcement units actively move (not stuck in staging)
-      expect(spawned.every((u) => u.state !== 'staging')).toBe(true);
-      const moved = spawned.some(
-        (u, i) => Math.hypot(u.body.px - initPositions[i]!.x, u.body.pz - initPositions[i]!.z) > 0.5,
-      );
-      expect(moved).toBe(true);
     });
   });
 });

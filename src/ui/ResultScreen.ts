@@ -62,6 +62,8 @@ export interface ResultScreenOptions {
   currentStageId?: string;
   onSelectStage?: (stageId: string) => void;
   seedShareInfo?: SeedShareInfo;
+  /** タイトル画面へ戻る（指定時はリトライの下にボタンを表示） */
+  onBackToTitle?: () => void;
 }
 
 /** ミッション終了時のリザルト画面。リトライボタン / R / Enter で onRetry、または別ステージへ切替。 */
@@ -174,6 +176,21 @@ export class ResultScreen {
     btn.addEventListener('click', this.retry);
     this.cleanups.push(() => btn.removeEventListener('click', this.retry));
     panel.appendChild(btn);
+
+    const onBackToTitle = this.options?.onBackToTitle;
+    if (onBackToTitle) {
+      const titleBtn = document.createElement('button');
+      titleBtn.type = 'button';
+      titleBtn.dataset.action = 'title';
+      titleBtn.textContent = t('タイトルへ戻る（モード・広さを選び直す）', 'Back to Title (Change Mode / Map Size)');
+      titleBtn.style.cssText = 'margin-top:8px;width:100%;padding:8px;font:14px sans-serif;cursor:pointer';
+      const onTitle = (): void => {
+        if (!this.disposed) onBackToTitle();
+      };
+      titleBtn.addEventListener('click', onTitle);
+      this.cleanups.push(() => titleBtn.removeEventListener('click', onTitle));
+      panel.appendChild(titleBtn);
+    }
 
     // 共有・サポート行（控えめなシードコピー＆Ko-fi）
     const highRank =

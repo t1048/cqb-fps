@@ -55,12 +55,12 @@ import { SwatTeam } from './modes/SwatTeam';
 import { applyMissionRoster } from './rules/MissionRoster';
 import { PauseMenu } from './ui/PauseMenu';
 import type { SeedShareInfo } from './ui/shareLinks';
+import { TitleScreen } from './ui/TitleScreen';
 import { getSettings, subscribeSettings } from './core/Settings';
 import { t, tRoomName } from './core/i18n';
 import {
   SuspectMission,
   parseGameMode,
-  parseReinforcements,
   prepareSuspectMode,
   suspectWeapons,
   swatWeapons,
@@ -223,9 +223,7 @@ class App {
     onRetry: () => void,
     onRegenerate: (seed?: number) => void,
     mode: GameMode,
-    onSelectMode: (mode: GameMode) => void,
-    reinforcements: boolean,
-    onToggleReinforcements: (enabled: boolean) => void,
+    onBackToTitle: () => void,
   ) {
     this.mode = mode;
     this.siegeCfg = siegeCfg;
@@ -493,7 +491,6 @@ class App {
           if (target === 'hostage' && this.hostageGrab?.holding) this.hostageGrab.onHostagePeppered();
           else this.pepper?.hit();
         },
-        reinforcements,
         aimSettle: swatAimSettle,
       });
       this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
@@ -688,26 +685,22 @@ class App {
 
     const seedShareInfo: SeedShareInfo | undefined =
       map.seed !== undefined
-        ? { stage: map.id, seed: map.seed, mode, reinforcements }
+        ? { stage: map.id, seed: map.seed, mode }
         : undefined;
 
     this.pauseMenu = new PauseMenu(document.body, {
       onResume: () => this.resumeGame(),
       onRetry: () => onRetry(),
       onBackToBriefing: () => onRetry(),
+      onBackToTitle,
       seedInfo: seedShareInfo,
     });
 
     this.briefingScreen = new BriefingScreen(document.body, map, {
       onStart: () => this.openNegotiation(),
-      stages,
-      currentStageId: map.id,
-      onSelectStage,
       onRegenerate,
       mode,
-      onSelectMode,
-      reinforcements,
-      onToggleReinforcements,
+      onBackToTitle,
       onOpenSettings: () => this.pauseMenu.open('settings'),
       seedShareInfo,
     });
@@ -722,6 +715,7 @@ class App {
       currentStageId: map.id,
       onSelectStage,
       seedShareInfo,
+      onBackToTitle,
     });
 
     this.unsubSettings = subscribeSettings((s, prev) => {
@@ -1319,12 +1313,12 @@ class App {
 }
 
 let app: App | null = null;
+let title: TitleScreen | null = null;
 let errorEl: HTMLElement | null = null;
 let startToken = 0;
 let currentMapId: string | null = null;
 let currentSeed: number | undefined;
 let currentMode: GameMode = 'swat';
-let currentReinforcements = false;
 let stagesPromise: Promise<StageEntry[]> | null = null;
 
 function ensureStages(): Promise<StageEntry[]> {
@@ -1341,16 +1335,58 @@ function showError(err: unknown): void {
   errorEl?.remove();
   errorEl = document.createElement('pre');
   errorEl.style.cssText =
-    'position:fixed;inset:0 auto auto 0;margin:0;padding:12px;background:#400;color:#fff;font:14px monospace;white-space:pre-wrap;z-index:10';
+    'position:fixed;inset:0 auto auto 0;margin:0;padding:12px;background:#400;color:#fff;font:14px monospace;white-space:pre-wrap;z-index:30';
   errorEl.textContent = err instanceof Error ? err.message : String(err);
   document.body.appendChild(errorEl);
 }
 
-function start(mapId?: string, seed?: number, mode?: GameMode, reinforcements?: boolean): void {
+/** URL の mode を現在のモードに合わせる（再読み込みしてもタイトルで同じモードが選ばれている） */
+function syncModeToUrl(mode: GameMode): void {
+  const url = new URL(window.location.href);
+  if (mode === 'suspect') url.searchParams.set('mode', 'suspect');
+  else url.searchParams.delete('mode');
+  url.searchParams.delete('waves'); // 廃止した増援ウェーブのパラメータ
+  window.history.replaceState(null, '', url);
+}
+
+/**
+ * タイトル画面。モードとマップの広さを選んで「出動」した時点で初めてマップを生成する。
+ * ゲーム中のアプリは破棄してから表示する（WebGL レンダラは共有）。
+ */
+function showTitle(): void {
+  ++startToken; // 進行中の生成は破棄
+  app?.destroy();
+  app = null;
+  errorEl?.remove();
+  errorEl = null;
+  if (title) return;
+  const shared = acquireSharedRenderer(document.body);
+  title = new TitleScreen(document.body, {
+    renderer: shared.renderer,
+    envTex: shared.envTex,
+    audio: acquireSharedAudio(),
+    stages: ensureStages(),
+    initialMode: currentMode,
+    initialStageId: currentMapId,
+    onStart: (mode, stageId) => {
+      syncModeToUrl(mode);
+      start(stageId, randomSeed(), mode);
+    },
+  });
+  ensureStages().catch((err: unknown) => {
+    console.error(err);
+    showError(err);
+  });
+}
+
+function closeTitle(): void {
+  title?.dispose();
+  title = null;
+}
+
+function start(mapId?: string, seed?: number, mode?: GameMode): void {
   if (mode !== undefined) currentMode = mode;
-  if (reinforcements !== undefined) currentReinforcements = reinforcements;
   const runMode = currentMode;
-  const runReinforcements = currentReinforcements;
   app?.destroy();
   app = null;
   errorEl?.remove();
@@ -1379,6 +1415,7 @@ function start(mapId?: string, seed?: number, mode?: GameMode, reinforcements?: 
       currentMapId = targetId;
       currentSeed = useSeed;
       console.info('[data] loaded', data.map.id, `seed=${useSeed}`, `weapons=${data.weapons.length}`, `profiles=${data.aiProfiles.length}`, `allies=${data.map.allies.length}`, `stairs=${data.map.stairs.length}`, `floors=${data.map.floors.length}`);
+      closeTitle(); // 共有レンダラをゲームへ明け渡す
       app = new App(
         document.body,
         data.map,
@@ -1397,52 +1434,48 @@ function start(mapId?: string, seed?: number, mode?: GameMode, reinforcements?: 
         () => start(),
         (nextSeed) => start(targetId, nextSeed ?? randomSeed()),
         runMode,
-        (nextMode) => {
-          // モード切替は同じステージ・同じシードで再構築する
-          const url = new URL(window.location.href);
-          url.searchParams.set('mode', nextMode);
-          window.history.replaceState(null, '', url);
-          start(targetId, useSeed, nextMode);
-        },
-        runReinforcements,
-        (nextWaves) => {
-          const url = new URL(window.location.href);
-          if (nextWaves) url.searchParams.set('waves', '1');
-          else url.searchParams.delete('waves');
-          window.history.replaceState(null, '', url);
-          start(targetId, useSeed, runMode, nextWaves);
-        },
+        () => showTitle(),
       );
     } catch (err: unknown) {
       console.error(err);
-      if (token === startToken) showError(err);
+      if (token === startToken) {
+        title?.cancelLoading();
+        showError(err);
+      }
     }
   })();
 }
 
-// URL から再現: ?stage=random_house&seed=12345&mode=suspect&waves=1
+// 共有 URL（?stage=random_house&seed=12345&mode=suspect）はタイトルを飛ばしてそのマップを直接生成する。
+// それ以外はタイトル画面から始め、モードと広さが決まるまでマップは生成しない。
 {
   const params = new URLSearchParams(window.location.search);
   const qStage = params.get('stage') ?? undefined;
   const qSeedRaw = params.get('seed');
   const qSeed = qSeedRaw !== null && /^\d+$/.test(qSeedRaw) ? Number(qSeedRaw) : undefined;
-  const qWaves = parseReinforcements(params.get('waves'));
-  start(qStage, qSeed, parseGameMode(params.get('mode')), qWaves);
+  currentMode = parseGameMode(params.get('mode'));
+  if (qStage !== undefined) currentMapId = qStage;
+  if (qSeed !== undefined) start(qStage, qSeed, currentMode);
+  else showTitle();
 }
 
 // リトライ・ステージ切替検証用: コンソールから `__cqbRetry()` / `__cqbRetry('random_small')` / `__cqbRetry('random_house', 12345)` で destroy→再生成。HMR 時は破棄のみ。
-(window as unknown as { __cqbRetry: (mapId?: string, seed?: number, mode?: GameMode, reinforcements?: boolean) => void }).__cqbRetry = (
+(window as unknown as { __cqbRetry: (mapId?: string, seed?: number, mode?: GameMode) => void }).__cqbRetry = (
   mapId?: string,
   seed?: number,
   mode?: GameMode,
-  reinforcements?: boolean,
-) => start(mapId, seed, mode, reinforcements);
+) => {
+  closeTitle();
+  start(mapId, seed, mode);
+};
+(window as unknown as { __cqbTitle: () => void }).__cqbTitle = () => showTitle();
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     ++startToken;
     errorEl?.remove();
     errorEl = null;
+    closeTitle();
     app?.destroy();
     app = null;
     sharedAudio?.dispose();

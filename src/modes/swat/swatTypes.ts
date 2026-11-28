@@ -218,12 +218,6 @@ export const GAS_TEAM_CD = 24;
 /** 連携無線の最小発話間隔（秒）。speechSynthesis の即時キャンセルを防ぐため >= 1.2s とする */
 export const RADIO_STAGGER_SEC = SWAT_RADIO_STAGGER_SEC;
 
-export const REINFORCEMENT_WAVE_SIZE = 2;
-export const REINFORCEMENT_MAX_WAVES = 2;
-export const REINFORCEMENT_MIN_HOLD_SEC = 30;
-export const REINFORCEMENT_TRIGGER_KILLS = 2;
-export const REINFORCEMENT_COOLDOWN_SEC = 18;
-
 /** 屋内を格子状に区切った 1 マス。視界に入ると seen になる（未視認 = まだクリアしていない場所） */
 export interface CoverCell {
   x: number;
@@ -314,8 +308,6 @@ export interface SwatTeamDeps {
   shieldActive?: () => boolean;
   /** ペッパーボールの命中（プレイヤー本人 / 抱えた人質） */
   onPepper?: (target: 'player' | 'hostage') => void;
-  /** 増援ウェーブ（F13）を有効にするか（既定 false） */
-  reinforcements?: boolean;
 }
 
 /** ドアのブービートラップ（Fortify が実装） */
@@ -324,17 +316,6 @@ export interface TrapHooks {
   trappedDoorIds(): Iterable<string>;
   detonate(doorId: string): void;
   disarm(doorId: string): void;
-}
-
-export interface ReinforcementCheck {
-  enabled: boolean;
-  started: boolean;
-  wavesSpawned: number;
-  maxWaves: number;
-  aliveCount: number;
-  killsSinceLastWave: number;
-  holdLeftSec: number;
-  cooldownSec: number;
 }
 
 /** 交渉の差し入れによる偵察情報（突入の瞬間にプレイヤーがいた部屋） */

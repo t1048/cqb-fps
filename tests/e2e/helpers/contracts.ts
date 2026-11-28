@@ -71,13 +71,8 @@ export type FortifyWithBarricades = Omit<Fortify, 'listBoarded'> & {
   listBoarded?: () => BarricadeInfo[];
 };
 
-export type SwatTeamWithM2M3 = Omit<
-  SwatTeam,
-  'attachBarricades' | 'hasPendingReinforcements' | 'spawnReinforcements'
-> & {
+export type SwatTeamWithM2M3 = Omit<SwatTeam, 'attachBarricades'> & {
   attachBarricades?: (hooks: BarricadeHooks) => void;
-  readonly hasPendingReinforcements?: boolean;
-  spawnReinforcements?: () => boolean | number;
 };
 
 // ---------- M3 Contracts (F10–F13) ----------
@@ -90,13 +85,9 @@ export type HumanoidBodyWithMuzzle = Omit<HumanoidBody, 'getMuzzlePose'> & {
   getMuzzlePose?: (outOrigin: Vec3, outDir: Vec3) => boolean;
 };
 
-export type BriefingOptionsWithM3 = Omit<BriefingScreenOptions, 'reinforcements' | 'onToggleReinforcements'> & {
-  reinforcements?: boolean;
-  onToggleReinforcements?: (enabled: boolean) => void;
-};
+export type BriefingOptionsWithM3 = BriefingScreenOptions;
 
-export type SwatTeamDepsWithM3 = Omit<SwatTeamDeps, 'reinforcements' | 'flashOverlay' | 'tearGas'> & {
-  reinforcements?: boolean;
+export type SwatTeamDepsWithM3 = Omit<SwatTeamDeps, 'flashOverlay' | 'tearGas'> & {
   flashOverlay?: FlashOverlay;
   tearGas?: TearGasInstance;
 };

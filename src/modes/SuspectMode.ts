@@ -19,10 +19,6 @@ export function parseGameMode(v: string | null | undefined): GameMode {
   return v === 'suspect' ? 'suspect' : 'swat';
 }
 
-export function parseReinforcements(v: string | null | undefined): boolean {
-  return v === '1' || v === 'true';
-}
-
 /** 容疑者モードのルール定数。人数は MissionRoster（両モード共通）が決める。 */
 export const SUSPECT_MODE = {
   /** SWAT 突入までの準備時間（秒）。交渉で増減する */
@@ -375,12 +371,8 @@ export class SuspectMission {
     }
     this.flushGauge();
 
-    if (this.team.hasStarted && this.player.alive) {
-      this.team.checkReinforcements(this.holdLeft);
-    }
-
     if (!this.player.alive) this.conclude('killed', 1.4);
-    else if (this.team.hasStarted && this.team.aliveCount === 0 && !this.team.hasPendingReinforcements) {
+    else if (this.team.hasStarted && this.team.aliveCount === 0) {
       this.conclude('repelled', 2.0);
     } else if (this.team.hasStarted && this.holdLeft <= 0) {
       this.subtitle.show(t('SWAT「撤退だ！包囲を維持しろ！」', 'SWAT: "Fall back! Maintain the perimeter!"'), 2.0);
@@ -409,17 +401,10 @@ export class SuspectMission {
         `SWAT Breach in ${fmt(this.assaultAt - this.elapsed)}  |  Hold F: Lock Door / Space: Ready`,
       );
     } else {
-      const waveSuffix =
-        this.team.reinforcementWavesSpawned > 0
-          ? t(`　|　増援 第${this.team.reinforcementWavesSpawned}波`, `  |  Reinforcements Wave ${this.team.reinforcementWavesSpawned}`)
-          : this.team.hasPendingReinforcements
-            ? t('　|　増援あり', '  |  Reinforcements Incoming')
-            : '';
-      text =
-        t(
-          `籠城 残り ${fmt(this.holdLeft)}　|　SWAT 残り ${this.team.aliveCount}/${this.team.total}`,
-          `Hold Out: ${fmt(this.holdLeft)}  |  SWAT Remaining: ${this.team.aliveCount}/${this.team.total}`,
-        ) + waveSuffix;
+      text = t(
+        `籠城 残り ${fmt(this.holdLeft)}　|　SWAT 残り ${this.team.aliveCount}/${this.team.total}`,
+        `Hold Out: ${fmt(this.holdLeft)}  |  SWAT Remaining: ${this.team.aliveCount}/${this.team.total}`,
+      );
     }
     if (text !== this.lastHud) {
       this.lastHud = text;
