@@ -161,8 +161,12 @@ class App {
   private readonly entities: EntityManager;
   private readonly hud: Hud;
   private readonly minimap: Minimap;
-  private readonly briefingScreen: BriefingScreen;
-  private readonly negotiationPhase: NegotiationPhase;
+  private briefingScreen: BriefingScreen;
+  private negotiationPhase: NegotiationPhase;
+  /** 交渉画面を作り直す（言語切替時。交渉開始前のみ） */
+  private makeNegotiation!: () => NegotiationPhase;
+  /** ブリーフィング画面を作り直す（言語切替時。マップは再生成しない） */
+  private makeBriefing!: () => BriefingScreen;
   private readonly pauseMenu: PauseMenu;
   private readonly unsubSettings: () => void;
   private wasLockedDuringPlay = false;
@@ -568,7 +572,7 @@ class App {
       this.swatTeam.attachBarricades(this.fortify);
       this.fortify.attachReceiver(this.swatTeam);
       const team = this.swatTeam;
-      this.negotiationPhase = new NegotiationPhase(
+      this.makeNegotiation = () => new NegotiationPhase(
         document.body,
         buildSuspectNegotiation({
           hostages,
@@ -600,8 +604,9 @@ class App {
         }),
         () => this.startMission(),
       );
+      this.negotiationPhase = this.makeNegotiation();
     } else {
-      this.negotiationPhase = new NegotiationPhase(
+      this.makeNegotiation = () => new NegotiationPhase(
         document.body,
         buildSwatNegotiation({
           suspects: () => [...this.entities.suspects.values()],
@@ -635,6 +640,7 @@ class App {
         }),
         () => this.startMission(),
       );
+      this.negotiationPhase = this.makeNegotiation();
       this.mission = new Mission(
         this.entities,
         (failed) => this.endMission(failed),
@@ -696,14 +702,16 @@ class App {
       seedInfo: seedShareInfo,
     });
 
-    this.briefingScreen = new BriefingScreen(document.body, map, {
-      onStart: () => this.openNegotiation(),
-      onRegenerate,
-      mode,
-      onBackToTitle,
-      onOpenSettings: () => this.pauseMenu.open('settings'),
-      seedShareInfo,
-    });
+    this.makeBriefing = () =>
+      new BriefingScreen(document.body, map, {
+        onStart: () => this.openNegotiation(),
+        onRegenerate,
+        mode,
+        onBackToTitle,
+        onOpenSettings: () => this.pauseMenu.open('settings'),
+        seedShareInfo,
+      });
+    this.briefingScreen = this.makeBriefing();
     this.briefingScreen.show();
     if (isFirstRun('negotiation')) this.negotiationPhase.showFirstTimeTip(() => markSeen('negotiation'));
     if (!suspect && map.allies.length > 0 && isFirstRun('squad')) {
@@ -732,11 +740,9 @@ class App {
         this.resolution.reset(undefined, s.aoEnabled);
       }
       if (s.language !== prev.language) {
-        if (this.phase === 'briefing') {
-          onRetry();
-        } else {
-          this.hud.refreshLocale();
-        }
+        // 言語切替でマップを作り直さない。文言を焼き込んだ画面だけ作り直す
+        if (this.phase === 'briefing') this.relocalizeBriefing();
+        this.hud.refreshLocale();
       }
     });
 
@@ -779,6 +785,16 @@ class App {
   }
 
   /** ブリーフィング → 突入前交渉 */
+  /** ブリーフィング中の言語切替: ブリーフィングと（まだ始まっていない）交渉画面だけを作り直す */
+  private relocalizeBriefing(): void {
+    this.briefingScreen.dispose();
+    this.negotiationPhase.dispose();
+    this.negotiationPhase = this.makeNegotiation();
+    if (isFirstRun('negotiation')) this.negotiationPhase.showFirstTimeTip(() => markSeen('negotiation'));
+    this.briefingScreen = this.makeBriefing();
+    this.briefingScreen.show();
+  }
+
   private openNegotiation(): void {
     if (this.phase !== 'briefing') return;
     this.pauseMenu.hide();
