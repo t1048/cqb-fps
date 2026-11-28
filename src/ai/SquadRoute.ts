@@ -16,6 +16,18 @@ export const STAIR_FLOOR_MATCH = 0.55;
 /** 階段退出点の既定許容半径（m）・高さ差（m） */
 const DEFAULT_STAIR_EXIT_RADIUS = 0.48;
 const STAIR_EXIT_Y = 0.16;
+/** 進捗判定の退出: 全長からの余裕（m）・退出側床高の許容差（m）・中心線からの横ずれ上限（m） */
+const STAIR_EXIT_PROGRESS_EPS = 0.05;
+const STAIR_EXIT_Y_PROGRESS = 0.2;
+const STAIR_EXIT_LATERAL = 1.0;
+/** 目的地が階段の途中にあるとみなす条件: 中心線からの水平距離（m）・上下端からの高さ余裕（m） */
+const STAIR_DEST_LATERAL = 0.9;
+const STAIR_DEST_Y_MARGIN = 0.2;
+/** 途中到達: 進捗差（m）と足元高との差（m） */
+const STAIR_DEST_ARRIVE_ALONG = 0.3;
+const STAIR_DEST_ARRIVE_Y = 0.5;
+/** 段の上にいるとみなす中心線からの横距離（m） */
+const STAIR_ON_FLIGHT_LATERAL = 1.0;
 /** 昇降中に中心線上で先読みする距離（m） */
 const STAIR_LOOKAHEAD = 0.35;
 
@@ -365,7 +377,13 @@ export function stairFloorY(s: StairMark, up: boolean): number {
   return up ? s.baseY : s.topY;
 }
 
-/** 退出点へ水平 exitRadius 以内かつ退出側の床高 ±STAIR_EXIT_Y に着いたか。 */
+/**
+ * 階段を昇り切った（降り切った）か。次のどちらかで真。
+ * (1) 退出点へ水平 exitRadius 以内かつ退出側の床高 ±STAIR_EXIT_Y（従来判定）。
+ * (2) 進入点→退出点の線分上の進捗が全長 - STAIR_EXIT_PROGRESS_EPS 以上、足元高が退出側の床高 ±STAIR_EXIT_Y_PROGRESS 以内、
+ *     かつ中心線からの横ずれが STAIR_EXIT_LATERAL 以内（ガード壁・ドアで退出点の小円から押し出されても到達とみなす）。
+ * byProgress=false なら (1) のみ。
+ */
 export function stairExitReached(
   s: StairMark,
   up: boolean,
@@ -373,9 +391,19 @@ export function stairExitReached(
   pz: number,
   footY: number,
   exitRadius = DEFAULT_STAIR_EXIT_RADIUS,
+  byProgress = true,
 ): boolean {
   const e = stairExit(s, up);
-  return Math.hypot(px - e.x, pz - e.z) <= exitRadius && Math.abs(footY - (up ? s.topY : s.baseY)) <= STAIR_EXIT_Y;
+  const exitY = up ? s.topY : s.baseY;
+  if (Math.hypot(px - e.x, pz - e.z) <= exitRadius && Math.abs(footY - exitY) <= STAIR_EXIT_Y) return true;
+  if (!byProgress || Math.abs(footY - exitY) > STAIR_EXIT_Y_PROGRESS) return false;
+  const a = stairEntry(s, up);
+  const vx = e.x - a.x;
+  const vz = e.z - a.z;
+  const len = Math.hypot(vx, vz);
+  if (len < 1e-6) return false;
+  const along = ((px - a.x) * vx + (pz - a.z) * vz) / len;
+  return along >= len - STAIR_EXIT_PROGRESS_EPS && distToSegment(px, pz, a, e) <= STAIR_EXIT_LATERAL;
 }
 
 export interface StairChoice {
@@ -487,4 +515,161 @@ export function distToSegment(px: number, pz: number, a: XZ, b: XZ): number {
   const l2 = vx * vx + vz * vz;
   const t = l2 > 1e-9 ? Math.max(0, Math.min(1, ((px - a.x) * vx + (pz - a.z) * vz) / l2)) : 0;
   return Math.hypot(px - (a.x + vx * t), pz - (a.z + vz * t));
+}
+
+/** 目的地が載っている階段（途中の高さ）と、その中心線上の投影。 */
+export interface StairDestHit {
+  stair: StairMark;
+  /** approachLow を起点にした dest の中心線上の進捗（m） */
+  along: number;
+  /** approachLow→approachHigh の長さ（m） */
+  len: number;
+}
+
+/**
+ * dest が階段の途中にあるか。中心線への水平距離が STAIR_DEST_LATERAL 以内で、
+ * dest.y が (baseY + 余裕, topY - 余裕) の範囲に入る階段を返す（誰の目的地かは問わない）。
+ */
+export function findDestStair(stairs: readonly StairMark[], dest: { x: number; z: number; y: number }): StairDestHit | null {
+  let best: StairDestHit | null = null;
+  let bestDist = Infinity;
+  for (const s of stairs) {
+    if (!(dest.y > s.baseY + STAIR_DEST_Y_MARGIN && dest.y < s.topY - STAIR_DEST_Y_MARGIN)) continue;
+    const d = distToSegment(dest.x, dest.z, s.approachLow, s.approachHigh);
+    if (d > STAIR_DEST_LATERAL || d >= bestDist) continue;
+    const vx = s.approachHigh.x - s.approachLow.x;
+    const vz = s.approachHigh.z - s.approachLow.z;
+    const len = Math.hypot(vx, vz);
+    if (len < 1e-6) continue;
+    const along = ((dest.x - s.approachLow.x) * vx + (dest.z - s.approachLow.z) * vz) / len;
+    best = { stair: s, along: Math.min(len, Math.max(0, along)), len };
+    bestDist = d;
+  }
+  return best;
+}
+
+export type StairRunKind =
+  /** 階段に関与しない（通常の経路探索へ） */
+  | 'none'
+  /** 昇降を続ける（target へ向かう。stair/up を activeStair に設定する） */
+  | 'run'
+  /** 目的地が載る階段の進入側の床にいる（進入点へ歩き、着いたら activeStair を設定する） */
+  | 'enter'
+  /** 退出した（activeStair を解除） */
+  | 'exit'
+  /** 停滞で今の昇降をやめる（activeStair のみ解除。停滞カウンタは触らない） */
+  | 'giveup'
+  /** 階段途中の目的地に着いた（activeStair を解除して停止） */
+  | 'arrived';
+
+export interface StairRunPlan {
+  kind: StairRunKind;
+  stair?: StairMark;
+  up?: boolean;
+  target?: XZ;
+}
+
+export interface StairRunInput {
+  stairs: readonly StairMark[];
+  active: { id: string; up: boolean } | null;
+  px: number;
+  pz: number;
+  footY: number;
+  /** 現在の停滞秒数（呼び出し側が持つ。この関数は変更しない） */
+  stalled: number;
+  stallResetSec: number;
+  exitRadius: number;
+  /** 階段途中の目的地への到達許容（水平 m） */
+  arriveTol: number;
+  dest: { x: number; z: number; y: number };
+}
+
+const STAIR_PLAN_NONE: StairRunPlan = { kind: 'none' };
+
+/**
+ * 昇降まわりの判断を 1 か所にまとめた共通関数（Squad / Suspect 共用）。
+ * 昇降中の継続・退出・停滞放棄に加え、目的地が階段の途中にある場合の「途中で止まる」到達判定と進入を扱う。
+ * 停滞放棄では stalled を戻さない（呼び出し側の段階的な停滞復帰を妨げないため）。
+ */
+export function stairRunPlan(inp: StairRunInput): StairRunPlan {
+  const { stairs, active, px, pz, footY, dest } = inp;
+  const hit = findDestStair(stairs, dest);
+
+  if (active) {
+    const s = stairs.find((m) => m.id === active.id);
+    if (!s) return { kind: 'exit' };
+    // 目的地がこの階段の途中にあるときは、退出判定より到達判定を優先する（遠い床まで行き過ぎない）
+    const midHere = hit && hit.stair.id === s.id ? hit : null;
+    if (midHere) {
+      const mid = midStairPlan(midHere, px, pz, footY, inp);
+      if (mid) return mid;
+    } else if (stairExitReached(s, active.up, px, pz, footY, inp.exitRadius)) {
+      return { kind: 'exit' };
+    }
+    if (inp.stalled >= inp.stallResetSec) return { kind: 'giveup' };
+    if (midHere) return midRunPlan(midHere, px, pz, footY, dest);
+    return { kind: 'run', stair: s, up: active.up, target: stairRunTarget(s, active.up, px, pz) };
+  }
+
+  // 自分が段の上にいて、目的地が足元より上下にあるなら、chooseStair を通さず今の階段で昇降を再開する
+  // （放棄後に pickBestStair の候補が床高で外れる／隣レーンの階段が選ばれるのを防ぐ）。足元と同高の途中目的地は下の mid 処理へ
+  for (const m of stairs) {
+    if (hit && hit.stair === m) continue;
+    if (
+      footY > m.baseY + 0.1 &&
+      footY < m.topY - 0.1 &&
+      distToSegment(px, pz, m.approachLow, m.approachHigh) <= STAIR_ON_FLIGHT_LATERAL &&
+      Math.abs(dest.y - footY) > STAIR_DEST_Y_MARGIN &&
+      !(hit && Math.abs(dest.y - footY) <= STAIR_DEST_ARRIVE_Y)
+    ) {
+      const up = dest.y > footY;
+      return { kind: 'run', stair: m, up, target: stairRunTarget(m, up, px, pz) };
+    }
+  }
+
+  if (!hit) return STAIR_PLAN_NONE;
+  const s = hit.stair;
+  const arrived = midStairPlan(hit, px, pz, footY, inp);
+  if (arrived) return arrived;
+  const onFlight =
+    footY > s.baseY + 0.1 &&
+    footY < s.topY - 0.1 &&
+    distToSegment(px, pz, s.approachLow, s.approachHigh) <= STAIR_ON_FLIGHT_LATERAL;
+  if (onFlight) return midRunPlan(hit, px, pz, footY, dest);
+  const dLow = Math.abs(footY - s.baseY);
+  const dHigh = Math.abs(footY - s.topY);
+  if (dLow > STAIR_FLOOR_MATCH && dHigh > STAIR_FLOOR_MATCH) return STAIR_PLAN_NONE;
+  return { kind: 'enter', stair: s, up: dLow <= dHigh };
+}
+
+/** 階段途中の目的地に着いたか（進捗差 or 水平距離、かつ足元高が近い）。 */
+function midStairPlan(hit: StairDestHit, px: number, pz: number, footY: number, inp: StairRunInput): StairRunPlan | null {
+  const { dest } = inp;
+  if (Math.abs(footY - dest.y) > STAIR_DEST_ARRIVE_Y) return null;
+  const s = hit.stair;
+  // 中心線から離れた位置（踊り場の横・隣の部屋）では到達とみなさない
+  if (distToSegment(px, pz, s.approachLow, s.approachHigh) > STAIR_ON_FLIGHT_LATERAL) return null;
+  const vx = s.approachHigh.x - s.approachLow.x;
+  const vz = s.approachHigh.z - s.approachLow.z;
+  const along = ((px - s.approachLow.x) * vx + (pz - s.approachLow.z) * vz) / hit.len;
+  if (Math.abs(along - hit.along) <= STAIR_DEST_ARRIVE_ALONG || Math.hypot(dest.x - px, dest.z - pz) <= inp.arriveTol) {
+    return { kind: 'arrived' };
+  }
+  return null;
+}
+
+/** 階段途中の目的地へ向かう昇降目標: 中心線上で目的地の進捗へ向かう（STAIR_LOOKAHEAD 先まで。行き過ぎない）。 */
+function midRunPlan(hit: StairDestHit, px: number, pz: number, footY: number, dest: { y: number }): StairRunPlan {
+  const s = hit.stair;
+  const vx = s.approachHigh.x - s.approachLow.x;
+  const vz = s.approachHigh.z - s.approachLow.z;
+  const along = ((px - s.approachLow.x) * vx + (pz - s.approachLow.z) * vz) / hit.len;
+  const diff = hit.along - along;
+  const t = Math.min(hit.len, Math.max(0, along + Math.max(-STAIR_LOOKAHEAD, Math.min(STAIR_LOOKAHEAD, diff))));
+  return {
+    kind: 'run',
+    stair: s,
+    up: dest.y > footY,
+    target: { x: s.approachLow.x + (vx / hit.len) * t, z: s.approachLow.z + (vz / hit.len) * t },
+  };
 }
