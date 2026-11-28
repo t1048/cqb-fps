@@ -428,6 +428,19 @@ const NAV_STAIR_EXIT_RADIUS = 0.48;
 const NAV_STAIR_STALL_RESET = 2.0;
 const NAV_STUCK_RESET = 1.2;
 const NAV_STUCK_ABORT = 3.2;
+/**
+ * 開いた扉板に行く手を塞がれて止まったとき、その扉を閉めて通路を空けるまでの停滞秒数。
+ * 狭い通路の両側の扉が通路側へ開くと、2 枚の扉板の隙間が体の幅より狭くなって通れなくなる。
+ */
+const NAV_DOOR_PUSH_SEC = 0.8;
+/** 扉板が「すぐ脇にある」とみなす、体の中心から扉板までの距離（m） */
+const NAV_DOOR_PUSH_REACH = 0.55;
+/** 自分が通り抜けようとしている（戸口に立っている）扉は閉めない: 戸口中心からの距離（m） */
+const NAV_DOOR_PUSH_DOORWAY_CLEAR = 0.9;
+/** 経路の目標がこれより近いときは閉めない（経路が空なのは「着いている」ため） */
+const NAV_DOOR_PUSH_MIN_GOAL_DIST = 1.0;
+/** 同じ扉を閉めてから再び閉めるまでの間隔（s）。開け閉めを往復しない */
+const NAV_DOOR_PUSH_COOLDOWN = 8;
 
 /**
  * 音源・射撃位置などの 3D 座標から該当フロアの床高(floorY)を推定する。
@@ -498,6 +511,8 @@ export class SuspectNavigator {
   private doorOpenTimer = 0;
   private doorOpenTargetId: string | null = null;
   private readonly skippedDoors = new Map<string, number>();
+  /** 行く手を塞ぐ扉板を閉めた扉と、再び閉めてよくなるまでの秒数 */
+  private readonly pushedDoors = new Map<string, number>();
   private stalled = 0;
   private anchor: XZ;
   private openingDoorNow = false;
@@ -642,6 +657,45 @@ export class SuspectNavigator {
     return best;
   }
 
+  /**
+   * すぐ脇で行く手を塞いでいる、開いたまま止まっている扉の板を閉める（自分が通り抜け中の戸口の扉は除く）。
+   * 閉めた扉は壁に沿って収まるので、通路側へ開いた扉板どうしの隙間に挟まれて動けない状態を解消できる。
+   */
+  private pushBlockingDoor(): boolean {
+    const doors = this.ctx.doors?.doors;
+    if (!doors) return false;
+    const body = this.body;
+    const reach2 = (BODY_RADIUS + NAV_DOOR_PUSH_REACH) ** 2;
+    for (const door of doors) {
+      if (door.locked || door.isMoving || door.angle < NAV_DOOR_OPEN_ANGLE) continue;
+      if (this.pushedDoors.has(door.id)) continue;
+      if (Math.abs(door.sillY - body.footY) > 0.65) continue;
+      if (Math.hypot(body.px - door.centerX, body.pz - door.centerZ) < NAV_DOOR_PUSH_DOORWAY_CLEAR) continue;
+      let near = false;
+      for (const c of door.colliders) {
+        const a = c.aabb;
+        const dx = body.px - Math.max(a.min.x, Math.min(body.px, a.max.x));
+        const dz = body.pz - Math.max(a.min.z, Math.min(body.pz, a.max.z));
+        if (dx * dx + dz * dz <= reach2) {
+          near = true;
+          break;
+        }
+      }
+      if (!near) continue;
+      this.openingDoorNow = true;
+      let moved = false;
+      try {
+        moved = door.command(0, false, body.px, body.pz);
+      } finally {
+        this.openingDoorNow = false;
+      }
+      if (!moved) continue;
+      this.pushedDoors.set(door.id, NAV_DOOR_PUSH_COOLDOWN);
+      return true;
+    }
+    return false;
+  }
+
   private chooseStair(
     up: boolean,
     dt: number,
@@ -699,6 +753,10 @@ export class SuspectNavigator {
       if (left - dt <= 0) this.skippedDoors.delete(doorId);
       else this.skippedDoors.set(doorId, left - dt);
     }
+    for (const [doorId, left] of this.pushedDoors) {
+      if (left - dt <= 0) this.pushedDoors.delete(doorId);
+      else this.pushedDoors.set(doorId, left - dt);
+    }
 
     const sameFloor = Math.abs(dest.y - body.footY) <= 0.75;
     const distToDest = Math.hypot(dest.x - body.px, dest.z - body.pz);
@@ -732,6 +790,21 @@ export class SuspectNavigator {
         resolveOverlap(body, this.ctx.colliders, BODY_RADIUS);
         this.stalled = 0;
         return 'blocked';
+      }
+      // 経路探索が通り道を見つけられず（path が空）止まっているときだけ: 一時的な人の詰まりで扉を閉めない
+      if (
+        opts.canOpenDoors &&
+        this.stalled >= NAV_DOOR_PUSH_SEC &&
+        this.pathGoal !== null &&
+        this.path.length === 0 &&
+        Math.hypot(this.pathGoal.x - body.px, this.pathGoal.z - body.pz) > NAV_DOOR_PUSH_MIN_GOAL_DIST &&
+        this.pushBlockingDoor()
+      ) {
+        // 扉板を閉めて通路を空けた: 経路を引き直す
+        this.path.length = 0;
+        this.pathGoal = null;
+        this.stalled = 0;
+        this.anchor = { x: body.px, z: body.pz };
       }
       if (this.stalled >= NAV_STUCK_RESET && this.path.length > 0) {
         resolveOverlap(body, this.ctx.colliders, BODY_RADIUS);
