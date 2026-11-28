@@ -34,6 +34,8 @@ export interface Collider {
    * 空間索引（ColliderIndex）はこれがあればこの範囲で登録し、無い動的コライダは常に候補へ含める。
    */
   sweep?: { minX: number; minZ: number; maxX: number; maxZ: number };
+  /** true の間、投擲物（フラッシュバン・CS ガス）の衝突と投擲計画の射線から外す（開き動作中のドア板） */
+  throwPass?: boolean;
 }
 
 const DEG2RAD = Math.PI / 180;

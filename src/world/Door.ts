@@ -245,6 +245,20 @@ export class Door {
     this.applyMesh();
   }
 
+  /**
+   * 開き動作中（角度が増えている間）は扉板が投擲物（フラッシュバン・CS ガス）をすり抜けさせる。
+   * 開いている途中の扉板に当たって室内へ入らないのを防ぐため。開き切った（または途中で止まった）時点で戻す。
+   * 閉める動作・蹴り失敗の跳ね返り中は当たる。移動・射線・視線は常に扉板に遮られる。
+   */
+  get throwablePassThrough(): boolean {
+    return this.colliders[0]?.throwPass === true;
+  }
+
+  private syncThrowPass(): void {
+    const opening = this.isMoving && this.targetAngle > this.angle && this.kickRecoil === null;
+    for (const c of this.colliders) c.throwPass = opening;
+  }
+
   get stage(): DoorStage {
     if (this.angle < EPS) return 'closed';
     return this.angle < (this.peekAngle + this.maxAngle) / 2 ? 'peek' : 'open';
@@ -688,7 +702,10 @@ export class Door {
       this.kickRecoil = null;
       this.speedMul = 1;
     }
-    if (!this.isMoving) return;
+    if (!this.isMoving) {
+      if (this.colliders[0]?.throwPass) this.syncThrowPass();
+      return;
+    }
     const step = this.cfg.swingSpeed * this.speedMul * dt;
     const diff = this.targetAngle - this.angle;
     const next = Math.abs(diff) <= step ? this.targetAngle : this.angle + Math.sign(diff) * step;
@@ -696,6 +713,7 @@ export class Door {
     const sameFloor = playerY >= this.sillY - 0.25 && playerY <= this.sillY + this.height;
     if (sameFloor && this.overlapsCircle(this.tmp, playerX, playerZ, playerRadius)) {
       this.targetAngle = this.angle; // 挟みそうなので停止
+      this.syncThrowPass();
       return;
     }
     this.angle = next;
@@ -707,6 +725,7 @@ export class Door {
       d.max.x = s.max.x;
       d.max.z = s.max.z;
     }
+    this.syncThrowPass();
     this.applyMesh();
   }
 

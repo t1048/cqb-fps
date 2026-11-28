@@ -4,6 +4,7 @@ import type { RoomDef, SquadConfig, SquadElement, SquadOrder, Vec3 } from '../co
 import type { PlayerController } from '../player/PlayerController';
 import type { Door, DoorSystem } from '../world/Door';
 import type { Collider } from '../world/WorldBuilder';
+import type { StairMark } from '../world/Walk';
 import { raycastColliders, someColliderAlongSegment } from '../world/ColliderIndex';
 import { hasLineOfSight } from '../weapons/Flashbang';
 import { blockedAt } from '../ai/EngageBehavior';
@@ -41,10 +42,20 @@ export interface AreaClearTarget {
   door: Door | null;
 }
 
+/** 照準した階段（階段クリアの対象）。up = いまの階から上る（false は下る）。 */
+export interface StairTarget {
+  stair: StairMark;
+  up: boolean;
+  /** 照準点までの距離（m） */
+  dist: number;
+}
+
 export interface OrderContext {
   element: SquadElement;
   door: Door | null;
   areaTarget: AreaClearTarget | null;
+  /** 照準した階段（閉じたドア・確保対象を見ているときは null） */
+  stairTarget?: StairTarget | null;
   groundPoint: GroundTarget | null;
   restrainTarget: RestrainTarget | null;
   aimDir: { x: number; z: number };
@@ -207,6 +218,7 @@ export class CommandMenu {
     private readonly colliders: readonly Collider[],
     private readonly entities: EntityManager,
     private readonly rooms: readonly RoomDef[],
+    private readonly stairs: readonly StairMark[] = [],
   ) {
     this.root.name = 'squad-markers';
     this.styleEl.textContent = STYLE;
@@ -329,11 +341,13 @@ export class CommandMenu {
 
     const restrainTarget = this.findRestrainTarget();
     const groundPoint = this.findGroundPoint();
+    const stairTarget = door || restrainTarget ? null : this.findStairTarget();
 
     const ctx: OrderContext = {
       element,
       door,
       areaTarget,
+      stairTarget,
       groundPoint,
       restrainTarget,
       aimDir: { x: -Math.sin(yaw), z: -Math.cos(yaw) },
@@ -520,6 +534,64 @@ export class CommandMenu {
     return null;
   }
 
+  /**
+   * 視線の先にある階段（いまの階に昇降口がある階段）を探す。段の中心線・出口の踊り場の点のどれかが
+   * 視線のすぐ近く（距離に応じて 0.55m〜）にあり、目から見通せるものを選ぶ。
+   */
+  findStairTarget(): StairTarget | null {
+    if (this.stairs.length === 0) return null;
+    const py = this.player.position.y;
+    let best: StairTarget | null = null;
+    let bestScore = Infinity;
+    const p: Vec3 = { x: 0, y: 0, z: 0 };
+    for (const s of this.stairs) {
+      let up: boolean;
+      if (Math.abs(py - s.baseY) < 0.75) up = true;
+      else if (Math.abs(py - s.topY) < 0.75) up = false;
+      else continue;
+      const entry = up ? s.approachLow : s.approachHigh;
+      if (Math.hypot(entry.x - this.player.position.x, entry.z - this.player.position.z) > 12) continue;
+      const exit = up ? s.approachHigh : s.approachLow;
+      const exitY = up ? s.topY : s.baseY;
+      const entryY = up ? s.baseY : s.topY;
+      // 進入点 → 段の中心線 → 出口の先（踊り場）を 0.4〜0.6m 刻みで見る
+      const SAMPLES = 10;
+      for (let i = 0; i <= SAMPLES + 2; i++) {
+        if (i <= SAMPLES) {
+          const u = i / SAMPLES;
+          p.x = entry.x + (exit.x - entry.x) * u;
+          p.z = entry.z + (exit.z - entry.z) * u;
+          p.y = entryY + (exitY - entryY) * u + 0.45;
+        } else {
+          const k = i - SAMPLES;
+          const dx = exit.x - entry.x;
+          const dz = exit.z - entry.z;
+          const len = Math.hypot(dx, dz) || 1;
+          p.x = exit.x + (dx / len) * 0.7 * k;
+          p.z = exit.z + (dz / len) * 0.7 * k;
+          p.y = exitY + 0.9;
+        }
+        const vx = p.x - this.eye.x;
+        const vy = p.y - this.eye.y;
+        const vz = p.z - this.eye.z;
+        const tAlong = vx * this.dir.x + vy * this.dir.y + vz * this.dir.z;
+        if (tAlong < 0.4 || tAlong > 14) continue;
+        const ex = vx - this.dir.x * tAlong;
+        const ey = vy - this.dir.y * tAlong;
+        const ez = vz - this.dir.z * tAlong;
+        const perp = Math.hypot(ex, ey, ez);
+        const tol = 0.55 + tAlong * 0.05;
+        if (perp > tol) continue;
+        const score = perp / tol + tAlong * 0.01;
+        if (score >= bestScore) continue;
+        if (!hasLineOfSight(this.colliders, this.eye, p)) continue;
+        bestScore = score;
+        best = { stair: s, up, dist: tAlong };
+      }
+    }
+    return best;
+  }
+
   private findRestrainTarget(): RestrainTarget | null {
     let best: RestrainTarget | null = null;
     let bestDist = 12;
@@ -665,6 +737,29 @@ export class CommandMenu {
       add('entry', 'gasClear', gasLabel(t('ガス＆クリア（催涙ガス→突入）', 'Gas & Clear (CS Gas + Entry)')), gasOk);
       add('entry', 'c2Clear', t('C2＆クリア（爆破ブリーチ突入）', 'C2 & Clear (Explosive Breach)'), true);
       add('entry', 'breachClear', t('ブリーチ＆クリア（強行突入）', 'Breach & Clear (Forced Entry)'), true);
+    } else if (ctx.stairTarget) {
+      const up = ctx.stairTarget.up;
+      add('prep', 'stack', t('スタックアップ（階段口で待機）', 'Stack Up (Hold at Stairs)'), true);
+      if (ctx.groundPoint) add('prep', 'move', moveLabel(ctx.groundPoint), true);
+      add('prep', 'overwatch', overwatchLabel, true);
+      add(
+        'entry',
+        'stairClear',
+        up
+          ? t('階段クリア（上階口へ照準・縦列で上る）', 'Clear Stairs (Cover Top, File Up)')
+          : t('階段クリア（下階口へ照準・縦列で下りる）', 'Clear Stairs (Cover Bottom, File Down)'),
+        true,
+      );
+      add(
+        'entry',
+        'stairFlashClear',
+        flashLabel(
+          up
+            ? t('フラッシュ＆階段クリア（上階口へ閃光→上る）', 'Flash & Clear Stairs (Bang Top, Move Up)')
+            : t('フラッシュ＆階段クリア（下階口へ閃光→下りる）', 'Flash & Clear Stairs (Bang Bottom, Move Down)'),
+        ),
+        flashOk,
+      );
     } else if (ctx.areaTarget) {
       add('prep', 'stack', t('スタックアップ（入口脇で待機）', 'Stack Up (Hold by Entry)'), true);
       if (ctx.groundPoint) add('prep', 'move', moveLabel(ctx.groundPoint), true);
@@ -702,6 +797,10 @@ export class CommandMenu {
         `照準対象: ドア${ctx.door.locked ? ' [施錠]' : ` (${ctx.door.stage})`}`,
         `Target: Door${ctx.door.locked ? ' [Locked]' : ` (${ctx.door.stage})`}`,
       );
+    } else if (ctx.stairTarget) {
+      this.ctxEl.textContent = ctx.stairTarget.up
+        ? t('照準対象: 階段（上り・上階口が死角）', 'Target: Stairs (Up — top is a blind spot)')
+        : t('照準対象: 階段（下り・下階口が死角）', 'Target: Stairs (Down — bottom is a blind spot)');
     } else if (ctx.areaTarget) {
       const roomLabel = tRoomName(ctx.areaTarget.room.name);
       this.ctxEl.textContent = t(
@@ -788,7 +887,7 @@ export class CommandMenu {
   }
 
   private updatePreview(ctx: OrderContext): void {
-    if (!this.open || !ctx.groundPoint || ctx.door || ctx.areaTarget || ctx.restrainTarget) {
+    if (!this.open || !ctx.groundPoint || ctx.door || ctx.areaTarget || ctx.stairTarget || ctx.restrainTarget) {
       this.previewMesh.visible = false;
       return;
     }

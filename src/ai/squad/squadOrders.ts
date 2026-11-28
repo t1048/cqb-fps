@@ -29,6 +29,7 @@ import { approachSign, computeMoveSlots } from './squadMovement';
 import { assignPortalGroup, findRoomAcrossDoor } from './squadEntry';
 import { applyScoutPreAim, doorKnowledge, startCheck, startDisarm, startMirror } from './squadScout';
 import { findNearestActionableId } from './squadClearing';
+import { beginStairOp, stairOpBusy } from './squadStairs';
 
 const ORDER_I18N_KEY: Record<SquadOrder, string> = {
   follow: 'follow',
@@ -46,6 +47,8 @@ const ORDER_I18N_KEY: Record<SquadOrder, string> = {
   mirror: 'mirror',
   check: 'check',
   disarm: 'disarm',
+  stairClear: 'stair_clear',
+  stairFlashClear: 'stair_flash_clear',
 };
 
 export function orderLabelText(cfg: SquadConfig, order: SquadOrder): string {
@@ -143,6 +146,8 @@ export interface QuickOrderInfo {
   trapKnown: boolean;
   /** ドアチェック済み */
   checked: boolean;
+  /** 階段を見ているとき: 上り（true）/ 下り（false）。それ以外は null */
+  stairUp?: boolean | null;
 }
 
 /** 既知の脅威・民間人から推奨を決める。容疑者のみ→ガス / 容疑者+民間人→閃光 / 空→プレーン。 */
@@ -213,6 +218,12 @@ export function quickOrderInfo(ctx: SquadContext, orderCtx: OrderContext): Quick
     if (!checked) return { ...base, order: 'check', stage: 'check', busy: null };
     return { ...base, order: entryOrder, stage: 'entry', busy: null };
   }
+  if (orderCtx.stairTarget) {
+    const st = orderCtx.stairTarget;
+    const targets = activeTargets(ctx, orderCtx.element);
+    const busy = stairOpBusy(targets, st.stair.id);
+    return { ...none, order: 'stairClear', stage: 'entry', busy: busy ? 'entry' : null, stairUp: st.up };
+  }
   if (orderCtx.areaTarget) {
     const room = orderCtx.areaTarget.room;
     const scouted = ctx.intel.isScouted(room.id);
@@ -270,7 +281,13 @@ export function quickOrderHint(ctx: SquadContext, dt: number): string {
     else if (info.stage === 'entry') {
       const trap = info.trapKnown ? t('（罠発見: 解除してから開ける）', ' (trap found: disarm first)') : '';
       const style =
-        info.order === 'clear' && ctx.entryMode === 'stealth' ? t('（ステルス: パイ切り）', ' (Stealth: pie)') : '';
+        info.order === 'clear' && ctx.entryMode === 'stealth'
+          ? t('（ステルス: パイ切り）', ' (Stealth: pie)')
+          : info.order === 'stairClear'
+            ? info.stairUp
+              ? t('（上階口へ照準・縦列で上る）', ' (cover the top, file up)')
+              : t('（下階口へ照準・縦列で下りる）', ' (cover the bottom, file down)')
+            : '';
       text = `Z : ${orderLabelText(ctx.cfg, info.order)}${style}${trap}`;
     } else {
       text = `Z : ${orderLabelText(ctx.cfg, info.order)}`;
@@ -331,6 +348,30 @@ export function executeOrder(ctx: SquadContext, requested: SquadOrder, orderCtx:
   if (order === 'gasClear' && ctx.gasLeft <= 0) {
     ctx.ack = t('CS ガスが残っていません', 'Out of CS gas');
     ctx.ackLeft = 1.8;
+    return;
+  }
+  if (order === 'stairFlashClear' && ctx.flashesLeft <= 0) {
+    ctx.ack = t('閃光弾が残っていません', 'Out of flashbangs');
+    ctx.ackLeft = 1.8;
+    return;
+  }
+
+  // 階段クリア（階段を見て stack / stairClear / stairFlashClear）
+  const stairTarget = orderCtx.door || orderCtx.restrainTarget ? null : (orderCtx.stairTarget ?? null);
+  if (order === 'stairClear' || order === 'stairFlashClear' || (order === 'stack' && stairTarget)) {
+    if (!stairTarget) {
+      ctx.ack = t('階段を見て実行します', 'Look at the stairs to do this');
+      ctx.ackLeft = 1.4;
+      return;
+    }
+    const mode = order === 'stack' ? 'stack' : order === 'stairFlashClear' ? 'flash' : 'clear';
+    const stairLabel = orderLabelText(ctx.cfg, order);
+    ctx.ack = t(
+      `${targets.map((a) => a.name).join('・')}：${stairLabel}、了解`,
+      `${targets.map((a) => a.name).join(', ')}: ${stairLabel}, copy`,
+    );
+    ctx.ackLeft = 1.5;
+    beginStairOp(ctx, targets, stairTarget.stair, stairTarget.up, mode);
     return;
   }
 
@@ -589,6 +630,8 @@ export function resetUnitForOrder(ally: AllyUnit, order: SquadOrder): void {
   ally.checkStarted = false;
   ally.disarmLeft = 0;
   ally.disarmStarted = false;
+  ally.stairOp = null;
+  ally.stairStartT = -1;
   ally.body.setPose('stand');
   ally.body.setLean(0);
 }

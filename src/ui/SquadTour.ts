@@ -45,6 +45,10 @@ function getStep(index: number): { title: string; body: string; sub?: string } {
         '仲間を呼び戻すときは <kbd>X</kbd>。ほかの操作は、慣れてから少しずつで大丈夫です。',
         'Press <kbd>X</kbd> to recall your squad. You can pick up the rest of the controls as you go.',
       ),
+      sub: t(
+        '階段は上（下）の階口で待ち伏せられやすい場所です。連れて上がらず、<b>階段を見て</b> <kbd>Z</kbd>（階段クリア）で上らせましょう',
+        'Stairs are a favorite ambush spot. Instead of leading the squad up, <b>look at the stairs</b> and press <kbd>Z</kbd> (Clear Stairs)',
+      ),
     },
   ];
   return steps[index]!;

@@ -48,6 +48,21 @@ export function hasLineOfSight(colliders: readonly Collider[], a: Vec3, b: Vec3)
   return !someColliderAlongSegment(colliders, a.x, a.z, b.x, b.z, (c) => segmentHitsAABB(a, dx, dy, dz, c.aabb));
 }
 
+/** 投擲物の軌道用の射線判定。開き動作中のドア板（throwPass）は無視する。 */
+export function hasThrowLineOfSight(colliders: readonly Collider[], a: Vec3, b: Vec3): boolean {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
+  return !someColliderAlongSegment(
+    colliders,
+    a.x,
+    a.z,
+    b.x,
+    b.z,
+    (c) => !c.throwPass && segmentHitsAABB(a, dx, dy, dz, c.aabb),
+  );
+}
+
 /** スラブ法。視線判定の最内ループなので配列を確保せず軸ごとに展開している。 */
 function segmentHitsAABB(o: Vec3, dx: number, dy: number, dz: number, box: AABB): boolean {
   let t0 = 0;
@@ -382,6 +397,7 @@ export class Flashbang {
 
     const near = collidersNear(this.colliders, p.x - r - 0.05, p.z - r - 0.05, p.x + r + 0.05, p.z + r + 0.05);
     for (let i = 0; i < near.length; i++) {
+      if (near[i]!.throwPass) continue; // 開き動作中のドア板はすり抜ける
       const a = near[i]!.aabb;
       if (p.x < a.min.x - r || p.x > a.max.x + r || p.y < a.min.y - r || p.y > a.max.y + r) continue;
       if (p.z < a.min.z - r || p.z > a.max.z + r) continue;
