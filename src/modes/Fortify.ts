@@ -15,6 +15,7 @@ import { invalidateColliderIndex } from '../world/ColliderIndex';
 import type { Door, DoorSystem } from '../world/Door';
 import type { TextureLibrary } from '../world/Materials';
 import type { Collider } from '../world/WorldBuilder';
+import type { SuspectLoadout } from './SuspectLoadout';
 
 const DEG = Math.PI / 180;
 /** 窓を板で塞ぐのに要する長押し秒数（プレイヤー） */
@@ -29,10 +30,12 @@ const ALLY_WORK_RATE = 1;
 const COST_UPGRADE = 16;
 const COST_TRAP = 9;
 const BASE_TRAPS = 2;
+/** 仲間が準備中に製作するトラップ数の既定値 */
+const BASE_CRAFTED_TRAPS = 2;
 /** 爆発の致傷半径（m） */
 export const TRAP_BLAST_RADIUS = 3.4;
 const DISABLED_Y = -1000;
-/** バリケードの耐久（改造拳銃 19 で約 9 発、SWAT 12 で約 14 発） */
+/** バリケードの基本耐久（改造拳銃 19 で約 9 発、SWAT 12 で約 14 発）。持ち込んだ補強材の倍率を掛ける */
 const BARRICADE_HP = 170;
 
 /** SWAT が窓バリケードを認識・破壊するための読み取り専用スナップショット */
@@ -106,6 +109,8 @@ export interface FortifyDeps {
   showGauge: (label: string, ratio: number) => void;
   /** 民間人が爆発で死亡した（減点用） */
   onCivilianKilled: (c: Civilian) => void;
+  /** 建物の規模に応じた持ち込み装備（未指定 = 小さな民家相当の従来値） */
+  loadout?: Pick<SuspectLoadout, 'trapKits' | 'craftedTraps' | 'barricadeHpMul'>;
 }
 
 /**
@@ -121,7 +126,9 @@ export class Fortify {
   private boardedCache: BarricadeInfo[] = [];
   private boardedDirty = false;
   private readonly traps = new Map<string, DoorTrap>();
-  private trapKits = BASE_TRAPS;
+  private trapKits: number;
+  /** 窓バリケード 1 枚の最大耐久（BARRICADE_HP × 補強材倍率） */
+  private readonly barricadeHp: number;
   private readonly tasks: PrepTask[] = [];
   private work = 0;
   private upgraded = false;
@@ -145,11 +152,13 @@ export class Fortify {
     d.scene.add(this.root);
     this.woodMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x9a7a52, roughness: 0.85 });
     this.backMat = new THREE.MeshStandardMaterial({ map: d.textures.get('wood'), color: 0x6e5236, roughness: 0.9 });
+    this.trapKits = d.loadout?.trapKits ?? BASE_TRAPS;
+    this.barricadeHp = Math.round(BARRICADE_HP * (d.loadout?.barricadeHpMul ?? 1));
     for (let i = 0; i < d.windows.length; i++) this.barricades.push(this.makeBarricade(d.windows[i]!, i));
     // 仲間の準備: 武器改造 → トラップ部材（窓のバリケードは自分で張る。自動では張らない）
     this.tasks.push({ kind: 'upgrade' });
-    this.tasks.push({ kind: 'trap' });
-    this.tasks.push({ kind: 'trap' });
+    const crafted = d.loadout?.craftedTraps ?? BASE_CRAFTED_TRAPS;
+    for (let i = 0; i < crafted; i++) this.tasks.push({ kind: 'trap' });
 
     this.el.style.cssText =
       'position:fixed;left:50%;top:52px;transform:translateX(-50%);z-index:6;pointer-events:none;padding:4px 12px;' +
@@ -164,7 +173,7 @@ export class Fortify {
         priority: 240,
         resolve: () => (this.d.player.alive ? this.aimedWindow() : null),
         label: (b) => {
-          const pct = Math.max(0, Math.round((b.hp / BARRICADE_HP) * 100));
+          const pct = Math.max(0, Math.round((b.hp / this.barricadeHp) * 100));
           if (b.boarded) {
             return t(`窓: F 長押しで板を外す（耐久 ${pct}%）`, `Window: Hold F to Remove Boards (HP ${pct}%)`);
           }
@@ -346,7 +355,7 @@ export class Fortify {
     }
     b.boarded = v;
     b.mesh.visible = v;
-    b.hp = v ? BARRICADE_HP : 0;
+    b.hp = v ? this.barricadeHp : 0;
     this.boardedDirty = true;
     for (const p of b.planks) p.visible = true;
     const a = b.collider.aabb;
@@ -383,7 +392,7 @@ export class Fortify {
       }
       this.boardedDirty = true;
       // 残り耐久に応じて表板を剥がす（裏板は残るので視線は通らない）
-      const keep = Math.ceil((b.hp / BARRICADE_HP) * b.planks.length);
+      const keep = Math.ceil((b.hp / this.barricadeHp) * b.planks.length);
       const visible = b.planks.filter((m) => m.visible);
       while (visible.length > keep) {
         const i = Math.floor(Math.random() * visible.length);
