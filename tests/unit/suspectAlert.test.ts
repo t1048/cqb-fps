@@ -185,6 +185,11 @@ describe('交渉の結果 → 警戒度ベースライン', () => {
       roomName: () => 'Room',
       alertCfg: cfg,
       onOutcome: (_info, baseline) => outcomes.push(baseline),
+      fatigue: () => 55,
+      setFatigue: () => undefined,
+      supplyFatigue: () => 15,
+      siegeHour: () => 6,
+      fatigueTier: () => 1,
     });
     const initial = outcomes[outcomes.length - 1]!;
     const meter = (): { label: string; value: number } | undefined => scenario.meters().find((m) => /警戒度予測|Forecast Alert/.test(m.label));

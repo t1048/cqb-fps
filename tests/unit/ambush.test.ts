@@ -106,6 +106,7 @@ describe('Perception: pre-aim 状態の反応時間短縮', () => {
       state: SuspectState.ALERT,
       canPerceive: true,
       profile: { reactionTime: 0.7 },
+      fatigueReactionAddSec: 0,
       // 部屋の奥 (0,-6) から入口方向 (-Z ではなく +Z) を向く: yawRad=π で前方 = (0, +1)
       body: { px: 0, pz: -6, footY: 0, yawRad: Math.PI },
       isAmbushReady: ambushReady,
