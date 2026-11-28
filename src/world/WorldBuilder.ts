@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import type { BoxDef, MapData, StairDef } from '../core/types';
+import type { BoxDef, MapData, RoomDef, StairDef } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { TextureLibrary, TextureName } from './Materials';
 import { addMotifDecals } from './Decals';
 import { buildScenery } from './Scenery';
-import { motifById, type MotifDef } from './Motif';
+import { motifById, roleOf, type MotifDef } from './Motif';
 import { buildItem, buildWindow } from './Props';
 import { isLegacyGroundMap, registerGroundPolicy, type StairMark } from './Walk';
 import { subtractRects, type Rect } from './generator/Layout';
@@ -51,6 +51,17 @@ const UPPER_ROOM_ABOVE_CEIL = 0.6;
 const MIN_CUT = 0.05;
 /** 階段の進入・退出点を段の外側へ置く距離（m）。 */
 const STAIR_APPROACH = 0.45;
+
+/** 壁面の向こう側を調べるときに面から離す距離（m）。壁厚の半分より小さい部屋の取りこぼしを防ぐ。 */
+const FACE_PROBE = 0.08;
+/** 床スラブ下面の天井板を各辺へ広げる量（m）。スラブ継ぎ目の光漏れ防止。 */
+const SLAB_SEAM_PAD = 0.03;
+/** 天井板をスラブ下面から下げる量（m）。継ぎ目のスラブ側面との深度競合（破線状のちらつき）を防ぐ。 */
+const SLAB_UNDER_DROP = 0.012;
+/** これより低い床高の室を地下階として扱う（m）。 */
+const BASEMENT_EPS = -0.05;
+/** 水回りとみなす部屋名（モチーフの便所・浴室名。id に wet 語を含まない室の差し替え先も拾う）。 */
+const WET_NAME = /(トイレ|化粧室|浴室|風呂|洗面|脱衣)/;
 
 function aabbRect(a: AABB): Rect {
   return { x0: a.min.x, z0: a.min.z, x1: a.max.x, z1: a.max.z };
@@ -119,9 +130,12 @@ export class WorldBuilder {
     this.motif = map.motif && map.motif !== 'residence' ? motifById(map.motif) : null;
     this.root.name = `world:${map.id}`;
     this.buildFloorAndCeiling();
-    this.buildBoxes(map.walls, 'wall', this.motif?.interiorTex ?? 'plaster', 0xc8c0b0);
+    // 機内は外板・内装パネルを生成器が個別に決めているので従来どおり 1 箱 1 材質
+    if (map.motif === 'air_force_one') this.buildBoxes(map.walls, 'wall', this.motif?.interiorTex ?? 'plaster', 0xc8c0b0);
+    else this.buildRoomAwareWalls();
     this.buildCovers();
-    this.buildBoxes(map.floors, 'floor', this.motif?.groundTex ?? 'wood', 0x8a6844);
+    if (map.motif === 'air_force_one') this.buildBoxes(map.floors, 'floor', this.motif?.groundTex ?? 'wood', 0x8a6844);
+    else this.buildFloorSlabs();
     this.buildStairs();
     const propPool = new Map<string, THREE.MeshStandardMaterial>();
     for (const w of map.windows) this.root.add(buildWindow(w, textures, propPool));
@@ -306,7 +320,7 @@ export class WorldBuilder {
       const prevCeils = placedCeilings.get(levelKey) ?? [];
       for (const piece of subtractRects(base, [...cutouts, ...prevCeils])) {
         if (piece.x1 - piece.x0 < 0.02 || piece.z1 - piece.z0 < 0.02) continue;
-        this.addCeilingMesh(room.id, piece, ceilY, ceilMat);
+        this.addCeilingMesh(room.id, piece, ceilY, this.isBasement(room) ? this.basementCeilingMat() : ceilMat);
         prevCeils.push(piece);
       }
       placedCeilings.set(levelKey, prevCeils);
@@ -384,6 +398,230 @@ export class WorldBuilder {
     roofMesh.position.set(rx, ceilY + CEILING_THICKNESS + 0.04, rz);
     roofMesh.name = `roof:${roomId}`;
     this.root.add(roofMesh);
+  }
+
+  // ---- 部屋ごとの内装（壁面・天井面を、その面が向いている部屋で決める）
+
+  private isBasement(room: RoomDef): boolean {
+    return !room.outdoor && (room.floorY ?? 0) < BASEMENT_EPS;
+  }
+
+  private roomCeilY(room: RoomDef): number {
+    const floorY = room.floorY ?? 0;
+    const story = this.map.storyHeight ?? this.map.ceilingHeight;
+    return room.ceilingY ?? (this.map.ceilingHeight > floorY + 0.5 ? this.map.ceilingHeight : floorY + story);
+  }
+
+  /** 点 (x, y, z) を含む屋内室（最小面積優先）。屋外室・敷地外は null。 */
+  private indoorRoomAt(x: number, y: number, z: number): RoomDef | null {
+    let best: RoomDef | null = null;
+    let bestArea = Infinity;
+    for (const r of this.map.rooms) {
+      if (r.outdoor) continue;
+      const floorY = r.floorY ?? 0;
+      if (y < floorY - 0.05 || y > this.roomCeilY(r) + 0.05) continue;
+      if (Math.abs(x - r.x) > r.width / 2 || Math.abs(z - r.z) > r.depth / 2) continue;
+      const area = r.width * r.depth;
+      if (area < bestArea) {
+        bestArea = area;
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  /** スラブ底面を天井とする屋内室（平面で重なり、天井高が底面付近）。地下室優先。 */
+  private roomUnderSlab(def: BoxDef, bottomY: number): RoomDef | null {
+    const a = boxToAABB(def);
+    let best: RoomDef | null = null;
+    for (const r of this.map.rooms) {
+      if (r.outdoor) continue;
+      if (Math.abs(this.roomCeilY(r) - bottomY) > UPPER_SLAB_TOLERANCE) continue;
+      const ox = Math.min(a.max.x, r.x + r.width / 2) - Math.max(a.min.x, r.x - r.width / 2);
+      const oz = Math.min(a.max.z, r.z + r.depth / 2) - Math.max(a.min.z, r.z - r.depth / 2);
+      if (ox <= 0.05 || oz <= 0.05) continue;
+      if (!best || this.isBasement(r)) best = r;
+    }
+    return best;
+  }
+
+  private interiorWallTex(room: RoomDef): TextureName {
+    if (this.isBasement(room)) return this.motif?.basementWallTex ?? 'concrete';
+    const role = roleOf(room.id) === 'wet' || WET_NAME.test(room.name ?? '') ? 'wet' : roleOf(room.id);
+    const byRole = this.motif?.wallTex?.[role];
+    if (byRole) return byRole;
+    if (role === 'wet') return 'tile';
+    return this.motif?.interiorTex ?? 'plaster';
+  }
+
+  /** 壁面の外側の点が属する空間で面の材質を決める。屋内室 → 室の内装、地中 → コンクリート、それ以外 → 外装。 */
+  private wallFaceTex(x: number, y: number, z: number, exterior: TextureName): TextureName {
+    const room = this.indoorRoomAt(x, y, z);
+    if (room) return this.interiorWallTex(room);
+    if (y < BASEMENT_EPS) return 'concrete';
+    return exterior;
+  }
+
+  private surfaceMat(name: TextureName, fallback: number): THREE.MeshStandardMaterial {
+    return this.material(name, this.colorFor(name, fallback));
+  }
+
+  private basementCeilingMat(doubleSide = true): THREE.MeshStandardMaterial {
+    const name = this.motif?.basementCeilingTex ?? 'concrete';
+    return this.material(name, this.colorFor(name, 0x8a8c8e), doubleSide);
+  }
+
+  /**
+   * BoxGeometry の 6 面（+x, -x, +y, -y, +z, -z）を材質ごとのメッシュに分けて追加する。
+   * 静的バッチは単一材質メッシュしか統合しないため、面グループを使わず index を分割する。
+   */
+  private addBoxFaces(geometry: THREE.BoxGeometry, mats: readonly THREE.Material[], x: number, y: number, z: number, yaw: number, name: string): void {
+    const index = geometry.index;
+    const byMat = new Map<THREE.Material, number[]>();
+    for (const g of geometry.groups) {
+      const m = mats[g.materialIndex ?? 0] ?? mats[0]!;
+      let arr = byMat.get(m);
+      if (!arr) byMat.set(m, (arr = []));
+      for (let i = g.start; i < g.start + g.count; i++) arr.push(index ? index.getX(i) : i);
+    }
+    const parts = [...byMat];
+    parts.forEach(([mat, idx], k) => {
+      const geo = k === parts.length - 1 ? geometry : geometry.clone();
+      geo.setIndex(idx);
+      geo.clearGroups();
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      mesh.rotation.y = yaw;
+      mesh.name = name;
+      this.root.add(mesh);
+    });
+  }
+
+  /**
+   * 壁は表と裏で別の部屋に面するので、面ごとに隣の部屋の内装を貼る。
+   * 複数の部屋にまたがる長い壁は、見た目だけ部屋境界で分割する（当たりは元の箱 1 個）。
+   */
+  private buildRoomAwareWalls(): void {
+    const exteriorName = this.motif?.exteriorTex ?? 'plaster';
+    for (const def of this.map.walls) {
+      this.colliders.push({ kind: 'wall', aabb: boxToAABB(def) });
+      const yaw = (def.yaw ?? 0) * DEG2RAD;
+      const y0 = def.y ?? 0;
+      const yMid = y0 + def.height / 2;
+      // 明示材質が外装以外（ガード・特殊壁など）でも、面の向こうの部屋で決め直す。天端・底面は元の材質
+      const capName: TextureName = def.material !== undefined && KNOWN_BOX_TEXTURES.has(def.material) ? (def.material as TextureName) : this.motif?.interiorTex ?? 'plaster';
+      const capMat = this.surfaceMat(capName, 0xc8c0b0);
+      const rotated = Math.abs(Math.sin(yaw)) > 1e-3 && Math.abs(Math.cos(yaw)) > 1e-3;
+      if (rotated) {
+        const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);
+        alignBoxTexture(geometry, def.x, yMid, def.z, yaw);
+        this.addBoxFaces(geometry, [capMat], def.x, yMid, def.z, yaw, 'wall');
+        continue;
+      }
+      // 90° 回転は寸法を入れ替えた軸平行箱として扱う
+      const swap = Math.abs(Math.sin(yaw)) > 0.5;
+      const w = swap ? def.depth : def.width;
+      const d = swap ? def.width : def.depth;
+      const alongX = w >= d;
+      const lo = alongX ? def.x - w / 2 : def.z - d / 2;
+      const hi = alongX ? def.x + w / 2 : def.z + d / 2;
+      const crossC = alongX ? def.z : def.x;
+      const crossHalf = (alongX ? d : w) / 2;
+      // 分割位置: 壁の両側に接する部屋の、壁方向の端
+      const cuts = new Set<number>([lo, hi]);
+      for (const r of this.map.rooms) {
+        const fy = r.floorY ?? 0;
+        if (fy > y0 + def.height - 0.05 || (r.outdoor ? fy + 3 : this.roomCeilY(r)) < y0 + 0.05) continue;
+        const rc = alongX ? r.z : r.x;
+        const rh = (alongX ? r.depth : r.width) / 2;
+        if (rc - rh > crossC + crossHalf + FACE_PROBE * 2 || rc + rh < crossC - crossHalf - FACE_PROBE * 2) continue;
+        for (const e of alongX ? [r.x - r.width / 2, r.x + r.width / 2] : [r.z - r.depth / 2, r.z + r.depth / 2]) {
+          if (e > lo + 0.02 && e < hi - 0.02) cuts.add(e);
+        }
+      }
+      const edges = [...cuts].sort((a, b) => a - b);
+      const exterior = exteriorName;
+      type Seg = { a: number; b: number; pos: TextureName; neg: TextureName };
+      const segs: Seg[] = [];
+      for (let i = 0; i + 1 < edges.length; i++) {
+        const a = edges[i]!;
+        const b = edges[i + 1]!;
+        const m = (a + b) / 2;
+        const pc = crossC + crossHalf + FACE_PROBE;
+        const nc = crossC - crossHalf - FACE_PROBE;
+        const pos = alongX ? this.wallFaceTex(m, yMid, pc, exterior) : this.wallFaceTex(pc, yMid, m, exterior);
+        const neg = alongX ? this.wallFaceTex(m, yMid, nc, exterior) : this.wallFaceTex(nc, yMid, m, exterior);
+        const last = segs[segs.length - 1];
+        if (last && last.pos === pos && last.neg === neg) last.b = b;
+        else segs.push({ a, b, pos, neg });
+      }
+      for (const [k, sg] of segs.entries()) {
+        const len = sg.b - sg.a;
+        const mid = (sg.a + sg.b) / 2;
+        const cx = alongX ? mid : def.x;
+        const cz = alongX ? def.z : mid;
+        const sw = alongX ? len : w;
+        const sd = alongX ? d : len;
+        // 端面（短辺）は外側の点で決める。分割の内側の端面は隣の区間に隠れるので天端と同じでよい
+        const endTex = (sign: number): THREE.Material => {
+          const isEnd = sign < 0 ? k === 0 : k === segs.length - 1;
+          if (!isEnd) return capMat;
+          const p = (sign < 0 ? sg.a : sg.b) + sign * FACE_PROBE;
+          const tex = alongX ? this.wallFaceTex(p, yMid, crossC, exterior) : this.wallFaceTex(crossC, yMid, p, exterior);
+          return this.surfaceMat(tex, 0xc8c0b0);
+        };
+        const posMat = this.surfaceMat(sg.pos, 0xc8c0b0);
+        const negMat = this.surfaceMat(sg.neg, 0xc8c0b0);
+        // BoxGeometry の面順: +x, -x, +y, -y, +z, -z
+        const mats = alongX
+          ? [endTex(1), endTex(-1), capMat, capMat, posMat, negMat]
+          : [posMat, negMat, capMat, capMat, endTex(1), endTex(-1)];
+        const geometry = new THREE.BoxGeometry(sw, def.height, sd);
+        alignBoxTexture(geometry, cx, yMid, cz, 0);
+        this.addBoxFaces(geometry, mats, cx, yMid, cz, 0, 'wall');
+      }
+    }
+  }
+
+  /**
+   * 床スラブは上面だけが床材。下面・側面は下の部屋の天井として見えるため、下の室の天井材にする
+   * （1F の畳・絨毯が地下室や 1F の天井に貼られて見えるのを防ぐ）。
+   */
+  private buildFloorSlabs(): void {
+    const ceilName = this.motif?.ceilingTex ?? 'plaster';
+    const ceilMat = this.material(ceilName, this.colorFor(ceilName, 0xd5d0c6));
+    const fallbackName = this.motif?.groundTex ?? 'wood';
+    for (const def of this.map.floors) {
+      this.colliders.push({ kind: 'floor', aabb: boxToAABB(def) });
+      const name = def.material !== undefined && KNOWN_BOX_TEXTURES.has(def.material) ? (def.material as TextureName) : fallbackName;
+      const topMat = this.material(name, this.colorFor(name, 0x8a6844));
+      const yaw = (def.yaw ?? 0) * DEG2RAD;
+      const y0 = def.y ?? 0;
+      const below = this.roomUnderSlab(def, y0);
+      const underMat = below ? (this.isBasement(below) ? this.basementCeilingMat(false) : ceilMat) : topMat;
+      const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);
+      alignBoxTexture(geometry, def.x, y0 + def.height / 2, def.z, yaw);
+      this.addBoxFaces(geometry, [underMat, underMat, topMat, underMat, underMat, underMat], def.x, y0 + def.height / 2, def.z, yaw, 'floor');
+      if (below) {
+        // 隣り合うスラブの継ぎ目から上階の光が漏れないよう、下面だけ少し広げた天井板を重ねる。
+        // UV はワールド座標基準なので、同材質の重なりは継ぎ目として見えない（見た目のみ、当たりなし）
+        const a = boxToAABB(def);
+        const w = a.max.x - a.min.x + SLAB_SEAM_PAD * 2;
+        const d = a.max.z - a.min.z + SLAB_SEAM_PAD * 2;
+        const cx = (a.min.x + a.max.x) / 2;
+        const cz = (a.min.z + a.max.z) / 2;
+        const plane = new THREE.PlaneGeometry(w, d);
+        plane.rotateX(Math.PI / 2); // 下向き
+        const { position, uv } = plane.attributes;
+        for (let i = 0; i < position.count; i++) {
+          uv.setXY(i, (cx + position.getX(i)) / TEXTURE_TILE_METERS, -(cz + position.getZ(i)) / TEXTURE_TILE_METERS);
+        }
+        const under = new THREE.Mesh(plane, underMat);
+        under.position.set(cx, y0 - SLAB_UNDER_DROP, cz);
+        under.name = 'ceiling-under';
+        this.root.add(under);
+      }
+    }
   }
 
   private buildBoxes(defs: readonly BoxDef[], kind: ColliderKind, fallback: TextureName, color: number): void {

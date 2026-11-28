@@ -89,6 +89,11 @@ export interface MotifDef {
   groundTex: TextureName;
   stairTex: TextureName;
   floorTex: Record<RoomRole, TextureName>;
+  /** 役割別の内壁材（未指定の役割は interiorTex。wet は既定でタイル）。 */
+  wallTex?: Partial<Record<RoomRole, TextureName>>;
+  /** 地下階（floorY < 0）の内壁材と天井材。未指定は打放しコンクリート。 */
+  basementWallTex?: TextureName;
+  basementCeilingTex?: TextureName;
   props: { vehicle: TextureName; tall: TextureName; low: TextureName; counter: TextureName; misc: TextureName };
   roomNames: Record<RoomRole, string>;
   decals: readonly DecalKind[];
