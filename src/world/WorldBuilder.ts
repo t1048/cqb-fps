@@ -56,6 +56,8 @@ const STAIR_APPROACH = 0.45;
 const FACE_PROBE = 0.08;
 /** 床スラブ下面の天井板を各辺へ広げる量（m）。スラブ継ぎ目の光漏れ防止。 */
 const SLAB_SEAM_PAD = 0.03;
+/** 天井板をスラブ下面から下げる量（m）。継ぎ目のスラブ側面との深度競合（破線状のちらつき）を防ぐ。 */
+const SLAB_UNDER_DROP = 0.012;
 /** これより低い床高の室を地下階として扱う（m）。 */
 const BASEMENT_EPS = -0.05;
 /** 水回りとみなす部屋名（モチーフの便所・浴室名。id に wet 語を含まない室の差し替え先も拾う）。 */
@@ -464,9 +466,9 @@ export class WorldBuilder {
     return this.material(name, this.colorFor(name, fallback));
   }
 
-  private basementCeilingMat(): THREE.MeshStandardMaterial {
+  private basementCeilingMat(doubleSide = true): THREE.MeshStandardMaterial {
     const name = this.motif?.basementCeilingTex ?? 'concrete';
-    return this.material(name, this.colorFor(name, 0x8a8c8e), true);
+    return this.material(name, this.colorFor(name, 0x8a8c8e), doubleSide);
   }
 
   /**
@@ -596,7 +598,7 @@ export class WorldBuilder {
       const yaw = (def.yaw ?? 0) * DEG2RAD;
       const y0 = def.y ?? 0;
       const below = this.roomUnderSlab(def, y0);
-      const underMat = below ? (this.isBasement(below) ? this.basementCeilingMat() : ceilMat) : topMat;
+      const underMat = below ? (this.isBasement(below) ? this.basementCeilingMat(false) : ceilMat) : topMat;
       const geometry = new THREE.BoxGeometry(def.width, def.height, def.depth);
       alignBoxTexture(geometry, def.x, y0 + def.height / 2, def.z, yaw);
       this.addBoxFaces(geometry, [underMat, underMat, topMat, underMat, underMat, underMat], def.x, y0 + def.height / 2, def.z, yaw, 'floor');
@@ -615,7 +617,7 @@ export class WorldBuilder {
           uv.setXY(i, (cx + position.getX(i)) / TEXTURE_TILE_METERS, -(cz + position.getZ(i)) / TEXTURE_TILE_METERS);
         }
         const under = new THREE.Mesh(plane, underMat);
-        under.position.set(cx, y0 - 0.002, cz);
+        under.position.set(cx, y0 - SLAB_UNDER_DROP, cz);
         under.name = 'ceiling-under';
         this.root.add(under);
       }
