@@ -228,6 +228,8 @@ class App {
   /** 暗視装置（SWAT モードのみ） */
   private readonly nightVision: NightVision | null = null;
   private readonly equipLights: { light: THREE.Light; color: number; intensity: number }[] = [];
+  /** 通電時の霧色（停電時に暗くし、復旧時に戻す） */
+  private readonly baseFogColor: THREE.Color;
   /** SWAT モード: 突入と同時に停電させる（交渉の突入プラン） */
   private breachBlackout = false;
   /** 容疑者モード: SWAT が突入と同時に電源を落とす確率（交渉で決まる） */
@@ -296,7 +298,8 @@ class App {
     const visual = motif?.id === 'residence' ? null : motif;
     const atm = visual?.atmosphere;
     this.scene.background = new THREE.Color(atm?.background ?? 0x3a4656);
-    this.scene.fog = new THREE.Fog(atm?.fog ?? 0x3a4656, atm?.fogNear ?? 30, atm?.fogFar ?? 100);
+    this.baseFogColor = new THREE.Color(atm?.fog ?? 0x3a4656);
+    this.scene.fog = new THREE.Fog(this.baseFogColor.clone(), atm?.fogNear ?? 30, atm?.fogFar ?? 100);
     this.renderer.toneMappingExposure = atm?.exposure ?? 1.15;
     this.textures = acquireSharedTextures();
     this.textures.bindPalette(visual ? visual.palette : null);
@@ -1279,7 +1282,11 @@ class App {
   private onPowerChange(c: PowerChange): void {
     const playing = this.phase === 'playing';
     this.world.setPower(c.on, !playing);
-    this.scene.environmentIntensity = c.on ? 0.35 : 0.06;
+    this.scene.environmentIntensity = c.on ? 0.35 : 0.008;
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.copy(this.baseFogColor);
+      if (!c.on) this.scene.fog.color.multiplyScalar(0.12);
+    }
     this.breakerMesh?.setOn(this.power.breaker);
     this.refreshPowerChip();
     if (!playing) return;
@@ -1358,11 +1365,12 @@ class App {
     const eye = this.player.getEyePosition(this.replyEyeScratch);
     const dir = this.camera.getWorldDirection(this.camDirScratch);
     if (this.nightVision) {
-      const glare = this.nightVision.level > 0 && dark ? this.flashlights.glareAt(eye, dir) : 0;
+      const glare =
+        this.nightVision.level > 0 && dark ? this.flashlights.glareInfo(eye, dir, this.camera) : 0;
       this.nightVision.update(dt, dark, glare);
     } else {
-      // 容疑者モード: 停電中の手元は暗い（ライトを点ければ少し見える）
-      const k = dark ? (this.flashlights.playerLightOn ? 0.6 : 0.2) : 1;
+      // 容疑者モード: 停電中の手元はしっかり暗い（ライトを点ければ少し見える）
+      const k = dark ? (this.flashlights.playerLightOn ? 0.6 : 0.08) : 1;
       for (const e of this.equipLights) e.light.intensity = e.intensity * k;
     }
     if (this.swatTeam) {
@@ -1383,11 +1391,11 @@ class App {
           const tz = eye.z - head.z;
           const tl = Math.hypot(tx, tz) || 1;
           if ((fx * tx + fz * tz) / tl < 0.4) continue;
-          h.onFlashed(0.8 + f * 0.9);
+          h.onFlashed(0.35 + f * 0.45);
           this.dazzleCd.set(h.id, 5);
           if (this.dazzleSayCd <= 0) {
             this.dazzleSayCd = 6;
-            this.subtitle.show(t('SWAT「くっ……暗視が焼ける！」', 'SWAT: "Argh... my NODs are washed out!"'), 1.8);
+            this.subtitle.show(t('SWAT「眩しい——ライトだ！」', 'SWAT: "Bright light — autogating!"'), 1.8);
           }
         }
       }

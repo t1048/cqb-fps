@@ -8,6 +8,9 @@ interface NvgUniforms {
   uNvg: { value: number };
   uNvgGain: { value: number };
   uNvgBloom: { value: number };
+  uNvgFlare: { value: number };
+  uNvgGlarePos: { value: THREE.Vector2 };
+  uNvgAspect: { value: number };
   uNvgTime: { value: number };
 }
 
@@ -63,11 +66,14 @@ export class PostFX {
     this.outputPass = new OutputPass();
     this.outputPass.needsSwap = false;
     // 独立したフルスクリーン HalfFloat パスを増やさず、トーンマップ前の線形空間で周辺減光を合成する
-    // 暗視装置（白色蛍光の増幅管）: トーンマップ前の線形空間で輝度を増幅し、粒状ノイズと光源のハローを足す
+    // 暗視装置（白色蛍光のオートゲート増幅管）: トーンマップ前の線形空間で輝度を増幅し、粒状ノイズと光源周囲の局所ハローを足す
     const u = this.outputPass.material.uniforms;
     u.uNvg = { value: 0 };
-    u.uNvgGain = { value: 6 };
+    u.uNvgGain = { value: 14 };
     u.uNvgBloom = { value: 0 };
+    u.uNvgFlare = { value: 0 };
+    u.uNvgGlarePos = { value: new THREE.Vector2(0.5, 0.5) };
+    u.uNvgAspect = { value: w / h };
     u.uNvgTime = { value: 0 };
     this.nvgUniforms = u as unknown as NvgUniforms;
     this.outputPass.material.fragmentShader = this.outputPass.material.fragmentShader
@@ -77,6 +83,9 @@ export class PostFX {
 		uniform float uNvg;
 		uniform float uNvgGain;
 		uniform float uNvgBloom;
+		uniform float uNvgFlare;
+		uniform vec2 uNvgGlarePos;
+		uniform float uNvgAspect;
 		uniform float uNvgTime;
 		float nvgHash( vec2 p ) { return fract( sin( dot( p, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ); }`,
       )
@@ -87,14 +96,25 @@ export class PostFX {
 			gl_FragColor.rgb *= 1.0 - 0.28 * smoothstep( 0.18, 0.62, dot( vigD, vigD ) * 1.6 );
 			if ( uNvg > 0.0 ) {
 				float lum = dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
-				// 増幅: 暗部ほど強く持ち上げ、明部は管の飽和で頭打ち（オートゲイン）
+				// 増幅: 暗部ほど強く持ち上げ、明部はオートゲート管の飽和で頭打ち
 				float amp = lum * uNvgGain;
 				amp = amp / ( 1.0 + amp * 0.9 );
 				float grain = nvgHash( floor( vUv * vec2( 960.0, 540.0 ) ) + fract( uNvgTime * 37.0 ) * 91.7 ) - 0.5;
 				amp += grain * ( 0.035 + 0.055 / ( 1.0 + amp * 6.0 ) );
 				amp += 0.012;
-				// 正面から照らされたときのハロー（白飛び）
-				amp = mix( amp, 2.2, clamp( uNvgBloom, 0.0, 1.0 ) * 0.85 );
+				// 正面から照らされたときの局所ハロー（光源 UV の周囲だけ強く光るフォトニックバリア）
+				if ( uNvgBloom > 0.001 ) {
+					vec2 gd = ( vUv - uNvgGlarePos ) * vec2( uNvgAspect, 1.0 );
+					float dist = length( gd );
+					float core = exp( -dist * dist * 110.0 ) * 1.45;
+					float halo = exp( -dist * 7.5 ) * 0.42;
+					float veil = exp( -dist * 2.2 ) * 0.08;
+					amp += ( core + halo + veil ) * clamp( uNvgBloom, 0.0, 1.0 );
+				}
+				// オートゲート追従までの一瞬だけの控えめな露出跳ね上がり（全画面を真っ白にしない）
+				amp += clamp( uNvgFlare, 0.0, 1.0 ) * 0.22;
+				// 高輝度のソフトロールオフ
+				amp = amp / ( 1.0 + max( amp - 0.85, 0.0 ) * 0.45 );
 				vec3 phosphor = vec3( 0.80, 0.90, 1.0 ) * max( amp, 0.0 );
 				gl_FragColor.rgb = mix( gl_FragColor.rgb, phosphor, uNvg );
 			}`,
@@ -128,14 +148,24 @@ export class PostFX {
   }
 
   /**
-   * 暗視装置の画面効果。amount 0..1（装着の切り替えで補間）、gain は増幅率（暗いほど大きく）、
-   * bloom 0..1 は正面から光を当てられたときの白飛び。
+   * 暗視装置の画面効果。amount 0..1（装着の切り替えで補間）、gain は増幅率（暗いほど大きく、オートゲートで低下）、
+   * bloom 0..1 は光源周囲の局所ハロー強度、flare 0..1 は急照射直後の一瞬の露出跳ね上がり。
    */
-  setNightVision(amount: number, gain: number, bloom: number, time: number): void {
+  setNightVision(
+    amount: number,
+    gain: number,
+    bloom: number,
+    time: number,
+    flare = 0,
+    glareUvX = 0.5,
+    glareUvY = 0.5,
+  ): void {
     const u = this.nvgUniforms;
     u.uNvg.value = amount;
     u.uNvgGain.value = gain;
     u.uNvgBloom.value = bloom;
+    u.uNvgFlare.value = flare;
+    u.uNvgGlarePos.value.set(glareUvX, glareUvY);
     u.uNvgTime.value = time;
   }
 
@@ -151,6 +181,7 @@ export class PostFX {
   }
 
   setSize(w: number, h: number): void {
+    this.nvgUniforms.uNvgAspect.value = w / Math.max(1, h);
     this.composer.setSize(w, h);
   }
 

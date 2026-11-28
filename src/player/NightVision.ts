@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import type { PostFX } from '../core/PostFX';
+import type { GlareInfo } from '../world/Flashlights';
 
 /** 跳ね上げ式マウントの上げ下げにかかる時間（秒） */
 const FLIP_SEC = 0.35;
-/** 暗闇 / 明るい場所での増幅率（オートゲイン） */
-const GAIN_DARK = 7;
-const GAIN_LIT = 1.3;
+/** 暗闇 / オートゲート減光時 / 明るい場所での増幅率 */
+export const GAIN_DARK = 14;
+export const GAIN_AUTOGATE = 4.0;
+export const GAIN_LIT = 1.3;
 
 export interface NightVisionOptions {
   postfx: PostFX;
@@ -19,16 +21,22 @@ export interface NightVisionOptions {
 }
 
 /**
- * SWAT の暗視装置（白色蛍光）。N で跳ね上げ / 装着。
- * - 画面: PostFX の増幅（オートゲイン・粒状ノイズ）＋ ブラウン管のような角丸の視野の外側を黒く塞ぐマスク
- * - IR イルミネーター: 装着中だけ目の前を弱く照らす（暗視装置にしか見えない光の想定）
- * - 白飛び: 容疑者のライトに正面から照らされると、画面が一瞬白く飛ぶ
+ * SWAT の暗視装置（現代の Gen 3+ 白色蛍光・オートゲート方式）。N で跳ね上げ / 装着。
+ * - 画面: PostFX の増幅（オートゲート・粒状ノイズ）＋ ブラウン管のような角丸の視野の外側を黒く塞ぐマスク
+ * - IR イルミネーター: 装着中だけ目の前を照らす（暗視装置にしか見えない光の想定）
+ * - オートゲート（ABC）: 強い光を浴びると瞬時にゲインを自動低下させて画面全体の白飛びを防ぎ、光源周囲に局所ハローを描く
  */
 export class NightVision {
   private on = false;
   private amount = 0;
   private time = 0;
   private bloom = 0;
+  private autoGate = 0;
+  private flare = 0;
+  private prevGlare = 0;
+  private glareUvX = 0.5;
+  private glareUvY = 0.5;
+  private lastGain = GAIN_DARK;
   private readonly ir: THREE.PointLight;
   private readonly mask: HTMLCanvasElement;
   private maskW = 0;
@@ -38,7 +46,7 @@ export class NightVision {
   private readonly tmpColor = new THREE.Color();
 
   constructor(private readonly o: NightVisionOptions) {
-    this.ir = new THREE.PointLight(0xffffff, 0, 12, 2);
+    this.ir = new THREE.PointLight(0xffffff, 0, 16, 1.7);
     this.ir.name = 'nvg-ir';
     o.scene.add(this.ir);
     this.mask = document.createElement('canvas');
@@ -53,6 +61,16 @@ export class NightVision {
   /** 装着の度合い 0..1（上げ下げのアニメーション込み） */
   get level(): number {
     return this.amount;
+  }
+
+  /** 現在の実効増幅ゲイン（テスト・デバッグ用） */
+  get effectiveGain(): number {
+    return this.lastGain;
+  }
+
+  /** 急照射直後の瞬間フレア残量 0..1（テスト・デバッグ用） */
+  get flareLevel(): number {
+    return this.flare;
   }
 
   toggle(): boolean {
@@ -104,29 +122,59 @@ export class NightVision {
   }
 
   /**
-   * dark = 停電中か、glare = 容疑者のライトによる白飛び（0..1）。
+   * dark = 停電中か、glare = 容疑者のライトによる照射情報（強度 0..1 と画面 UV）。
    * 毎フレーム呼ぶ（プレイ中以外は amount を 0 に戻すため呼ばなくてよい）。
    */
-  update(dt: number, dark: boolean, glare: number): void {
+  update(dt: number, dark: boolean, glare: number | GlareInfo): void {
     this.time += dt;
     const target = this.on ? 1 : 0;
     const step = dt / FLIP_SEC;
     this.amount = target > this.amount ? Math.min(target, this.amount + step) : Math.max(target, this.amount - step);
-    // 白飛びはすぐ上がり、ゆっくり戻る（増幅管の保護回路が効くまでの残像）
-    this.bloom = glare > this.bloom ? glare : Math.max(glare, this.bloom - dt * 1.6);
-    const gain = dark ? GAIN_DARK : GAIN_LIT;
-    this.o.postfx.setNightVision(this.amount, gain, this.amount > 0 ? this.bloom : 0, this.time);
-    if (this.amount > 0) this.drawMask();
+
+    const intensity = Math.max(0, Math.min(1, typeof glare === 'number' ? glare : glare.intensity));
+    if (typeof glare !== 'number' && intensity > 0.001) {
+      this.glareUvX = glare.uvX;
+      this.glareUvY = glare.uvY;
+    }
+
+    // 局所ハロー: 光源に対して素早く追従し、外れたら滑らかに引く
+    const bloomRate = intensity > this.bloom ? 16 : 6;
+    this.bloom += (intensity - this.bloom) * Math.min(1, dt * bloomRate);
+    if (this.bloom < 0.002 && intensity === 0) this.bloom = 0;
+
+    // オートゲート（ABC）: 強い光を受けると瞬時（〜0.1秒）にゲインを絞り、光が消えると自然に復帰
+    const gateRate = intensity > this.autoGate ? 10 : 2.2;
+    this.autoGate += (intensity - this.autoGate) * Math.min(1, dt * gateRate);
+    if (this.autoGate < 0.002 && intensity === 0) this.autoGate = 0;
+
+    // 瞬間フレア: 暗闇から急に光を浴びた直後の差分にだけ反応し、約0.2秒で収束
+    const rise = Math.max(0, intensity - this.prevGlare);
+    this.prevGlare = intensity;
+    this.flare = Math.min(1, Math.max(0, this.flare - dt * 5.5) + rise * 0.9);
+
+    const gain = dark ? THREE.MathUtils.lerp(GAIN_DARK, GAIN_AUTOGATE, this.autoGate) : GAIN_LIT;
+    this.lastGain = gain;
+    const active = this.amount > 0;
+    this.o.postfx.setNightVision(
+      this.amount,
+      gain,
+      active ? this.bloom : 0,
+      this.time,
+      active ? this.flare : 0,
+      this.glareUvX,
+      this.glareUvY,
+    );
+    if (active) this.drawMask();
     this.mask.style.opacity = String(this.amount);
     // IR イルミネーターは目の少し前に
     const cam = this.o.camera;
     cam.getWorldPosition(this.ir.position);
     cam.getWorldDirection(this.fwd);
     this.ir.position.addScaledVector(this.fwd, -0.3);
-    this.ir.intensity = dark ? 0.9 * this.amount : 0;
+    this.ir.intensity = dark ? 1.3 * this.amount : 0;
     for (const e of this.o.equipmentLights) {
-      // 装着中は手元の装備も増幅映像の色に、停電中で裸眼なら暗く
-      const k = dark ? 0.22 + 0.78 * this.amount : 1;
+      // 装着中は手元の装備も増幅映像の色に、停電中で裸眼ならしっかり暗く
+      const k = dark ? 0.08 + 0.92 * this.amount : 1;
       e.light.intensity = e.intensity * k;
       this.tmpColor.setHex(e.color).lerp(this.tint, this.amount);
       e.light.color.copy(this.tmpColor);
@@ -138,14 +186,17 @@ export class NightVision {
     this.on = false;
     this.amount = 0;
     this.bloom = 0;
+    this.autoGate = 0;
+    this.flare = 0;
+    this.prevGlare = 0;
     this.mask.style.opacity = '0';
     this.ir.intensity = 0;
-    this.o.postfx.setNightVision(0, GAIN_DARK, 0, this.time);
+    this.o.postfx.setNightVision(0, GAIN_DARK, 0, this.time, 0, 0.5, 0.5);
   }
 
   dispose(): void {
     this.ir.removeFromParent();
     this.mask.remove();
-    this.o.postfx.setNightVision(0, GAIN_DARK, 0, 0);
+    this.o.postfx.setNightVision(0, GAIN_DARK, 0, 0, 0, 0.5, 0.5);
   }
 }
