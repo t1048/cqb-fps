@@ -2033,12 +2033,16 @@ export const SQUAD_ORDERS: readonly SquadOrder[] = [
   'mirror',
   'check',
   'disarm',
+  'stairClear',
+  'stairFlashClear',
 ] as const;
 
 /** squad.json に新しい指示のラベルが無い旧データでも読めるようにする既定値 */
 const OPTIONAL_ORDER_LABELS: Partial<Record<SquadOrder, string>> = {
   check: 'ドアチェック',
   disarm: 'トラップ解除',
+  stairClear: '階段クリア',
+  stairFlashClear: '閃光階段クリア',
 };
 
 export const DEFAULT_MIRROR: MirrorConfig = {

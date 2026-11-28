@@ -513,7 +513,9 @@ export function isFixedPositionPhase(ally: AllyUnit): boolean {
     case 'secured':
     case 'hold':
     case 'overwatch':
+    case 'stair_secure':
       return true;
+    case 'stair_stack':
     case 'stacking':
     case 'sweeping':
     case 'move':

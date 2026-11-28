@@ -50,7 +50,9 @@
     "restrain": "対象確保",
     "mirror": "ミラー確認",
     "check": "ドアチェック",
-    "disarm": "トラップ解除"
+    "disarm": "トラップ解除",
+    "stairClear": "階段クリア",
+    "stairFlashClear": "閃光階段クリア"
   },
   "elementLabels": {
     "gold": "GOLD (全員)",

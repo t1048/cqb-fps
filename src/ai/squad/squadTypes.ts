@@ -137,7 +137,13 @@ export type TacticalPhase =
   | 'entering'
   | 'sweeping'
   | 'restraining'
-  | 'secured';
+  | 'secured'
+  /** 階段クリア: 階段口でスタック（閃光の炸裂待ちを含む） */
+  | 'stair_stack'
+  /** 階段クリア: 出口へ照準を置いたまま縦列で昇降中 */
+  | 'stair_climb'
+  /** 階段クリア: 出口を確保して周囲を警戒中 */
+  | 'stair_secure';
 
 export interface EntryPortal {
   id: string;
@@ -284,8 +290,42 @@ export interface AllyUnit extends HitTarget {
   /** トラップ解除の残り秒 / 作業を始めたか */
   disarmLeft: number;
   disarmStarted: boolean;
+  /** 参加中の階段クリア（同じ階段のメンバーで共有。指示のリセットで外れる） */
+  stairOp: StairOp | null;
+  /** 階段クリアの縦列で昇降を始めた時刻（simTime。未発進は -1） */
+  stairStartT: number;
   readonly targetWrapper: AllyTarget & { shieldBlocks(from: Vec3, hit: Vec3): boolean };
   label: AIDebugLabel;
+}
+
+/** 階段クリアの段階 */
+export type StairOpStage = 'stack' | 'flash' | 'climb' | 'secure';
+
+/** 階段クリア（同じ階段に向かうメンバー全員の共有状態） */
+export interface StairOp {
+  stair: StairMark;
+  /** 上り（下階→上階）か */
+  up: boolean;
+  /** 出口へ閃光弾を投げ込んでから昇降するか */
+  flash: boolean;
+  /** スタックのみ（昇降の指示待ち） */
+  stackOnly: boolean;
+  stage: StairOpStage;
+  /** 現在の段階に入ってからの秒 */
+  stageT: number;
+  /** 指示からの総経過秒（スタック待ちのハードキャップ用） */
+  elapsed: number;
+  /** 昇降順（先頭 = 盾持ち優先）。スロットの添字もこの順 */
+  members: AllyUnit[];
+  /** 階段口のスタック位置 / 出口側の確保位置（members と同じ順） */
+  stackSlots: XZ[];
+  exitSlots: XZ[];
+  /** グループ更新を 1 フレーム 1 回にするための simTime */
+  tickedAt: number;
+  /** 閃光弾の炸裂待ち（秒）。投げていなければ -1 */
+  flashWait: number;
+  /** 出口確保の無線を出したか */
+  announced: boolean;
 }
 
 /** ドアチェックの結果（先頭の隊員の申告。トラップを見落とすと false になり得る） */
@@ -464,7 +504,10 @@ export function isOrderLockedForAutonomousMove(ally: AllyUnit): boolean {
     ally.phase === 'c2_plant' ||
     ally.phase === 'c2_standoff' ||
     ally.phase === 'flash_wait' ||
-    ally.phase === 'gas_wait'
+    ally.phase === 'gas_wait' ||
+    ally.phase === 'stair_stack' ||
+    ally.phase === 'stair_climb' ||
+    ally.phase === 'stair_secure'
   );
 }
 
