@@ -1381,17 +1381,13 @@ function showTitle(): void {
     renderer: shared.renderer,
     envTex: shared.envTex,
     audio: acquireSharedAudio(),
-    stages: ensureStages(),
+    loadStages: ensureStages,
     initialMode: currentMode,
     initialStageId: currentMapId,
     onStart: (mode, stageId) => {
       syncModeToUrl(mode);
       start(stageId, randomSeed(), mode);
     },
-  });
-  ensureStages().catch((err: unknown) => {
-    console.error(err);
-    showError(err);
   });
 }
 

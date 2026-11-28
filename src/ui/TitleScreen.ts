@@ -3,7 +3,8 @@ import { HumanoidBody } from '../ai/HumanoidBody';
 import type { AudioEngine } from '../core/Audio';
 import type { StageEntry, Vec3 } from '../core/types';
 import { getLocale, setLocale, onLocaleChange, t, tStageSize, tStageTagline } from '../core/i18n';
-import { getSettings } from '../core/Settings';
+import { getSettings, subscribeSettings, updateSettings } from '../core/Settings';
+import { TitleAudio } from './TitleAudio';
 import type { GameMode } from '../modes/SuspectMode';
 import { disposeObject } from '../core/dispose';
 import { KOFI_URL } from './shareLinks';
@@ -19,7 +20,8 @@ export interface TitleScreenOptions {
   renderer: THREE.WebGLRenderer;
   envTex: THREE.Texture | null;
   audio: AudioEngine | null;
-  stages: Promise<readonly StageEntry[]>;
+  /** ステージ一覧の読み込み（失敗時はタイトル上の「再試行」から呼び直す） */
+  loadStages: () => Promise<readonly StageEntry[]>;
   initialMode: GameMode;
   initialStageId: string | null;
   /** モード・広さが決まった。ここからマップ生成が始まる */
@@ -36,6 +38,8 @@ const CSS = `
 .tts-live{display:inline-flex;align-items:center;gap:8px;font:bold 12px monospace;letter-spacing:.18em;color:#ffd7d7;background:rgba(160,16,24,.78);padding:4px 10px;border-radius:3px}
 .tts-live i{width:8px;height:8px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 8px #ff3b3b;animation:tts-blink 1s steps(2) infinite}
 @keyframes tts-blink{50%{opacity:.15}}
+.tts-sound-hint{animation:tts-pulse 1.6s ease-in-out infinite;border-color:#ffd24d!important;color:#ffe9a8!important}
+@keyframes tts-pulse{50%{box-shadow:0 0 14px rgba(255,210,77,.55)}}
 .tts-topbtns{display:flex;gap:8px}
 .tts-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:6px;background:rgba(18,28,40,.72);border:1px solid rgba(120,160,200,.35);color:#dce6f2;font:bold 12px sans-serif;cursor:pointer;text-decoration:none;backdrop-filter:blur(4px)}
 .tts-btn:hover{background:rgba(36,54,76,.9);border-color:#7fb4ec}
@@ -576,10 +580,10 @@ class StandoffScene {
 
   private wheel(parent: THREE.Object3D, x: number, z: number, r: number, w: number): void {
     const tire = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 18), new THREE.MeshStandardMaterial({ color: 0x0f0f10, roughness: 0.9 }));
-    tire.rotation.z = Math.PI / 2;
+    tire.rotation.x = Math.PI / 2; // 車体は x が前後なので、車軸は z（横）方向
     tire.position.set(x, r, z);
     const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.55, r * 0.55, w + 0.02, 12), new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.35, metalness: 0.8 }));
-    hub.rotation.z = Math.PI / 2;
+    hub.rotation.x = Math.PI / 2;
     hub.position.copy(tire.position);
     parent.add(tire, hub);
   }
@@ -1111,6 +1115,7 @@ export class TitleScreen {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly audio: AudioEngine | null;
   private stages: readonly StageEntry[] = [];
+  private stagesError: string | null = null;
   private mode: GameMode;
   private stageId: string | null;
   private raf = 0;
@@ -1118,7 +1123,10 @@ export class TitleScreen {
   private disposed = false;
   private loading = false;
   private lastShotSound = 0;
+  private soundStartedAt = -Infinity;
   private readonly unsubLocale: () => void;
+  private readonly unsubSound: () => void;
+  private readonly titleAudio = new TitleAudio();
   private readonly prevShadowEnabled: boolean;
   private readonly prevAutoUpdate: boolean;
 
@@ -1180,7 +1188,40 @@ export class TitleScreen {
     langBtn.type = 'button';
     langBtn.className = 'tts-btn';
     langBtn.addEventListener('click', () => setLocale(getLocale() === 'en' ? 'ja' : 'en'));
-    topBtns.append(kofi, langBtn);
+    // サウンド: 自動再生制限のため最初は「クリックで音声 ON」と促し、鳴り始めたらミュート切替になる
+    const soundBtn = document.createElement('button');
+    soundBtn.type = 'button';
+    soundBtn.className = 'tts-btn';
+    soundBtn.dataset.action = 'sound';
+    const renderSound = (): void => {
+      const muted = getSettings().muted;
+      if (!this.titleAudio.started) {
+        soundBtn.textContent = t('🔈 クリックでサウンド ON', '🔈 Click for Sound');
+        soundBtn.classList.add('tts-sound-hint');
+      } else {
+        soundBtn.textContent = muted ? t('🔇 ミュート中', '🔇 Muted') : t('🔊 サウンド', '🔊 Sound');
+        soundBtn.classList.remove('tts-sound-hint');
+      }
+    };
+    soundBtn.addEventListener('click', () => {
+      // このクリック自体で鳴り始めた場合はミュートにしない。以降はミュート切替
+      if (performance.now() - this.soundStartedAt < 600) return;
+      updateSettings({ muted: !getSettings().muted });
+    });
+    this.titleAudio.onStarted = () => {
+      this.soundStartedAt = performance.now();
+      this.audio?.unlock();
+      renderSound();
+    };
+    this.unsubSound = subscribeSettings((next, prev) => {
+      if (next.muted !== prev.muted || next.language !== prev.language) renderSound();
+      if (this.audio) {
+        this.audio.setMuted(next.muted);
+        this.audio.setMasterVolume(next.masterVolume);
+      }
+    });
+    this.staticTexts.push(renderSound);
+    topBtns.append(soundBtn, kofi, langBtn);
     top.append(live, topBtns);
 
     const hero = document.createElement('div');
@@ -1253,6 +1294,7 @@ export class TitleScreen {
       this.renderModes();
       this.renderSizes();
       this.renderStartLabel();
+      for (const f of this.staticTexts) if (f !== renderTexts) f();
     };
     this.staticTexts.push(renderTexts);
     renderTexts();
@@ -1260,7 +1302,17 @@ export class TitleScreen {
       if (!this.disposed) renderTexts();
     });
 
-    void opts.stages.then(
+    this.loadStages();
+
+    window.addEventListener('keydown', this.onKeyDown);
+    this.last = performance.now();
+    this.raf = requestAnimationFrame(this.frame);
+  }
+
+  private loadStages(): void {
+    this.stagesError = null;
+    this.renderSizes();
+    void this.opts.loadStages().then(
       (stages) => {
         if (this.disposed) return;
         this.stages = stages;
@@ -1271,14 +1323,13 @@ export class TitleScreen {
         this.renderSizes();
         this.renderStartLabel();
       },
-      () => {
-        /* main 側でエラー表示する */
+      (err: unknown) => {
+        if (this.disposed) return;
+        console.error(err);
+        this.stagesError = err instanceof Error ? err.message : String(err);
+        this.renderSizes();
       },
     );
-
-    window.addEventListener('keydown', this.onKeyDown);
-    this.last = performance.now();
-    this.raf = requestAnimationFrame(this.frame);
   }
 
   private renderModes(): void {
@@ -1301,10 +1352,27 @@ export class TitleScreen {
   private renderSizes(): void {
     this.sizeGrid.innerHTML = '';
     if (this.stages.length === 0) {
+      this.sizeGrid.style.gridTemplateColumns = '1fr';
       const wait = document.createElement('div');
       wait.className = 'tts-choice-desc';
-      wait.textContent = t('読み込み中…', 'Loading…');
-      this.sizeGrid.appendChild(wait);
+      if (this.stagesError === null) {
+        wait.textContent = t('読み込み中…', 'Loading…');
+        this.sizeGrid.appendChild(wait);
+        return;
+      }
+      wait.textContent = t('マップ一覧を読み込めませんでした。通信状態を確認して再試行してください。', 'Could not load the map list. Check your connection and retry.');
+      wait.style.color = '#ffb4b4';
+      wait.title = this.stagesError;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'tts-btn';
+      retry.dataset.action = 'retry-stages';
+      retry.style.justifySelf = 'start';
+      retry.textContent = t('↻ 再試行', '↻ Retry');
+      retry.addEventListener('click', () => {
+        if (!this.disposed) this.loadStages();
+      });
+      this.sizeGrid.append(wait, retry);
       return;
     }
     this.sizeGrid.style.gridTemplateColumns = `repeat(${Math.min(this.stages.length, 3)},minmax(0,1fr))`;
@@ -1450,6 +1518,8 @@ export class TitleScreen {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('resize', this.onResize);
     this.unsubLocale();
+    this.unsubSound();
+    this.titleAudio.dispose();
     this.sceneView.onShot = null;
     this.sceneView.dispose();
     this.renderer.shadowMap.enabled = this.prevShadowEnabled;

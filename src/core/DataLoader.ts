@@ -2316,23 +2316,50 @@ const jsonCache = new Map<string, Promise<unknown>>();
 const staticConfigCache = new Map<string, Promise<unknown>>();
 const templateCache = new Map<string, Promise<AnyGeneratorTemplate>>();
 
+/** 一時的な通信断（本文の受信途中で切れる等）を吸収するための再試行回数と待ち時間 */
+const FETCH_ATTEMPTS = 3;
+const FETCH_RETRY_BASE_MS = 400;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function fetchJson(url: string): Promise<unknown> {
   const cached = jsonCache.get(url);
   if (cached) return cached;
   const promise = (async (): Promise<unknown> => {
-    let res: Response;
-    try {
-      // セッション初回は no-cache で再検証し、同一セッション内のリトライ・リロールではキャッシュを共有する
-      res = await fetch(url, { cache: 'no-cache' });
-    } catch (err) {
-      throw new DataError(url, '', `取得に失敗しました: ${String(err)}`);
+    let lastErr: DataError | null = null;
+    for (let attempt = 0; attempt < FETCH_ATTEMPTS; attempt++) {
+      if (attempt > 0) await sleep(FETCH_RETRY_BASE_MS * 2 ** (attempt - 1));
+      let res: Response;
+      try {
+        // セッション初回は no-cache で再検証し、同一セッション内のリトライ・リロールではキャッシュを共有する
+        res = await fetch(url, { cache: 'no-cache' });
+      } catch (err) {
+        lastErr = new DataError(url, '', `取得に失敗しました: ${String(err)}`);
+        continue;
+      }
+      // 404 などは再試行しても変わらない。5xx だけ再試行する
+      if (!res.ok) {
+        lastErr = new DataError(url, '', `HTTP ${res.status} ${res.statusText}`);
+        if (res.status >= 500) continue;
+        throw lastErr;
+      }
+      let text: string;
+      try {
+        text = await res.text();
+      } catch (err) {
+        // 本文の受信途中で接続が切れた（TypeError: Failed to fetch）。取り直す
+        lastErr = new DataError(url, '', `取得に失敗しました: ${String(err)}`);
+        continue;
+      }
+      try {
+        return JSON.parse(text) as unknown;
+      } catch (err) {
+        throw new DataError(url, '', `JSON として解析できません: ${String(err)}`);
+      }
     }
-    if (!res.ok) throw new DataError(url, '', `HTTP ${res.status} ${res.statusText}`);
-    try {
-      return await res.json();
-    } catch (err) {
-      throw new DataError(url, '', `JSON として解析できません: ${String(err)}`);
-    }
+    throw lastErr ?? new DataError(url, '', '取得に失敗しました');
   })().catch((err: unknown) => {
     jsonCache.delete(url);
     throw err;
