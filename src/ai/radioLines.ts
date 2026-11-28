@@ -4,6 +4,18 @@ import { isEn, tRoomName } from '../core/i18n';
 export type RadioLine = readonly [ja: string, en: string];
 
 const lastIndex = new Map<readonly RadioLine[], number>();
+/** プール → 番号、選んだ文 → 出どころのプール番号（言い回しが違っても「同じ種類の台詞」と分かるように） */
+const poolIds = new Map<readonly RadioLine[], number>();
+const textGroup = new Map<string, number>();
+
+/**
+ * 無線の重複判定に使う「台詞の種類」のキー。pickRadio で選んだ文はプール単位（言い回し違いも同じ種類）、
+ * それ以外（名前入りの動的な文など）は文そのもの。
+ */
+export function radioGroupKey(text: string): string {
+  const g = textGroup.get(text);
+  return g !== undefined ? `pool#${g}` : `text:${text}`;
+}
 
 /**
  * プールから 1 文を選ぶ。同じプールで直前と同じ文は続けて出さない。
@@ -20,8 +32,17 @@ export function pickRadio(pool: readonly RadioLine[], vars?: Readonly<Record<str
     lastIndex.set(pool, idx);
   }
   const line = pool[idx]!;
-  if (!vars) return line;
+  if (!vars) {
+    let pid = poolIds.get(pool);
+    if (pid === undefined) {
+      pid = poolIds.size;
+      poolIds.set(pool, pid);
+    }
+    textGroup.set(line[0], pid);
+    return line;
+  }
   const apply = (s: string) => s.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? '');
+  // 部屋名などを埋め込んだ文は中身が違えば別の知らせなので、種類でまとめない（文そのもので判定）
   return [apply(line[0]), apply(line[1])];
 }
 

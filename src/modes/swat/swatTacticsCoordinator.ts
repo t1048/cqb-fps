@@ -24,6 +24,10 @@ import {
   BASE_SHIELD_COMBAT,
   BASE_SWAT_COMBAT,
   BASE_SWAT_MOBILITY,
+  SWAT_C2_BEEP_INTERVAL,
+  SWAT_C2_FUSE_SEC,
+  SWAT_C2_URGENT_AT_SEC,
+  SWAT_C2_URGENT_BEEP_INTERVAL,
   SWAT_FLASH_CARRY_MAX,
   SWAT_FLASH_MAX_DIST,
   SWAT_FLASH_MIN_DIST,
@@ -52,6 +56,7 @@ import {
   type PinningCellInfo,
 } from '../../ai/SwatTactics';
 import { hasLineOfSight } from '../../weapons/Flashbang';
+import { RepeatGuard } from '../../ai/actionGuard';
 import type { Door } from '../../world/Door';
 import { campStayDt, lerp, resolveSwatSpawns, shouldTriggerReinforcements, updateRoomStay } from './swatHelpers';
 import { SwatHunter } from './SwatHunter';
@@ -143,6 +148,18 @@ export class SwatTacticsCoordinator {
   private readonly encounteredLockedDoors = new Set<string>();
   readonly c2BlastLight = new THREE.PointLight(0xffb866, 0, 14, 2);
   private readonly c2Blasts: { mesh: THREE.Mesh; t: number }[] = [];
+  /**
+   * 行動の一貫性（割り込まれても最初からやり直さない）:
+   * - 扉ごとの「蹴るか C2 か」は最初の判断を通す（毎回くじを引き直して手段が揺れない）
+   * - 設置の途中で割り込まれたら、進み具合を扉ごとに残して続きから再開する
+   * - 設置が終わった爆薬はチームが持つ時限で起爆する（設置した隊員が交戦へ移っても仕掛け直さない）
+   * - 「設置する」の無線・字幕は扉ごとに一定時間 1 回だけ
+   */
+  private readonly c2Choice = new Map<string, boolean>();
+  private readonly c2PlantSec = new Map<string, number>();
+  private readonly armedC2 = new Map<string, { door: Door; side: number; by: SwatHunter; t: number; beepT: number }>();
+  private readonly c2Announce = new RepeatGuard();
+  private c2Clock = 0;
   /** 催涙ガス・籠城監視（F10） */
   private playerRoomId: string | null = null;
   private playerRoomStaySec = 0;
@@ -204,6 +221,7 @@ export class SwatTacticsCoordinator {
     this.pincerRadioCd = Math.max(0, this.pincerRadioCd - dt);
     this.waveCooldown = Math.max(0, this.waveCooldown - dt);
     this.sightingAge += dt;
+    this.c2Clock += dt;
   }
 
   // ---------- 増援・撤収 ----------
@@ -644,11 +662,75 @@ export class SwatTacticsCoordinator {
 
   /** 施錠ドア遭遇数を記録し、高圧力または 2 枚目以降の施錠ドアなら C2 爆破を選択する */
   shouldUseC2(doorId: string): boolean {
+    // 設置途中・設置済みの扉は C2 を続ける。一度決めた手段は同じ扉で変えない
+    if ((this.c2PlantSec.get(doorId) ?? 0) > 0 || this.armedC2.has(doorId)) return true;
+    const memo = this.c2Choice.get(doorId);
+    if (memo !== undefined) return memo;
     this.encounteredLockedDoors.add(doorId);
-    return shouldUseC2Breach(this.pressure, this.encounteredLockedDoors.size);
+    const use = shouldUseC2Breach(this.pressure, this.encounteredLockedDoors.size);
+    this.c2Choice.set(doorId, use);
+    return use;
+  }
+
+  /** この扉にすでに仕掛けた設置の進み具合（秒）。0 なら未着手 */
+  c2PlantProgress(doorId: string): number {
+    return this.c2PlantSec.get(doorId) ?? 0;
+  }
+
+  /** 設置を途中でやめた（交戦・被弾など）。進み具合を残し、次に来た隊員は続きから付ける */
+  saveC2PlantProgress(doorId: string, sec: number): void {
+    if (sec > 0) this.c2PlantSec.set(doorId, Math.max(sec, this.c2PlantSec.get(doorId) ?? 0));
+  }
+
+  /** 扉に設置済み（時限が進んでいる）爆薬があるか */
+  isC2Armed(doorId: string): boolean {
+    return this.armedC2.has(doorId);
+  }
+
+  /** 設置完了: 以後の時限・警告音・起爆はチームが受け持つ（設置した隊員がその場を離れても止まらない） */
+  armC2(by: SwatHunter, door: Door, side: number): void {
+    this.c2PlantSec.delete(door.id);
+    if (this.armedC2.has(door.id)) return;
+    this.armedC2.set(door.id, { door, side, by, t: 0, beepT: 0 });
+    this.emitC2Beep(door, false);
+  }
+
+  /** 設置済み爆薬の時限を進め、警告音を鳴らし、時間で起爆する */
+  updateArmedC2(dt: number): void {
+    for (const [id, c] of this.armedC2) {
+      const door = c.door;
+      // 起爆前に扉が開いた（容疑者が開けた・別の手段で破られた）: 爆薬は回収したものとして扱う
+      if (!door.locked && (door.angle > 5 || door.targetAngle >= door.maxAngle - 1)) {
+        this.armedC2.delete(id);
+        continue;
+      }
+      c.t += dt;
+      c.beepT += dt;
+      const urgent = c.t >= SWAT_C2_URGENT_AT_SEC;
+      const interval = urgent ? SWAT_C2_URGENT_BEEP_INTERVAL : SWAT_C2_BEEP_INTERVAL;
+      if (c.beepT >= interval && c.t < SWAT_C2_FUSE_SEC) {
+        c.beepT = 0;
+        this.emitC2Beep(door, urgent);
+      }
+      if (c.t >= SWAT_C2_FUSE_SEC) {
+        this.armedC2.delete(id);
+        this.c2Choice.delete(id);
+        // 起爆の無線は、設置した隊員が倒れていれば生きている隊員が言う
+        const speaker = c.by.alive ? c.by : (this.host.hunters.find((h) => h.alive) ?? c.by);
+        this.detonateC2(speaker, door, c.side);
+      }
+    }
+  }
+
+  /** 設置済み爆薬の残り時限（秒）。無ければ null */
+  c2FuseLeft(doorId: string): number | null {
+    const c = this.armedC2.get(doorId);
+    return c ? Math.max(0, SWAT_C2_FUSE_SEC - c.t) : null;
   }
 
   onC2PlantStart(by: SwatHunter, door: Door): void {
+    // 同じ扉への「設置する」は一定時間に 1 回だけ（割り込みから戻って付け直すたびに叫ばない）
+    if (!this.c2Announce.allow(door.id, this.c2Clock, 25)) return;
     const [plantJa, plantEn] = pickRadio(C2_PLANT);
     this.host.radio(by, plantJa, plantEn, true);
     if (this.host.canPlayerHear({ x: door.centerX, y: door.sillY, z: door.centerZ }, 10)) {

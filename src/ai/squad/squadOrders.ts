@@ -14,8 +14,10 @@ import {
   MODE_SLOW,
   doorAck,
   pickRadio,
+  radioGroupKey,
 } from '../radioLines';
 import { SWAT_RADIO_STAGGER_SEC } from '../SwatProfile';
+import { RepeatGuard } from '../actionGuard';
 import {
   activeTargets,
   type AllyUnit,
@@ -592,12 +594,26 @@ export function emitRadioNow(ctx: SquadContext, ally: AllyUnit, text: string, vo
   ctx.bus.emit('allyRadio', { allyId: ally.id, name: `${ally.callsign} ${ally.name}`, text, voiceText });
 }
 
+/** 味方隊員の無線の連呼防止（隊ごと）。命令への応答が途切れないよう、同じ隊員・同じ種類の台詞だけを短く抑える */
+const allyRadioRepeat = new WeakMap<SquadContext, RepeatGuard>();
+const ALLY_RADIO_SAME_SPEAKER_SEC = 6;
+
 export function emitRadio(ctx: SquadContext, ally: AllyUnit, text: string, voiceText?: string): void {
+  let guard = allyRadioRepeat.get(ctx);
+  if (!guard) {
+    guard = new RepeatGuard();
+    allyRadioRepeat.set(ctx, guard);
+  }
+  const key = `${ally.id}|${radioGroupKey(text)}`;
+  if (!guard.ready(key, ctx.simTime, ALLY_RADIO_SAME_SPEAKER_SEC)) return;
   if (ctx.radioSpeakGap <= 0 && ctx.radioQueue.length === 0) {
     emitRadioNow(ctx, ally, text, voiceText);
   } else if (ctx.radioQueue.length < 4) {
     ctx.radioQueue.push({ ally, text, voiceText });
+  } else {
+    return;
   }
+  guard.mark(key, ctx.simTime);
 }
 
 export function stateText(ally: AllyUnit): string {

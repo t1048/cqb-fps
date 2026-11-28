@@ -28,11 +28,7 @@ import {
   type PieStep,
 } from '../../ai/cqbEntry';
 import {
-  SWAT_C2_BEEP_INTERVAL,
-  SWAT_C2_FUSE_SEC,
   SWAT_C2_PLANT_SEC,
-  SWAT_C2_URGENT_AT_SEC,
-  SWAT_C2_URGENT_BEEP_INTERVAL,
   SWAT_FOOTSTEP_STRIDE_FAST,
   SWAT_FOOTSTEP_STRIDE_NORMAL,
   SWAT_HP,
@@ -48,6 +44,7 @@ import {
   SWAT_UNIFORM_COLOR,
 } from '../../ai/SwatProfile';
 import { computeC2Standoff, isIndoorPoint, type EntryPortal, type EntryRoute } from '../../ai/SwatTactics';
+import { AttemptLog } from '../../ai/actionGuard';
 import { TacticalOptics } from '../../ai/TacticalOptics';
 import { hasLineOfSight } from '../../weapons/Flashbang';
 import type { HitTarget } from '../../weapons/WeaponSystem';
@@ -99,6 +96,8 @@ import {
   ROUTE_BREACH_WAIT_SEC,
   ROUTE_CHECK_SEC,
   SKIP_DOOR_TTL_SEC,
+  BREACH_RETRY_MAX,
+  BREACH_RETRY_WINDOW_SEC,
   ABANDON_TTL_SEC,
   ABANDON_RADIUS,
   SCAN_AMP,
@@ -203,6 +202,8 @@ export class SwatHunter implements HitTarget {
   private readonly abandoned: Array<{ x: number; y: number; z: number; left: number }> = [];
   /** ブリーチに失敗した扉を再び候補に戻すまでの残り秒 */
   private readonly skipDoorLeft = new Map<string, number>();
+  /** 同じ扉のブリーチを成果なく始め直した回数（割り込み → 再開の往復を検知して、いったん別の手へ切り替える） */
+  private readonly breachTries = new AttemptLog();
   /** 経路計画（施錠ドア越しの目標）の再確認までの秒・他隊員のブリーチ待ちの累計秒 */
   private routeCheckCd = Math.random() * ROUTE_CHECK_SEC;
   private routeWaitSec = 0;
@@ -342,6 +343,10 @@ export class SwatHunter implements HitTarget {
   }
 
   private clearBreachState(): void {
+    // 設置の途中で割り込まれた: 進み具合をチームに残す（戻ってきたとき最初からしゃがみ直さない）
+    if (this.breachDoor && this.breachMode === 'c2' && this.c2Phase === 'plant' && this.c2Timer > 0) {
+      this.team.saveC2PlantProgress(this.breachDoor.id, this.c2Timer);
+    }
     this.breachDoor = null;
     this.breachApproach = null;
     this.breachWait = 0;
@@ -1679,6 +1684,12 @@ export class SwatHunter implements HitTarget {
       }
     }
     if (!door || this.team.isDoorBeingBreached(door.id, this)) return false;
+    // 同じ扉へのブリーチを短時間に何度も始め直している（交戦などで毎回中断）: いったん諦めて別の手を取る
+    if (this.breachTries.note(door.id, this.team.clock, BREACH_RETRY_WINDOW_SEC) > BREACH_RETRY_MAX) {
+      this.breachTries.clear(door.id);
+      this.skipDoor(door.id);
+      return false;
+    }
     const side = (this.body.px - door.centerX) * door.normalX + (this.body.pz - door.centerZ) * door.normalZ >= 0 ? 1 : -1;
     this.breachDoor = door;
     this.breachWait = 0;
@@ -1773,7 +1784,8 @@ export class SwatHunter implements HitTarget {
           });
       if (res === 'arrived') {
         this.c2Phase = 'plant';
-        this.c2Timer = 0;
+        // 前に途中まで付けていれば続きから（無線・字幕もチーム側で扉ごとに 1 回だけ）
+        this.c2Timer = this.team.c2PlantProgress(door.id);
         this.body.setPose('crouch');
         this.team.onC2PlantStart(this, door);
       } else if (res === 'blocked' || this.stateTime > 20) {
@@ -1797,11 +1809,18 @@ export class SwatHunter implements HitTarget {
         this.c2Phase = 'standoff';
         this.c2Timer = 0;
         this.c2BeepTimer = 0;
-        this.team.emitC2Beep(door, false);
+        // 以後の時限・警告音・起爆はチームが持つ。この隊員が交戦へ移っても爆薬は時間どおり爆ぜる
+        this.team.armC2(this, door, this.c2Side);
       }
       return;
     }
-    // 'standoff'
+    // 'standoff': 安全な位置へ下がって起爆を待つ（起爆そのものはチームの時限）
+    if (!this.team.isC2Armed(door.id)) {
+      this.breachTries.clear(door.id);
+      this.clearBreachState();
+      this.setState(this.huntTarget ? 'hunt' : 'sweep');
+      return;
+    }
     const standoff = this.c2Standoff;
     if (standoff && Math.hypot(this.body.px - standoff.x, this.body.pz - standoff.z) > 0.35) {
       this.nav.step(standoff, this.combat.moveSpeed * HUNT_SPEED, dt, {
@@ -1813,21 +1832,6 @@ export class SwatHunter implements HitTarget {
       });
     }
     this.body.faceToward(door.centerX, door.centerZ);
-    this.c2Timer += dt;
-    this.c2BeepTimer += dt;
-    const urgent = this.c2Timer >= SWAT_C2_URGENT_AT_SEC;
-    const interval = urgent ? SWAT_C2_URGENT_BEEP_INTERVAL : SWAT_C2_BEEP_INTERVAL;
-    if (this.c2BeepTimer >= interval && this.c2Timer < SWAT_C2_FUSE_SEC) {
-      this.c2BeepTimer = 0;
-      this.team.emitC2Beep(door, urgent);
-    }
-    if (this.c2Timer >= SWAT_C2_FUSE_SEC) {
-      this.team.detonateC2(this, door, this.c2Side);
-      if (this.state === 'breach') {
-        this.clearBreachState();
-        this.setState(this.huntTarget ? 'hunt' : 'sweep');
-      }
-    }
   }
 
   /** トラップに気付いた: その場でしゃがんで解除する（時間がかかる。失敗すると起爆） */

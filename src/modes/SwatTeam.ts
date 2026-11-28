@@ -4,6 +4,8 @@ import type { AimSettleParams, RoomDef, Vec3 } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { AllyTarget, CombatContext } from '../ai/EngageBehavior';
 import { blockedAtFiltered } from '../ai/SquadRoute';
+import { RADIO_SAME_SPEAKER_SEC, RADIO_SAME_TEAM_SEC, RepeatGuard } from '../ai/actionGuard';
+import { radioGroupKey } from '../ai/radioLines';
 import type { EntryMode, FriendlyPos } from '../ai/cqbEntry';
 import {
   BASE_SHIELD_COMBAT,
@@ -176,6 +178,8 @@ export class SwatTeam implements SwatTeamHost {
   private readonly muzzleDirTmp: Vec3 = { x: 0, y: 0, z: -1 };
   /** 連携無線スタガーキュー（F12） */
   private readonly radioQueue: { hunter: SwatHunter; text: string; voice: string }[] = [];
+  /** 同じ種類の台詞の連呼を止める（話者ごと・隊全体） */
+  private readonly radioRepeat = new RepeatGuard();
   private radioSpeakGap = 0;
   private readonly livingTargetsBuf: AllyTarget[] = [];
   private readonly combatCtx: CombatContext;
@@ -692,6 +696,7 @@ export class SwatTeam implements SwatTeamHost {
       this.hotSpots.update(dt);
     }
     for (const h of this.hunters) h.update(dt);
+    this.tactics.updateArmedC2(dt);
     this.tactics.updatePincerRefresh();
     this.tactics.updateC2Blasts(dt);
     this.coverage.tickCoverage(dt, this.started);
@@ -821,6 +826,22 @@ export class SwatTeam implements SwatTeamHost {
     this.tactics.onC2PlantStart(by, door);
   }
 
+  c2PlantProgress(doorId: string): number {
+    return this.tactics.c2PlantProgress(doorId);
+  }
+
+  saveC2PlantProgress(doorId: string, sec: number): void {
+    this.tactics.saveC2PlantProgress(doorId, sec);
+  }
+
+  armC2(by: SwatHunter, door: Door, side: number): void {
+    this.tactics.armC2(by, door, side);
+  }
+
+  isC2Armed(doorId: string): boolean {
+    return this.tactics.isC2Armed(doorId);
+  }
+
   emitC2Beep(door: Door, urgent: boolean): void {
     this.tactics.emitC2Beep(door, urgent);
   }
@@ -888,6 +909,8 @@ export class SwatTeam implements SwatTeamHost {
   }
 
   isDoorBeingBreached(doorId: string, exclude?: SwatHunter): boolean {
+    // 設置済みの爆薬がある扉は、誰かが破っている最中として扱う（別の隊員が付け直したり蹴ったりしない）
+    if (this.tactics.isC2Armed(doorId)) return true;
     return this.hunters.some((h) => h !== exclude && h.alive && h.state === 'breach' && h.breachDoorId === doorId);
   }
 
@@ -992,11 +1015,26 @@ export class SwatTeam implements SwatTeamHost {
 
   private queueRadio(h: SwatHunter | undefined, text: string, voice: string): void {
     if (!h) return;
+    // 同じ話者が同じ種類の台詞を言い直さない。隊の誰かが直前に言った種類も重ねない（優先度 force でも同じ）
+    const group = radioGroupKey(text);
+    const now = this.clock;
+    const teamKey = `team|${group}`;
+    const selfKey = `${h.id}|${group}`;
+    if (
+      !this.radioRepeat.ready(teamKey, now, RADIO_SAME_TEAM_SEC) ||
+      !this.radioRepeat.ready(selfKey, now, RADIO_SAME_SPEAKER_SEC)
+    ) {
+      return;
+    }
     if (this.radioSpeakGap <= 0 && this.radioQueue.length === 0) {
       this.emitRadioNow(h, text, voice);
     } else if (this.radioQueue.length < 4) {
       this.radioQueue.push({ hunter: h, text, voice });
+    } else {
+      return; // 満杯で捨てた台詞は「言った」ことにしない
     }
+    this.radioRepeat.mark(teamKey, now);
+    this.radioRepeat.mark(selfKey, now);
   }
 
   private radio(h: SwatHunter | undefined, text: string, voice: string, force = false): void {

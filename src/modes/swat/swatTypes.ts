@@ -164,6 +164,9 @@ export const ROUTE_PLAN_DOOR_RADIUS = 0.95;
 export const ROUTE_WALK_RADIUS = 0.3;
 export const ROUTE_CHECK_SEC = 1.0;
 export const SKIP_DOOR_TTL_SEC = 25;
+/** 同じ扉のブリーチを BREACH_RETRY_WINDOW_SEC 秒のうちに BREACH_RETRY_MAX 回より多く始め直したら、その扉をいったん諦める */
+export const BREACH_RETRY_MAX = 3;
+export const BREACH_RETRY_WINDOW_SEC = 40;
 /** 届かなかった音源・目標を諦め済みとして覚える秒数と、同一視する半径(m) */
 export const ABANDON_TTL_SEC = 20;
 export const ABANDON_RADIUS = 3.5;
@@ -397,6 +400,14 @@ export interface SwatTeamHost {
   shouldUseC2(doorId: string): boolean;
   onBreach(by: SwatHunter, door: Door): void;
   onC2PlantStart(by: SwatHunter, door: Door): void;
+  /** 扉に途中まで付けた C2 の進み具合（秒）。未着手は 0 */
+  c2PlantProgress(doorId: string): number;
+  /** 設置を途中でやめた。進み具合を残す */
+  saveC2PlantProgress(doorId: string, sec: number): void;
+  /** 設置完了。時限・警告音・起爆はチームが受け持つ */
+  armC2(by: SwatHunter, door: Door, side: number): void;
+  /** 扉に時限の進んでいる C2 があるか */
+  isC2Armed(doorId: string): boolean;
   emitC2Beep(door: Door, urgent: boolean): void;
   detonateC2(by: SwatHunter, door: Door, side: number): void;
   trapStillThere(door: Door): boolean;
