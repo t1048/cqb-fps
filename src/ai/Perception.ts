@@ -16,6 +16,17 @@ export interface PerceptionTarget {
 }
 
 const DEG2RAD = Math.PI / 180;
+
+/**
+ * 停電中の見え方（world/Flashlights.ts が実装）。
+ * 暗闇では素の視認距離が rangeMul 倍に縮み、ライトを点けた容疑者だけがライトの円錐の中を遠くまで見える。
+ */
+export interface DarknessView {
+  readonly dark: boolean;
+  readonly rangeMul: number;
+  /** 点灯中のライトの円錐（cos(半角) と届く距離）。消灯なら null */
+  beamOf(suspectId: string): { cosHalf: number; range: number } | null;
+}
 /** 足音の聴覚レイ基準オフセット（足元 → 胴の高さ。設計書 §2.2 NOISE_FOOTSTEP_OFFSET） */
 const NOISE_FOOTSTEP_OFFSET = 1.2;
 /** 床上閃光弾の聴覚レイ基準オフセット（床スラブ上面との自己交差回避。設計書 §2.2 NOISE_FLASH_OFFSET） */
@@ -50,6 +61,7 @@ export class Perception {
   private readonly noiseFromTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly chestTmp: Vec3 = { x: 0, y: 0, z: 0 };
   private alliesProvider?: () => readonly AllyTarget[];
+  private darkness?: DarknessView;
   private disposed = false;
 
   constructor(
@@ -66,6 +78,26 @@ export class Perception {
 
   attachAllies(allies: () => readonly AllyTarget[]): void {
     this.alliesProvider = allies;
+  }
+
+  attachDarkness(d: DarknessView): void {
+    this.darkness = d;
+  }
+
+  /** 暗闇を考慮した視認: 素の視野（距離は縮む）か、点灯中のライトの円錐のどちらかに入れば見える */
+  private canSeeLit(
+    sx: number,
+    sz: number,
+    fx: number,
+    fz: number,
+    cosHalf: number,
+    range: number,
+    darkMul: number,
+    beam: { cosHalf: number; range: number } | null,
+    p: Vec3,
+  ): boolean {
+    if (this.canSeePoint(sx, sz, fx, fz, cosHalf, range * darkMul, p)) return true;
+    return beam !== null && this.canSeePoint(sx, sz, fx, fz, beam.cosHalf, Math.min(range, beam.range), p);
   }
 
   private anySuspectOpeningDoor(): boolean {
@@ -153,6 +185,9 @@ export class Perception {
       this.originTmp.z = sz;
       const fx = -Math.sin(s.body.yawRad);
       const fz = -Math.cos(s.body.yawRad);
+      const dark = this.darkness?.dark === true;
+      const darkMul = dark ? this.darkness!.rangeMul : 1;
+      const beam = dark ? this.darkness!.beamOf(s.id) : null;
 
       let hasSpotted = false;
       let spottedX = 0;
@@ -163,8 +198,8 @@ export class Perception {
       if (
         !this.ignorePlayer &&
         this.player.alive !== false &&
-        (this.canSeePoint(sx, sz, fx, fz, cosHalf, playerRange, this.playerEyePt) ||
-          this.canSeePoint(sx, sz, fx, fz, cosHalf, playerRange, this.playerBodyPt))
+        (this.canSeeLit(sx, sz, fx, fz, cosHalf, playerRange, darkMul, beam, this.playerEyePt) ||
+          this.canSeeLit(sx, sz, fx, fz, cosHalf, playerRange, darkMul, beam, this.playerBodyPt))
       ) {
         bestDist = Math.hypot(this.playerEyePt.x - sx, this.playerEyePt.z - sz);
         hasSpotted = true;
@@ -178,8 +213,12 @@ export class Perception {
           const dx = a.px - sx;
           const dz = a.pz - sz;
           const d = Math.hypot(dx, dz);
-          if (d > v.range || d >= bestDist) continue;
-          if (d > 0.01 && (dx * fx + dz * fz) / d < cosHalf) continue;
+          if (d >= bestDist) continue;
+          const dot = d > 0.01 ? (dx * fx + dz * fz) / d : 1;
+          // 素の視野（暗闇では距離が縮む）か、点灯中のライトの円錐のどちらかに入っているか
+          const inPlain = d <= v.range * darkMul && dot >= cosHalf;
+          const inBeam = beam !== null && d <= Math.min(v.range, beam.range) && dot >= beam.cosHalf;
+          if (!inPlain && !inBeam) continue;
           if (
             hasLineOfSight(this.colliders, this.originTmp, a.getEye()) ||
             hasLineOfSight(this.colliders, this.originTmp, a.getChest())

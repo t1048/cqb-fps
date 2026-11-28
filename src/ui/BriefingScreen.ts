@@ -343,6 +343,8 @@ export class BriefingScreen {
           [t('民間人に F 長押し', 'Hold F on Civilian'), t('人質を拘束して連れ回す（もう一度 F で解放）', 'Grab Hostage as Shield (Press F to release)')],
           [t('ホイール', 'Wheel'), t('ドア段階開閉', 'Incremental Door Open')],
           [t('Space / Space 長押し', 'Space / Hold Space'), t('準備完了（即突入） / 投降', 'Ready Up (Start Assault) / Surrender')],
+          ['V', t('ライト（停電中に視界を確保。SWAT に位置がバレるが、暗視装置を照らすと目眩まし）', 'Flashlight (see in a blackout; gives you away, but dazzles SWAT night vision)')],
+          [t('配電盤で F 長押し', 'Hold F at Breaker'), t('メインブレーカーを落とす / 上げる', 'Cut / Restore the Main Breaker')],
           ['M / ESC', t('マップ切替 / ポーズ・設定', 'Toggle Map / Pause & Settings')],
         ]
       : [
@@ -354,6 +356,8 @@ export class BriefingScreen {
           ['Space', t('警告コール（投降勧告）', 'Compliance Shout (Warning Call)')],
           [t('F / ホイール / G', 'F / Wheel / G'), t('開閉・拘束 / 段階開閉 / ブリーチ', 'Interact & Arrest / Peek Door / Breach')],
           ['1 / 2 / 3', t('主武器 / 非致死 / フラッシュ', 'Primary / Less-Lethal / Flashbang')],
+          ['N', t('暗視装置（停電中は増幅して見える。容疑者のライトを正面から浴びると白飛び）', 'Night Vision (amplified view in a blackout; washes out if a suspect shines a light at you)')],
+          [t('配電盤で F 長押し', 'Hold F at Breaker'), t('メインブレーカーを落とす / 上げる', 'Cut / Restore the Main Breaker')],
           [t('中クリック / 4', 'MMB / 4'), t('オプティワンド構え⇔武器（左クリック長押しでカメラ、しゃがみ+ドア前でドア下）', 'Optiwand ⇔ Weapon (Hold LMB: camera / Crouch at door: under-door)')],
           ['M / ESC', t('マップ切替 / ポーズ・設定', 'Toggle Map / Pause & Settings')],
         ];

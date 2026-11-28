@@ -9,7 +9,7 @@ import type { AABB, Collider } from '../world/WorldBuilder';
 import type { AllyTarget, CombatTarget } from './EngageBehavior';
 import { Civilian } from './Civilian';
 import { Suspect, type GasSample } from './Suspect';
-import { Perception, type PerceptionTarget } from './Perception';
+import { Perception, type DarknessView, type PerceptionTarget } from './Perception';
 import { MoraleSystem } from './Morale';
 import { AIDebugLabel } from '../ui/AIDebugLabel';
 import type { AlertView } from './SuspectAlert';
@@ -233,6 +233,11 @@ export class EntityManager {
   }
 
   /** 容疑者モード: 味方 NPC が狙う SWAT 隊員を渡す */
+  /** 停電中の見え方（暗闇・ライト）を容疑者の知覚へ渡す */
+  attachDarkness(d: DarknessView): void {
+    this.perception?.attachDarkness(d);
+  }
+
   attachHostileTargets(fn: () => readonly AllyTarget[]): void {
     this.hostileTargets = fn;
     this.perception?.attachAllies(fn);

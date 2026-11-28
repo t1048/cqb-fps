@@ -81,6 +81,8 @@ import {
   SWAT_COMBAT,
   SWAT_MOBILITY,
   VISION_FOV_DEG,
+  NVG_FOV_DEG,
+  LIT_TARGET_RANGE_MUL,
   type BreachIntel,
   type CoverCell,
   type HunterState,
@@ -501,6 +503,16 @@ export class SwatTeam implements SwatTeamHost {
   }
   set trapKills(v: number) {
     this.obstacles.trapKills = v;
+  }
+
+  /** 停電中の見え方（main が毎フレーム設定する） */
+  visionFovDeg = VISION_FOV_DEG;
+  visionRangeMul = 1;
+
+  /** 停電中は暗視装置の狭い視野。プレイヤーのライトが点いていれば光で気付き、遠くから見える */
+  setDarkness(dark: boolean, playerLit: boolean): void {
+    this.visionFovDeg = dark && !playerLit ? NVG_FOV_DEG : VISION_FOV_DEG;
+    this.visionRangeMul = dark && playerLit ? LIT_TARGET_RANGE_MUL : 1;
   }
 
   get playerCrouching(): boolean {
