@@ -8,6 +8,12 @@ import { TitleAudio } from './TitleAudio';
 import type { GameMode } from '../modes/SuspectMode';
 import { disposeObject } from '../core/dispose';
 import { KOFI_URL } from './shareLinks';
+import {
+  getStageUnlockLevel,
+  isStageUnlocked,
+  isSuspectModeUnlocked,
+  subscribeProgression,
+} from '../rules/Progression';
 
 /**
  * タイトル画面。
@@ -56,6 +62,9 @@ const CSS = `
 .tts-choice{text-align:left;padding:9px 11px;border-radius:8px;background:rgba(25,37,52,.85);border:2px solid #34495f;color:#dce6f2;cursor:pointer;font:13px/1.35 sans-serif;display:flex;flex-direction:column;gap:2px;transition:background .12s,border-color .12s,transform .12s;min-width:0}
 .tts-choice:hover,.tts-choice:focus-visible{background:#213248;border-color:#7fb4ec;outline:none;transform:translateY(-1px)}
 .tts-choice[aria-pressed="true"]{border-color:var(--c);background:color-mix(in srgb,var(--c) 18%,#111a26);box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 40%,transparent) inset,0 0 18px color-mix(in srgb,var(--c) 30%,transparent)}
+.tts-choice.locked,.tts-choice:disabled{opacity:.52;filter:grayscale(.65);cursor:not-allowed;border-style:dashed;border-color:#3a4a5e;background:rgba(16,23,32,.72);transform:none}
+.tts-choice.locked:hover,.tts-choice:disabled:hover{background:rgba(16,23,32,.72);border-color:#3a4a5e;transform:none}
+.tts-lock-note{font:bold 11.5px sans-serif;color:#f2c14e}
 .tts-choice-name{font:bold 15px sans-serif;color:#f4f8fc;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tts-choice-desc{font-size:11.5px;color:#9fb2c6;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .tts-size{font:900 26px/1 sans-serif}
@@ -1127,6 +1136,7 @@ export class TitleScreen {
   private soundStartedAt = -Infinity;
   private readonly unsubLocale: () => void;
   private readonly unsubSound: () => void;
+  private readonly unsubProg: () => void;
   private readonly titleAudio = new TitleAudio();
   private readonly prevShadowEnabled: boolean;
   private readonly prevAutoUpdate: boolean;
@@ -1134,7 +1144,7 @@ export class TitleScreen {
   constructor(parent: HTMLElement, private readonly opts: TitleScreenOptions) {
     this.renderer = opts.renderer;
     this.audio = opts.audio;
-    this.mode = opts.initialMode;
+    this.mode = opts.initialMode === 'suspect' && !isSuspectModeUnlocked() ? 'swat' : opts.initialMode;
     this.stageId = opts.initialStageId;
 
     if (!document.getElementById(STYLE_ID)) {
@@ -1302,6 +1312,14 @@ export class TitleScreen {
     this.unsubLocale = onLocaleChange(() => {
       if (!this.disposed) renderTexts();
     });
+    this.unsubProg = subscribeProgression(() => {
+      if (this.disposed) return;
+      if (this.mode === 'suspect' && !isSuspectModeUnlocked()) this.mode = 'swat';
+      this.ensureValidStageSelection();
+      this.renderModes();
+      this.renderSizes();
+      this.renderStartLabel();
+    });
 
     this.loadStages();
 
@@ -1317,10 +1335,7 @@ export class TitleScreen {
       (stages) => {
         if (this.disposed) return;
         this.stages = stages;
-        if (!this.stageId || !stages.some((s) => s.id === this.stageId)) {
-          // 既定は「中」。無ければ先頭
-          this.stageId = (stages.find((s) => s.id === 'random_house') ?? stages[0])?.id ?? null;
-        }
+        this.ensureValidStageSelection();
         this.renderSizes();
         this.renderStartLabel();
       },
@@ -1333,19 +1348,48 @@ export class TitleScreen {
     );
   }
 
+  private ensureValidStageSelection(): void {
+    if (this.stages.length === 0) return;
+    if (this.stageId && this.stages.some((s) => s.id === this.stageId) && isStageUnlocked(this.mode, this.stageId)) {
+      return;
+    }
+    const unlocked = this.stages.filter((s) => isStageUnlocked(this.mode, s.id));
+    this.stageId = (unlocked[0] ?? this.stages[0])?.id ?? null;
+  }
+
   private renderModes(): void {
     this.modeGrid.innerHTML = '';
-    const items: [GameMode, string, string][] = [
-      ['swat', t('🛡 SWAT（突入側）', '🛡 SWAT (Assault)'), t('隊長として部隊を指揮し、人質を救出して容疑者を制圧', 'Lead your squad, rescue hostages, neutralize threats')],
-      ['suspect', t('🔒 容疑者（籠城側）', '🔒 Suspect (Defend)'), t('立てこもり犯として突入してくる SWAT をしのぐ', 'Hold out against an incoming SWAT raid')],
+    const suspectUnlocked = isSuspectModeUnlocked();
+    const items: { mode: GameMode; name: string; desc: string; lockedReason?: string }[] = [
+      {
+        mode: 'swat',
+        name: t('🛡 SWAT（突入側）', '🛡 SWAT (Assault)'),
+        desc: t('隊長として部隊を指揮し、人質を救出して容疑者を制圧', 'Lead your squad, rescue hostages, neutralize threats'),
+      },
+      {
+        mode: 'suspect',
+        name: suspectUnlocked ? t('🔫 容疑者（籠城側）', '🔫 Suspect (Defend)') : t('🔒 容疑者（籠城側）', '🔒 Suspect (Defend)'),
+        desc: t('立てこもり犯として突入してくる SWAT をしのぐ', 'Hold out against an incoming SWAT raid'),
+        lockedReason: suspectUnlocked ? undefined : t('🔒 SWAT Lv.2 で解放（初回クリア）', '🔒 Unlocks at SWAT Lv.2 (1st clear)'),
+      },
     ];
-    for (const [m, name, desc] of items) {
+    for (const item of items) {
       this.modeGrid.appendChild(
-        this.choice(m === this.mode, MODE_COLORS[m], name, desc, () => {
-          this.mode = m;
-          this.renderModes();
-          this.renderStartLabel();
-        }, (b) => (b.dataset.mode = m)),
+        this.choice(
+          item.mode === this.mode,
+          MODE_COLORS[item.mode],
+          item.name,
+          item.desc,
+          () => {
+            this.mode = item.mode;
+            this.ensureValidStageSelection();
+            this.renderModes();
+            this.renderSizes();
+            this.renderStartLabel();
+          },
+          (b) => (b.dataset.mode = item.mode),
+          item.lockedReason,
+        ),
       );
     }
   }
@@ -1377,19 +1421,32 @@ export class TitleScreen {
       return;
     }
     this.sizeGrid.style.gridTemplateColumns = `repeat(${Math.min(this.stages.length, 3)},minmax(0,1fr))`;
+    const modeLabel = this.mode === 'suspect' ? t('容疑者', 'Suspect') : 'SWAT';
     for (const st of this.stages) {
-      const active = st.id === this.stageId;
-      const btn = this.choice(active, SIZE_COLOR, '', tStageTagline(st.id, st.tagline ?? st.description ?? ''), () => {
-        this.stageId = st.id;
-        this.renderSizes();
-      }, (b) => (b.dataset.stageId = st.id));
+      const unlocked = isStageUnlocked(this.mode, st.id);
+      const reqLv = getStageUnlockLevel(st.id);
+      const lockedReason = unlocked ? undefined : t(`🔒 ${modeLabel} Lv.${reqLv} で解放`, `🔒 Unlocks at ${modeLabel} Lv.${reqLv}`);
+      const active = unlocked && st.id === this.stageId;
+      const btn = this.choice(
+        active,
+        SIZE_COLOR,
+        '',
+        tStageTagline(st.id, st.tagline ?? st.description ?? ''),
+        () => {
+          this.stageId = st.id;
+          this.renderSizes();
+        },
+        (b) => (b.dataset.stageId = st.id),
+        lockedReason,
+      );
       const head = btn.querySelector('.tts-choice-name');
       if (head) {
         head.textContent = '';
         const sz = document.createElement('span');
         sz.className = 'tts-size';
-        sz.textContent = st.size ? tStageSize(st.id, st.size) : st.name;
-        sz.style.color = active ? SIZE_COLOR : '#cfe0f0';
+        const label = st.size ? tStageSize(st.id, st.size) : st.name;
+        sz.textContent = unlocked ? label : `🔒 ${label}`;
+        sz.style.color = active ? SIZE_COLOR : unlocked ? '#cfe0f0' : '#7f93a8';
         head.appendChild(sz);
       }
       this.sizeGrid.appendChild(btn);
@@ -1415,29 +1472,34 @@ export class TitleScreen {
     desc: string,
     onSelect: () => void,
     decorate: (b: HTMLButtonElement) => void,
+    lockedReason?: string,
   ): HTMLButtonElement {
+    const locked = Boolean(lockedReason);
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'tts-choice';
+    b.className = locked ? 'tts-choice locked' : 'tts-choice';
+    b.disabled = locked;
     b.style.setProperty('--c', color);
-    b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    b.setAttribute('aria-pressed', !locked && active ? 'true' : 'false');
     const head = document.createElement('div');
     head.className = 'tts-choice-name';
     head.textContent = name;
     const d = document.createElement('div');
-    d.className = 'tts-choice-desc';
-    d.textContent = desc;
+    d.className = locked ? 'tts-lock-note' : 'tts-choice-desc';
+    d.textContent = locked ? lockedReason! : desc;
     b.append(head, d);
     decorate(b);
-    b.addEventListener('click', () => {
-      if (this.disposed || this.loading) return;
-      this.audio?.unlock();
-      onSelect();
-    });
-    b.addEventListener('dblclick', () => {
-      if (this.disposed || this.loading) return;
-      this.handleStart();
-    });
+    if (!locked) {
+      b.addEventListener('click', () => {
+        if (this.disposed || this.loading) return;
+        this.audio?.unlock();
+        onSelect();
+      });
+      b.addEventListener('dblclick', () => {
+        if (this.disposed || this.loading) return;
+        this.handleStart();
+      });
+    }
     return b;
   }
 
@@ -1451,6 +1513,8 @@ export class TitleScreen {
 
   private readonly handleStart = (): void => {
     if (this.disposed || this.loading || !this.stageId) return;
+    if (this.mode === 'suspect' && !isSuspectModeUnlocked()) return;
+    if (!isStageUnlocked(this.mode, this.stageId)) return;
     this.audio?.unlock();
     this.loading = true;
     this.loadingEl.classList.add('on');
@@ -1520,6 +1584,7 @@ export class TitleScreen {
     window.removeEventListener('resize', this.onResize);
     this.unsubLocale();
     this.unsubSound();
+    this.unsubProg();
     this.titleAudio.dispose();
     this.sceneView.onShot = null;
     this.sceneView.dispose();
