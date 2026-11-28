@@ -1,0 +1,17 @@
+{
+  "startFatigue": 55,
+  "supplyFatigue": 15,
+  "startHour": 6,
+  "player": {
+    "tiers": [50, 75],
+    "swayDeg": [0.10, 0.22],
+    "spreadAddDeg": [0.4, 0.9],
+    "reloadMul": [1.15, 1.3],
+    "speedMul": [1.0, 0.92]
+  },
+  "ai": {
+    "spreadMulPerNorm": 0.3,
+    "reactionAddSecAt100": 0.27,
+    "moralePenaltyAt100": 20
+  }
+}

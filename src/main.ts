@@ -6,7 +6,7 @@ import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
 import { DataLoader } from './core/DataLoader';
-import type { AIProfile, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SquadConfig, StageEntry, SuspectAlertConfig, Vec3, WeaponDef } from './core/types';
+import type { AIProfile, AimSettleParams, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SiegeConfig, SquadConfig, StageEntry, SuspectAlertConfig, Vec3, WeaponDef } from './core/types';
 import { CivilianState, SuspectState, createGameEventBus, type GameEventBus } from './core/events';
 import type { Civilian } from './ai/Civilian';
 import { AudioEngine } from './core/Audio';
@@ -36,6 +36,7 @@ import { TearGasEffect } from './player/TearGasEffect';
 import { ResultScreen, ScoreHud } from './ui/ResultScreen';
 import { RoE } from './rules/RoE';
 import { Mission } from './rules/Mission';
+import { aiFatigueEffects, fatigueTier, playerFatigueEffects } from './rules/siegeFatigue';
 import { WorldBuilder, type Collider } from './world/WorldBuilder';
 import { DoorSystem } from './world/Door';
 import { normalizeSeed, randomSeed } from './world/generator/Rng';
@@ -44,6 +45,7 @@ import { motifById } from './world/Motif';
 import { ViewModel } from './player/ViewModel';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { Optiwand } from './player/Optiwand';
+import { MedkitUse } from './player/Medkit';
 import { ScoutIntel } from './ai/ScoutIntel';
 import { SuspectAlert, type NegotiationAlertInfo } from './ai/SuspectAlert';
 import { HostageThreat } from './ai/HostageThreat';
@@ -166,6 +168,8 @@ class App {
   /** 初回のみ: Z キーで仲間に指示するツアー（SWAT モード） */
   private squadTour: SquadTour | null = null;
   private readonly hostageGrab: HostageGrab | null = null;
+  /** 救急キット（容疑者モードだけ） */
+  private readonly medkit: MedkitUse | null = null;
   private readonly fortify: Fortify | null = null;
   private readonly pepper: PepperEffect | null = null;
   private readonly tearGas: TearGas;
@@ -193,6 +197,9 @@ class App {
   private readonly squadCfg: SquadConfig;
   /** 交渉の結果（突入時の警戒度ベースラインと緊張）。交渉 UI が更新する */
   private negotiationBaseline = 0;
+  /** 籠城の消耗（0..100）と設定。突入の前に 1 回決まり、籠城中は変わらない（交渉が書き換えるのは WP3b） */
+  private readonly siegeCfg: SiegeConfig;
+  private siegeFatigue: number;
   private negotiationInfo: NegotiationAlertInfo = { tension: 0, trust: 0, ultimatums: 0, broken: false };
   private readonly mapId: string;
   private phase: AppPhase = 'briefing';
@@ -209,6 +216,8 @@ class App {
     stages: readonly StageEntry[],
     squadCfg: SquadConfig,
     suspectAlertCfg: SuspectAlertConfig,
+    swatAimSettle: AimSettleParams,
+    siegeCfg: SiegeConfig,
     onSelectStage: (stageId: string) => void,
     onRetry: () => void,
     onRegenerate: (seed?: number) => void,
@@ -218,6 +227,8 @@ class App {
     onToggleReinforcements: (enabled: boolean) => void,
   ) {
     this.mode = mode;
+    this.siegeCfg = siegeCfg;
+    this.siegeFatigue = siegeCfg.startFatigue;
     this.squadCfg = squadCfg;
     const suspect = mode === 'suspect';
     map = applyMissionRoster(map);
@@ -266,7 +277,7 @@ class App {
     // 負傷モデル（被弾で速度低下・照準乱れ）は SWAT モードのみ。頭部倍率と防弾チョッキの式は両モード共通
     this.player.woundsEnabled = !suspect;
     // SWAT 隊員は標準装備として防弾チョッキを着用。容疑者は交渉（人質交換）で入手する
-    if (!suspect) this.player.equipArmor(playerCfg.armor.swatIssue);
+    if (!suspect) this.player.equipArmor(playerCfg.armor.swatIssue, 'swatIssue');
     this.audio = acquireSharedAudio();
     this.audio.stopAll();
     this.audio.setMasterVolume(initialSettings.masterVolume);
@@ -480,6 +491,7 @@ class App {
           else this.pepper?.hit();
         },
         reinforcements,
+        aimSettle: swatAimSettle,
       });
       this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
       this.scene.add(this.swatTeam.root);
@@ -493,6 +505,8 @@ class App {
         this.bus,
         this.interaction,
         (report, failed) => this.endMission(failed, report),
+        // 突入開始の瞬間に、仲間の容疑者へ消耗による士気ペナルティを 1 回だけ適用する
+        () => this.applySiegeMorale(),
       );
       const sm = this.suspectMission;
       this.allyDirector = new SuspectAllyDirector({
@@ -516,6 +530,16 @@ class App {
         () => this.doors.aimed(2.6) !== null,
         this.bus,
       );
+      this.medkit = new MedkitUse({
+        player: this.player,
+        input: this.input,
+        weapons: this.weapons,
+        cfg: playerCfg.medkit,
+        isHoldingHostage: () => this.hostageGrab?.holding != null,
+        isThrowableEquipped: () => this.flashbang.equipped,
+        showGauge: (label, ratio) => sm.showGauge(label, ratio),
+        subtitle: this.subtitle,
+      });
       this.pepper = new PepperEffect(this.player, this.weapons, this.subtitle, this.renderer.domElement);
       this.tearGasEffect = new TearGasEffect(this.player, this.weapons, this.tearGas, this.subtitle, this.bus);
       this.fortify = new Fortify({
@@ -550,12 +574,27 @@ class App {
           addPrep: (sec) => sm.addPrep(sec),
           breakdown: () => sm.breakdown(),
           prepSec: () => sm.prepLeft,
-          giveArmor: () => this.player.equipArmor(playerCfg.armor.suspectVest),
-          hasArmor: () => this.player.armor > 0,
+          giveArmor: () => this.player.equipArmor(playerCfg.armor.suspectVest, 'suspectVest'),
+          hasArmor: () => this.player.armorKind !== null,
+          vestSpec: () => ({
+            durability: playerCfg.armor.suspectVest,
+            absorbPct: Math.round(playerCfg.armor.absorb * 100),
+            ...playerCfg.armor.weight.suspectVest,
+          }),
           giveMagazines: (n) => this.weapons.addReserveMagazines(n),
+          giveMedkit: (n) => this.medkit?.add(n),
+          medkitSpec: () => ({ ...playerCfg.medkit }),
           withdrawSwat: () => team.withdraw(),
           allies: () => [...this.entities.suspects.values()],
           swatCount: () => team.total,
+          fatigue: () => this.siegeFatigue,
+          setFatigue: (v) => {
+            this.siegeFatigue = Math.max(0, Math.min(100, v));
+          },
+          supplyFatigue: () => this.siegeCfg.supplyFatigue,
+          siegeHour: () => this.siegeCfg.startHour,
+          fatigueTier: () => fatigueTier(this.siegeFatigue, this.siegeCfg.player.tiers),
+          markScouted: () => team.setScouted(true),
         }),
         () => this.startMission(),
       );
@@ -574,6 +613,13 @@ class App {
             this.negotiationInfo = info;
             this.negotiationBaseline = baseline;
           },
+          fatigue: () => this.siegeFatigue,
+          setFatigue: (v) => {
+            this.siegeFatigue = Math.max(0, Math.min(100, v));
+          },
+          supplyFatigue: () => this.siegeCfg.supplyFatigue,
+          siegeHour: () => this.siegeCfg.startHour,
+          fatigueTier: () => fatigueTier(this.siegeFatigue, this.siegeCfg.player.tiers),
           roomName: (s) => {
             const raw =
               map.rooms.find(
@@ -608,6 +654,10 @@ class App {
       suspect ? undefined : this.squad,
       motif ? { id: motif.id, label: motif.label, color: motif.accentCss } : undefined,
     );
+    if (this.medkit) {
+      const kit = this.medkit;
+      this.hud.medkitProvider = () => kit.count;
+    }
     if (this.optiwand) {
       const wand = this.optiwand;
       this.hud.toolLabel = () => wand.toolLabel();
@@ -739,6 +789,31 @@ class App {
     this.negotiationPhase.show();
   }
 
+  /**
+   * 籠城の消耗の効果を適用する（startMission で 1 回）。
+   * 容疑者モード: プレイヤーと仲間の容疑者の両方に効く（士気は突入開始の瞬間に別途 applySiegeMorale）。
+   * SWAT モード: 容疑者 AI だけに効く（拡散・反応時間・士気。プレイヤーは常に消耗 0 扱い）。
+   */
+  private applySiegeFatigue(): void {
+    const v = this.siegeFatigue;
+    const ai = aiFatigueEffects(v, this.siegeCfg.ai);
+    if (this.mode === 'suspect') {
+      this.player.setFatigueEffects(playerFatigueEffects(v, this.siegeCfg.player));
+      for (const s of this.entities.suspects.values()) s.applyFatigue(ai);
+    } else {
+      for (const s of this.entities.suspects.values()) {
+        s.applyFatigue(ai);
+        s.applyFatigueMorale(ai.moraleDelta);
+      }
+    }
+  }
+
+  /** 容疑者モードの突入開始の瞬間: 仲間の容疑者へ消耗による士気ペナルティ（1 体 1 回） */
+  private applySiegeMorale(): void {
+    const { moraleDelta } = aiFatigueEffects(this.siegeFatigue, this.siegeCfg.ai);
+    for (const s of this.entities.suspects.values()) s.applyFatigueMorale(moraleDelta);
+  }
+
   private startMission(): void {
     if (this.phase !== 'briefing' && this.phase !== 'negotiation') return;
     this.pauseMenu.hide();
@@ -754,6 +829,7 @@ class App {
     this.suspectMission?.setVisible(true);
     this.fortify?.setVisible(true);
     this.squadTour?.setVisible(true);
+    this.applySiegeFatigue();
     this.beginSwatMission();
     try {
       void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
@@ -859,6 +935,7 @@ class App {
       return;
     }
     this.roe.update(dt);
+    this.medkit?.update(dt); // player / weapons より前（移動の上限と射撃禁止を同フレームで効かせる）
     this.player.update(dt);
     this.audioBridge.updateListener(this.camera);
     this.audio.update(dt);
@@ -1309,6 +1386,8 @@ function start(mapId?: string, seed?: number, mode?: GameMode, reinforcements?: 
         loadedStages,
         data.squad,
         data.suspectAlert,
+        data.swatAimSettle,
+        data.siege,
         (nextStageId) => start(nextStageId),
         () => start(),
         (nextSeed) => start(targetId, nextSeed ?? randomSeed()),

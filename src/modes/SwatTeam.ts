@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { t } from '../core/i18n';
-import type { RoomDef, Vec3 } from '../core/types';
+import { t, tRoomName } from '../core/i18n';
+import type { AimSettleParams, RoomDef, Vec3 } from '../core/types';
 import { disposeObject } from '../core/dispose';
 import type { AllyTarget, CombatContext } from '../ai/EngageBehavior';
 import { blockedAtFiltered } from '../ai/SquadRoute';
@@ -85,6 +85,7 @@ import {
   SWAT_COMBAT,
   SWAT_MOBILITY,
   VISION_FOV_DEG,
+  type BreachIntel,
   type CoverCell,
   type HunterState,
   type ReinforcementCheck,
@@ -165,6 +166,8 @@ export class SwatTeam implements SwatTeamHost {
   private shieldHintShown = false;
   private radioCd = 0;
   private started = false;
+  private scouted = false;
+  private _breachIntel: BreachIntel | null = null;
   private disposed = false;
   /** 統計 */
   kills = 0;
@@ -249,6 +252,9 @@ export class SwatTeam implements SwatTeamHost {
       },
       get radioQueueLength() {
         return self.radioQueue.length;
+      },
+      get breachIntel() {
+        return self._breachIntel;
       },
       doorById: (id) => this.doorById(id),
       indoorRoomAt: (x, z, y) => this.coverage.indoorRoomAt(x, z, y),
@@ -477,6 +483,10 @@ export class SwatTeam implements SwatTeamHost {
     this.tactics.lastSighting = v;
   }
 
+  get aimSettle(): AimSettleParams | undefined {
+    return this.d.aimSettle;
+  }
+
   get reactionSec(): number {
     return this.tactics.reactionSec;
   }
@@ -611,9 +621,36 @@ export class SwatTeam implements SwatTeamHost {
     return this.entry.hasAlternateEntry(from, exceptId, blacklist);
   }
 
+  /** 交渉の差し入れで偵察された印（突入の瞬間にプレイヤーの部屋を知る） */
+  setScouted(on: boolean): void {
+    this.scouted = on;
+  }
+
+  get breachIntel(): BreachIntel | null {
+    return this._breachIntel;
+  }
+
+  clearBreachIntel(): void {
+    this._breachIntel = null;
+  }
+
   beginAssault(): void {
     if (this.started) return;
     this.started = true;
+    if (this.scouted) {
+      const p = this.d.player.position;
+      const room = this.coverage.indoorRoomAt(p.x, p.z, p.y);
+      if (room) {
+        this._breachIntel = { roomId: room.id, x: room.x, y: room.floorY ?? p.y, z: room.z, name: room.name };
+        const speaker = this.hunters.find((h) => h.alive);
+        this.radio(
+          speaker,
+          `差し入れのカメラで確認した。犯人は${room.name}だ`,
+          `The supply-drop camera confirms it. Suspect is in ${tRoomName(room.name)}.`,
+          true,
+        );
+      }
+    }
     this.entry.beginAssault();
   }
 
@@ -764,6 +801,7 @@ export class SwatTeam implements SwatTeamHost {
   }
 
   onContact(by: SwatHunter, pos: Vec3): void {
+    this._breachIntel = null;
     this.tactics.onContact(by, pos);
   }
 
@@ -826,10 +864,14 @@ export class SwatTeam implements SwatTeamHost {
   }
 
   markCleared(r: RoomDef, by: SwatHunter): void {
+    if (this._breachIntel?.roomId === r.id) this._breachIntel = null;
     this.coverage.markCleared(r, by);
   }
 
   markRoomAt(x: number, z: number, y: number): void {
+    if (this._breachIntel && this.coverage.indoorRoomAt(x, z, y)?.id === this._breachIntel.roomId) {
+      this._breachIntel = null;
+    }
     this.coverage.markRoomAt(x, z, y);
   }
 

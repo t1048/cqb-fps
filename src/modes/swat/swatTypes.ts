@@ -1,4 +1,4 @@
-import type { CombatParams, MobilityParams, RoomDef, Vec3, WindowDef } from '../../core/types';
+import type { AimSettleParams, CombatParams, MobilityParams, RoomDef, Vec3, WindowDef } from '../../core/types';
 import type { GameEventBus } from '../../core/events';
 import type { AllyTarget } from '../../ai/EngageBehavior';
 import type { HumanoidBody } from '../../ai/HumanoidBody';
@@ -279,6 +279,8 @@ export interface SwatSpawn {
 }
 
 export interface SwatTeamDeps {
+  /** 敵 SWAT の照準の収束（ai_profiles.json の swatAimSettle） */
+  aimSettle?: AimSettleParams;
   spawns: readonly SwatSpawn[];
   count: number;
   player: PlayerCombatReceiver & {
@@ -332,14 +334,26 @@ export interface ReinforcementCheck {
   cooldownSec: number;
 }
 
+/** 交渉の差し入れによる偵察情報（突入の瞬間にプレイヤーがいた部屋） */
+export interface BreachIntel {
+  roomId: string;
+  x: number;
+  y: number;
+  z: number;
+  name: string;
+}
+
 /** SwatHunter が親 SwatTeam に対して呼び出す契約インターフェース */
 export interface SwatTeamHost {
+  /** 偵察情報。無い・確認済みなら null */
+  readonly breachIntel: BreachIntel | null;
   readonly currentPressure: number;
   readonly playerCrouching: boolean;
   readonly reactionSec: number;
   readonly lastSighting: Vec3 | null;
   readonly lastSightingAge: number;
   readonly clock: number;
+  readonly aimSettle?: AimSettleParams;
 
   abandonDisarm(door: Door): void;
   checkTraps(h: SwatHunter): void;

@@ -35,6 +35,7 @@ import {
   STACK_OFFSET,
   STACK_PERSONAL_SPACE,
   STACK_TIMEOUT_SEC,
+  type BreachIntel,
   type EntryGroup,
   type SwatTeamDeps,
 } from './swatTypes';
@@ -46,6 +47,8 @@ export interface SwatEntryHost {
   readonly currentPressure: number;
   readonly radioSpeakGap: number;
   readonly radioQueueLength: number;
+  /** 偵察情報（差し入れで突入時の部屋を知られた）。無ければ null */
+  readonly breachIntel: BreachIntel | null;
   doorById(id: string): Door | null;
   indoorRoomAt(x: number, z: number, y: number): RoomDef | null;
   isDoorBeingBreached(doorId: string, exclude?: SwatHunter): boolean;
@@ -160,12 +163,22 @@ export class SwatEntryCoordinator {
       return;
     }
 
-    const reachable = filterReachableExteriorEntries(
+    let reachable = filterReachableExteriorEntries(
       this.portals(),
       { x: anchor.body.px, y: anchor.body.footY, z: anchor.body.pz },
       this.host.d.colliders,
       this.host.d.bounds,
     );
+    // 偵察情報があれば、偵察した部屋に近い入口を先頭（最初のセル＝Red）に並べる（安定ソート。生存 1 名の即突入も同じ並び）
+    const intel = this.host.breachIntel;
+    if (intel) {
+      const dist = (p: EntryPortal): number =>
+        Math.hypot(p.inside.x - intel.x, p.inside.z - intel.z) + 3 * Math.abs(p.sillY - intel.y);
+      reachable = reachable
+        .map((p, i) => ({ p, i, d: dist(p) }))
+        .sort((a, b) => a.d - b.d || a.i - b.i)
+        .map((e) => e.p);
+    }
     if (reachable.length === 0) {
       this.entryPhase = 'entered';
       for (const h of living) h.setState('sweep');

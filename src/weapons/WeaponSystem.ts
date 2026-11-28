@@ -64,8 +64,11 @@ export class WeaponSystem {
   /** 別の装備（オプティワンド等）が射撃・リロードを塞いでいるか。フラッシュバンの suppressFire とは独立 */
   externalFireBlock = false;
 
+  /** 救急処置中（MedkitUse が設定）。suppressFire・externalFireBlock とは別の旗 */
+  healBlock = false;
+
   private get fireBlocked(): boolean {
-    return this.suppressFire || this.externalFireBlock;
+    return this.suppressFire || this.externalFireBlock || this.healBlock;
   }
 
   constructor(
@@ -132,8 +135,9 @@ export class WeaponSystem {
     return this.reloadEmpty;
   }
   private startReload(w: WeaponDef): void {
-    this.reloadLeft = w.reloadTime;
-    this.reloadTotal = w.reloadTime;
+    const reloadSec = w.reloadTime * (this.player.reloadTimeMul ?? 1);
+    this.reloadLeft = reloadSec;
+    this.reloadTotal = reloadSec;
     this.reloadEmpty = this.ammoInMagazine === 0;
     const p = this.player.position;
     this.bus.emit('noise', {
@@ -161,7 +165,7 @@ export class WeaponSystem {
   /** 現在の状態での拡散（度）。基本精度は旧ADS同等、移動中は moveSpreadPenalty が加算される。 */
   computeSpread(): number {
     const w = this.current;
-    return w.adsSpread + (this.player.isMoving ? w.moveSpreadPenalty : 0) + this.extraSpread + (this.player.woundSpreadAdd ?? 0);
+    return w.adsSpread + (this.player.isMoving ? w.moveSpreadPenalty : 0) + this.extraSpread + (this.player.woundSpreadAdd ?? 0) + (this.player.fatigueSpreadAdd ?? 0);
   }
 
   update(rawDt: number): void {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GameEventBus } from '../core/events';
-import type { CombatParams, MobilityParams, RoomDef, Vec3 } from '../core/types';
+import type { AimSettleParams, CombatParams, MobilityParams, RoomDef, Vec3 } from '../core/types';
 import { hasLineOfSight } from '../weapons/Flashbang';
 import type { Door, DoorSystem } from '../world/Door';
 import type { AABB, Collider } from '../world/WorldBuilder';
@@ -276,7 +276,10 @@ export function stepToward(
   return true;
 }
 
-/** (x,z) の位置からプレイヤーまたは仲間隊員の中で最寄りの視認可能脅威を返す。 */
+/**
+ * (x,z) の位置からプレイヤーまたは仲間隊員の中で最寄りの視認可能脅威を返す。
+ * プレイヤーは胸が見えれば胸、胸が遮られて目だけ見えるときだけ目を狙い点にする。
+ */
 export function findNearestVisibleThreat(
   ctx: CombatContext,
   x: number,
@@ -295,25 +298,22 @@ export function findNearestVisibleThreat(
     const pos = ctx.player.position;
     const d = Math.hypot(pos.x - x, pos.z - z);
     if (d <= bestD) {
-      threatPtTmp.x = eye.x;
-      threatPtTmp.y = eye.y;
-      threatPtTmp.z = eye.z;
+      // 胸が見えるなら胸を狙う（目を狙うと弾が頭部判定に入り、ベストが効かない）。
+      // 胸が遮られて目だけ見える（覗き・リーン）ときだけ目を狙う。
+      const chestY = eye.y - PLAYER_BODY_DROP;
+      threatPtTmp.x = pos.x;
+      threatPtTmp.y = chestY;
+      threatPtTmp.z = pos.z;
       if (hasLineOfSight(ctx.colliders, threatFromTmp, threatPtTmp)) {
         bestD = d;
-        best = { id: 'player', x: pos.x, z: pos.z, point: { x: eye.x, y: eye.y, z: eye.z }, isPlayer: true };
+        best = { id: 'player', x: pos.x, z: pos.z, point: { x: pos.x, y: chestY, z: pos.z }, isPlayer: true };
       } else {
-        threatPtTmp.x = pos.x;
-        threatPtTmp.y = eye.y - PLAYER_BODY_DROP;
-        threatPtTmp.z = pos.z;
+        threatPtTmp.x = eye.x;
+        threatPtTmp.y = eye.y;
+        threatPtTmp.z = eye.z;
         if (hasLineOfSight(ctx.colliders, threatFromTmp, threatPtTmp)) {
           bestD = d;
-          best = {
-            id: 'player',
-            x: pos.x,
-            z: pos.z,
-            point: { x: pos.x, y: eye.y - PLAYER_BODY_DROP, z: pos.z },
-            isPlayer: true,
-          };
+          best = { id: 'player', x: pos.x, z: pos.z, point: { x: eye.x, y: eye.y, z: eye.z }, isPlayer: true };
         }
       }
     }
@@ -873,6 +873,8 @@ export interface EngageOptions {
   immediateFireShots?: number;
   /** true を返すときは onHit() で beginRetreat() せず現在のフェーズ/前進を維持する */
   skipRetreatOnHit?: () => boolean;
+  /** 照準の収束（撃ち始めは横に散り、徐々に締まる）。無ければ収束なし（現状どおり） */
+  aimSettle?: AimSettleParams;
 }
 
 /** ENGAGE 中の行動: 遮蔽物へ退避 → 待機/リロード → ピーク位置へ → 発砲 → 退避 …を基本とし、視認喪失時は追撃・回り込み再配置を行う。 */
@@ -895,14 +897,21 @@ export class EngageBehavior {
   private preAimSpreadMul = 1;
   /** 初弾バーストの残り発数（この間は拡散を preAimSpreadMul 倍にする） */
   private spreadBurstLeft = 0;
+  /** 照準の収束: 現在の標的（threat.isPlayer のみ）・撃ち始めからの経過・連続で見失った秒数・待ち伏せ初弾の保留 */
+  private readonly settle: AimSettleParams | null;
+  private settleTargetId: string | null = null;
+  private settleElapsed = 0;
+  private settleUnseen = 0;
+  private preAimPending = false;
   private readonly ray = new THREE.Ray();
   private readonly tmpBox = new THREE.Box3();
   private readonly tmpHit = new THREE.Vector3();
   private readonly shotOrigin = new THREE.Vector3();
   private readonly shotDir = new THREE.Vector3();
   private readonly localRay = new THREE.Vector3();
-  private readonly quat = new THREE.Quaternion();
-  private readonly forwardAxis = new THREE.Vector3(0, 0, -1);
+  private readonly aimRight = new THREE.Vector3();
+  private readonly aimUp = new THREE.Vector3();
+  private readonly aimUpAxis = new THREE.Vector3(0, 1, 0);
 
   constructor(
     private readonly p: CombatParams,
@@ -916,6 +925,23 @@ export class EngageBehavior {
     private readonly opts: EngageOptions = {},
   ) {
     this.ammo = p.magazineSize;
+    this.settle = opts.aimSettle ?? null;
+  }
+
+  /**
+   * 照準の収束の時間を進める。持ち主（Suspect / SwatHunter）が毎フレーム 1 回、射撃の処理より前に呼ぶ。
+   * visibleTargetId: 今フレームに視認している標的の id（見えていなければ null）。
+   */
+  tickAim(dt: number, visibleTargetId: string | null): void {
+    const s = this.settle;
+    if (!s || this.settleTargetId === null) return;
+    if (visibleTargetId === this.settleTargetId) this.settleUnseen = 0;
+    else this.settleUnseen += dt;
+    if (this.settleUnseen >= s.resetSec) {
+      this.settleTargetId = null;
+      return;
+    }
+    this.settleElapsed += dt;
   }
 
   get label(): string {
@@ -968,6 +994,7 @@ export class EngageBehavior {
         this.burstLimit = Math.min(want, Math.max(this.p.shotsPerPeek, preAimShots));
         if (preAimShots > 0) {
           this.spreadBurstLeft = this.burstLimit;
+          this.preAimPending = true;
           this.preAimSpreadMul = preAimMul;
         }
         this.timer = Math.min(this.p.peekSecMax, this.p.fireInterval * (this.burstLimit + 1));
@@ -987,6 +1014,7 @@ export class EngageBehavior {
     this.repositionGoal = null;
     this.repositionTimer = 0;
     this.burstLimit = null;
+    this.preAimPending = false;
     this.nav?.reset();
   }
 
@@ -1238,13 +1266,17 @@ export class EngageBehavior {
     const spreadRad = this.p.baseSpreadDeg * spreadMul * (Math.PI / 180);
     const angle = Math.acos(1 - Math.random() * (1 - Math.cos(spreadRad)));
     const around = Math.random() * Math.PI * 2;
-    this.localRay.set(
-      Math.sin(angle) * Math.cos(around),
-      Math.sin(angle) * Math.sin(around),
-      -Math.cos(angle),
-    );
-    this.quat.setFromUnitVectors(this.forwardAxis, this.shotDir);
-    this.localRay.applyQuaternion(this.quat).normalize();
+    const [mulH, mulV] = this.aimMuls(threat);
+    // 射線に直交する「水平の右」と「上」を基底にして、横だけ（または縦も）広げる
+    if (Math.abs(this.shotDir.y) > 0.99) this.aimRight.set(1, 0, 0);
+    else this.aimRight.crossVectors(this.shotDir, this.aimUpAxis).normalize();
+    this.aimUp.crossVectors(this.aimRight, this.shotDir);
+    const t = Math.tan(angle);
+    this.localRay
+      .copy(this.shotDir)
+      .addScaledVector(this.aimRight, t * Math.cos(around) * mulH)
+      .addScaledVector(this.aimUp, t * Math.sin(around) * mulV)
+      .normalize();
 
     this.ray.set(this.shotOrigin, this.localRay);
     let bestT = raycastColliders(this.ctx.colliders, this.shotOrigin, this.localRay, this.p.engageRange);
@@ -1298,6 +1330,23 @@ export class EngageBehavior {
         weaponId: 'suspect_rifle',
       });
     }
+  }
+
+  /** 照準の収束による横・縦の拡散倍率。threat.isPlayer の標的にだけ使い、それ以外は 1（現状どおり）。 */
+  private aimMuls(threat: CombatThreat | null): [number, number] {
+    const s = this.settle;
+    if (!s || !threat || !threat.isPlayer) return [1, 1];
+    if (threat.id !== this.settleTargetId) {
+      this.settleTargetId = threat.id;
+      this.settleUnseen = 0;
+      this.settleElapsed = this.preAimPending ? s.settleSec : 0;
+      this.preAimPending = false;
+    } else if (this.preAimPending) {
+      this.settleElapsed = Math.max(this.settleElapsed, s.settleSec);
+      this.preAimPending = false;
+    }
+    const mulH = 1 + (s.startMul - 1) * Math.max(0, 1 - this.settleElapsed / s.settleSec);
+    return [mulH, 1 + (mulH - 1) * s.verticalShare];
   }
 
   private rayDist(a: AABB): number | null {

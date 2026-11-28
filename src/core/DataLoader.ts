@@ -1,10 +1,17 @@
 import type {
   ArmorConfig,
+  MedkitConfig,
+  ArmorKind,
+  ArmorWeight,
   AllyWoundsConfig,
   DoorCheckConfig,
   DoorTrapConfig,
   SquadInventoryConfig,
   SuspectAlertConfig,
+  AimSettleParams,
+  SiegeAiFatigue,
+  SiegeConfig,
+  SiegePlayerFatigue,
   AmbushParams,
   MirrorConfig,
   OptiwandConfig,
@@ -1430,6 +1437,70 @@ export function validateWeapons(raw: unknown, source = 'weapons'): WeaponDef[] {
   return weapons;
 }
 
+export const DEFAULT_AIM_SETTLE: AimSettleParams = { startMul: 3.0, settleSec: 1.0, resetSec: 1.2, verticalShare: 0.0 };
+
+/** 照準の収束。値が無ければ既定値の写し。 */
+function readAimSettle(r: Reader, raw: unknown, path: string): AimSettleParams {
+  const d = DEFAULT_AIM_SETTLE;
+  if (raw === undefined) return { ...d };
+  const o = r.obj(raw, path);
+  return {
+    startMul: r.numOr(o, 'startMul', path, d.startMul, 1, 6),
+    settleSec: r.numOr(o, 'settleSec', path, d.settleSec, 0.1, 5),
+    resetSec: r.numOr(o, 'resetSec', path, d.resetSec, 0.1, 10),
+    verticalShare: r.numOr(o, 'verticalShare', path, d.verticalShare, 0, 1),
+  };
+}
+
+/** ai_profiles.json 最上位の swatAimSettle（無ければ既定値）。 */
+export function validateSwatAimSettle(raw: unknown, source = 'ai_profiles'): AimSettleParams {
+  const root = new Reader(source).obj(raw, '');
+  return readAimSettle(new Reader(source), root.swatAimSettle, 'swatAimSettle');
+}
+
+export const DEFAULT_SIEGE: SiegeConfig = {
+  startFatigue: 55,
+  supplyFatigue: 15,
+  startHour: 6,
+  player: {
+    tiers: [50, 75],
+    swayDeg: [0.1, 0.22],
+    spreadAddDeg: [0.4, 0.9],
+    reloadMul: [1.15, 1.3],
+    speedMul: [1.0, 0.92],
+  },
+  ai: { spreadMulPerNorm: 0.3, reactionAddSecAt100: 0.27, moralePenaltyAt100: 20 },
+};
+
+/** siege.json（必須ファイル。キーの欠落だけ DEFAULT_SIEGE で補う）。 */
+export function validateSiege(raw: unknown, source = 'siege'): SiegeConfig {
+  const r = new Reader(source);
+  const o = r.obj(raw, '');
+  const d = DEFAULT_SIEGE;
+  const startFatigue = r.numOr(o, 'startFatigue', '', d.startFatigue, 0, 100);
+  const supplyFatigue = r.numOr(o, 'supplyFatigue', '', d.supplyFatigue, 0, 100);
+  if (supplyFatigue > startFatigue) r.fail('supplyFatigue', 'supplyFatigue は startFatigue 以下である必要があります');
+  const startHour = r.numOr(o, 'startHour', '', d.startHour, 1, 72);
+  if (!Number.isInteger(startHour)) r.fail('startHour', '整数が必要です');
+  const po = o.player === undefined ? {} : r.obj(o.player, 'player');
+  const tiers = r.tupleOr(po, 'tiers', 'player', d.player.tiers, 0, 100);
+  if (tiers[0] > tiers[1]) r.fail('player.tiers', 'tiers[0] は tiers[1] 以下である必要があります');
+  const player: SiegePlayerFatigue = {
+    tiers,
+    swayDeg: r.tupleOr(po, 'swayDeg', 'player', d.player.swayDeg, 0, 5),
+    spreadAddDeg: r.tupleOr(po, 'spreadAddDeg', 'player', d.player.spreadAddDeg, 0, 10),
+    reloadMul: r.tupleOr(po, 'reloadMul', 'player', d.player.reloadMul, 1, 3),
+    speedMul: r.tupleOr(po, 'speedMul', 'player', d.player.speedMul, 0.3, 1),
+  };
+  const ao = o.ai === undefined ? {} : r.obj(o.ai, 'ai');
+  const ai: SiegeAiFatigue = {
+    spreadMulPerNorm: r.numOr(ao, 'spreadMulPerNorm', 'ai', d.ai.spreadMulPerNorm, 0, 2),
+    reactionAddSecAt100: r.numOr(ao, 'reactionAddSecAt100', 'ai', d.ai.reactionAddSecAt100, 0, 2),
+    moralePenaltyAt100: r.numOr(ao, 'moralePenaltyAt100', 'ai', d.ai.moralePenaltyAt100, 0, 100),
+  };
+  return { startFatigue, supplyFatigue, startHour, player, ai };
+}
+
 function readCombat(r: Reader, e: Record<string, unknown>, p: string, required: boolean): CombatParams | undefined {
   if (e.combat === undefined) {
     if (required) r.fail(`${p}.combat`, 'suspect プロファイルには combat が必要です');
@@ -1466,6 +1537,8 @@ function readCombat(r: Reader, e: Record<string, unknown>, p: string, required: 
   if (fakeChance !== undefined) params.fakeSurrenderChance = fakeChance;
   const fakeSec = r.optNum(c, 'fakeSurrenderSec', cp, 0.5, 60);
   if (fakeSec !== undefined) params.fakeSurrenderSec = fakeSec;
+  // 容疑者は aimSettle が無くても既定値で必ず収束あり
+  if (c.aimSettle !== undefined || required) params.aimSettle = readAimSettle(r, c.aimSettle, `${cp}.aimSettle`);
   if (params.coverSecMin > params.coverSecMax) r.fail(cp, 'coverSecMin は coverSecMax 以下である必要があります');
   return params;
 }
@@ -1671,21 +1744,57 @@ export const DEFAULT_ARMOR: ArmorConfig = {
   absorb: 0.6,
   minAbsorb: 0.35,
   swatIssue: 50,
-  suspectVest: 50,
+  suspectVest: 80,
+  weight: {
+    swatIssue: { speedMul: 0.95, footstepRadiusMul: 1.0, leanSpeedMul: 1.0 },
+    suspectVest: { speedMul: 0.88, footstepRadiusMul: 1.25, leanSpeedMul: 0.8 },
+  },
 };
 
+function readArmorWeight(r: Reader, parent: Record<string, unknown>, key: ArmorKind): ArmorWeight {
+  const d = DEFAULT_ARMOR.weight[key];
+  if (parent[key] === undefined) return { ...d };
+  const path = `armor.weight.${key}`;
+  const w = r.obj(parent[key], path);
+  return {
+    speedMul: r.numOr(w, 'speedMul', path, d.speedMul, 0.3, 1),
+    footstepRadiusMul: r.numOr(w, 'footstepRadiusMul', path, d.footstepRadiusMul, 1, 3),
+    leanSpeedMul: r.numOr(w, 'leanSpeedMul', path, d.leanSpeedMul, 0.2, 1),
+  };
+}
+
 function readArmor(r: Reader, o: Record<string, unknown>): ArmorConfig {
-  if (o.armor === undefined) return { ...DEFAULT_ARMOR };
+  if (o.armor === undefined) return { ...DEFAULT_ARMOR, weight: { ...DEFAULT_ARMOR.weight } };
   const a = r.obj(o.armor, 'armor');
   const d = DEFAULT_ARMOR;
   const absorb = r.numOr(a, 'absorb', 'armor', d.absorb, 0, 1);
   const minAbsorb = r.numOr(a, 'minAbsorb', 'armor', d.minAbsorb, 0, 1);
   if (minAbsorb > absorb) r.fail('armor.minAbsorb', 'absorb 以下である必要があります');
+  const weightObj = a.weight === undefined ? {} : r.obj(a.weight, 'armor.weight');
   return {
     absorb,
     minAbsorb,
     swatIssue: r.numOr(a, 'swatIssue', 'armor', d.swatIssue, 0, 500),
     suspectVest: r.numOr(a, 'suspectVest', 'armor', d.suspectVest, 0, 500),
+    weight: {
+      swatIssue: readArmorWeight(r, weightObj, 'swatIssue'),
+      suspectVest: readArmorWeight(r, weightObj, 'suspectVest'),
+    },
+  };
+}
+
+export const DEFAULT_MEDKIT: MedkitConfig = { holdSec: 2.0, heal: 45, tradeCount: 1 };
+
+function readMedkit(r: Reader, o: Record<string, unknown>): MedkitConfig {
+  if (o.medkit === undefined) return { ...DEFAULT_MEDKIT };
+  const m = r.obj(o.medkit, 'medkit');
+  const d = DEFAULT_MEDKIT;
+  const tradeCount = r.numOr(m, 'tradeCount', 'medkit', d.tradeCount, 1, 5);
+  if (!Number.isInteger(tradeCount)) r.fail('medkit.tradeCount', '整数である必要があります');
+  return {
+    holdSec: r.numOr(m, 'holdSec', 'medkit', d.holdSec, 0.2, 10),
+    heal: r.numOr(m, 'heal', 'medkit', d.heal, 1, 200),
+    tradeCount,
   };
 }
 
@@ -1771,7 +1880,8 @@ export function validatePlayerConfig(raw: unknown, source = 'player'): PlayerCon
     lean: {
       maxOffset: r.num(lean, 'maxOffset', 'lean', 0, 2),
       maxRollDeg: r.num(lean, 'maxRollDeg', 'lean', 0, 45),
-      lerpSpeed: r.num(lean, 'lerpSpeed', 'lean', 0.1, 100),
+      outSec: r.num(lean, 'outSec', 'lean', 0.05, 2),
+      returnSec: r.num(lean, 'returnSec', 'lean', 0.05, 2),
       headRadius: r.num(lean, 'headRadius', 'lean', 0, 1),
     },
     speeds: perMode(o, 'speeds', '', 0, 30),
@@ -1781,6 +1891,7 @@ export function validatePlayerConfig(raw: unknown, source = 'player'): PlayerCon
     },
     wounds: readWounds(r, o),
     armor: readArmor(r, o),
+    medkit: readMedkit(r, o),
     optiwand: readOptiwand(r, o),
   };
 }
@@ -2263,6 +2374,13 @@ export const DataLoader = {
   loadSuspectAlert(): Promise<SuspectAlertConfig> {
     return loadCachedStatic('ai_profiles.json', validateSuspectAlert);
   },
+  loadSwatAimSettle(): Promise<AimSettleParams> {
+    return loadCachedStatic('ai_profiles.json', validateSwatAimSettle);
+  },
+  /** 必須ファイル: 無ければ fetchJson が DataError を投げる（既定値へのフォールバックはしない） */
+  loadSiege(): Promise<SiegeConfig> {
+    return loadCachedStatic('siege.json', validateSiege);
+  },
   loadPlayerConfig(): Promise<PlayerConfig> {
     return loadCachedStatic('player.json', validatePlayerConfig);
   },
@@ -2324,7 +2442,7 @@ export const DataLoader = {
   },
   /** 共通JSONを並列ロードし検証、続いてステージのマップを読み込み/生成。不正なら DataError を throw。 */
   async loadAll(stage: StageEntry, seed?: number): Promise<GameData> {
-    const [player, doors, weapons, aiProfiles, roe, perception, squad, suspectAlert] = await Promise.all([
+    const [player, doors, weapons, aiProfiles, roe, perception, squad, suspectAlert, swatAimSettle, siege] = await Promise.all([
       DataLoader.loadPlayerConfig(),
       DataLoader.loadDoorConfig(),
       DataLoader.loadWeapons(),
@@ -2333,9 +2451,11 @@ export const DataLoader = {
       DataLoader.loadPerception(),
       DataLoader.loadSquad(),
       DataLoader.loadSuspectAlert(),
+      DataLoader.loadSwatAimSettle(),
+      DataLoader.loadSiege(),
     ]);
     const map = await DataLoader.loadStageMap(stage, seed, aiProfiles, doors);
     validateCrossReferences(map, aiProfiles);
-    return { player, doors, map, weapons, aiProfiles, roe, perception, squad, suspectAlert };
+    return { player, doors, map, weapons, aiProfiles, roe, perception, squad, suspectAlert, swatAimSettle, siege };
   },
 };

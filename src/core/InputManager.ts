@@ -22,6 +22,7 @@ export type Action =
   | 'quickOrder'
   | 'regroup'
   | 'cycleElement'
+  | 'useMedkit'
   | 'endMission';
 
 export type ActionMap = Record<string, string[]>;
@@ -52,6 +53,8 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   quickOrder: ['KeyZ'],
   regroup: ['KeyX'],
   cycleElement: ['KeyT'],
+  // 救急キットを使う（容疑者モード。押し続ける）
+  useMedkit: ['KeyH'],
   endMission: ['Backspace', 'Enter'],
 };
 

@@ -52,6 +52,7 @@
         "gunshotNoiseRadius": 40,
         "shotDamage": 14,
         "baseSpreadDeg": 5.5,
+        "aimSettle": { "startMul": 3.0, "settleSec": 1.0, "resetSec": 1.2, "verticalShare": 0.0 },
         "fakeSurrenderChance": 0,
         "fakeSurrenderSec": 10
       },
@@ -149,6 +150,7 @@
         "gunshotNoiseRadius": 40,
         "shotDamage": 18,
         "baseSpreadDeg": 3.6,
+        "aimSettle": { "startMul": 3.0, "settleSec": 1.0, "resetSec": 1.2, "verticalShare": 0.0 },
         "fakeSurrenderChance": 0.35,
         "fakeSurrenderSec": 9
       },
@@ -283,6 +285,7 @@
         "gunshotNoiseRadius": 40,
         "shotDamage": 16,
         "baseSpreadDeg": 4.2,
+        "aimSettle": { "startMul": 3.0, "settleSec": 1.0, "resetSec": 1.2, "verticalShare": 0.0 },
         "fakeSurrenderChance": 0.15,
         "fakeSurrenderSec": 10
       },
@@ -329,6 +332,7 @@
       }
     }
   ],
+  "swatAimSettle": { "startMul": 3.0, "settleSec": 1.0, "resetSec": 1.2, "verticalShare": 0.0 },
   "suspectAlert": {
     "gains": {
       "flashbang": 20,

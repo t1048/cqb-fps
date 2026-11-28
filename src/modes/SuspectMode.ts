@@ -192,6 +192,8 @@ export class SuspectMission {
     bus: GameEventBus,
     interaction: Interaction,
     private readonly onEnd: (report: ResultReport, failed: boolean) => void,
+    /** 突入開始の直後に 1 回呼ばれる（消耗による士気ペナルティなど） */
+    private readonly onAssaultBegin: () => void = () => {},
   ) {
     this.el.style.cssText = HUD_STYLE;
     this.el.style.display = 'none';
@@ -342,6 +344,7 @@ export class SuspectMission {
       if (this.input.wasPressed('warningCall') && this.elapsed > 0.5) this.assaultAt = this.elapsed;
       if (this.elapsed >= this.assaultAt) {
         this.team.beginAssault();
+        this.onAssaultBegin();
         this.subtitle.show(t('SWAT が突入を開始した！', 'SWAT has initiated the breach!'), 2.5);
       }
     } else if (this.player.alive && this.input.isDown('warningCall')) {

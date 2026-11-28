@@ -224,6 +224,8 @@ export class Hud {
   private woundClock = 0;
   /** 手持ち装備の名前を差し替える外部ソース（オプティワンド展開中は name を返す） */
   toolLabel: (() => string | null) | null = null;
+  /** 救急キットの所持数（容疑者モードだけ main が設定） */
+  medkitProvider: (() => number) | null = null;
   /** 容疑者の警戒度（SWAT モードのみ）。value 0〜100、tier 0〜4、threat=人質処刑の脅迫中 */
   alertProvider: (() => { value: number; tier: number; threat: boolean } | null) | null = null;
   private readonly gearEl = document.createElement('div');
@@ -261,7 +263,7 @@ export class Hud {
   private displaySpreadDeg = 0;
   private lastAmmoText = '';
   private lastStatusText = '';
-  private lastHp = -1;
+  private lastHp = '';
   private lastInteractKey = '';
   private lastMissionKey = '';
   private lastObjectivesKey = '';
@@ -472,7 +474,7 @@ export class Hud {
     if (this.disposed) return;
     this.applyStaticLabels();
     this.lastAmmoText = '';
-    this.lastHp = -1;
+    this.lastHp = '';
     this.lastMissionKey = '';
     this.lastObjectivesKey = '';
     this.lastElementLabel = '';
@@ -596,10 +598,20 @@ export class Hud {
     // プレイヤーHP & 姿勢
     const hp = Math.round(this.player.hp);
     const armor = Math.round(this.player.armor);
-    if (hp * 1000 + armor !== this.lastHp) {
-      this.lastHp = hp * 1000 + armor;
+    const armorKind = this.player.armorKind;
+    const medkits = this.medkitProvider?.() ?? 0;
+    const hpKey = `${hp}|${armor}|${armorKind ?? ''}|${medkits}`;
+    if (hpKey !== this.lastHp) {
+      this.lastHp = hpKey;
       const pct = Math.max(0, Math.min(100, (hp / Math.max(1, this.player.maxHp)) * 100));
-      this.hpTextEl.textContent = armor > 0 ? `HP ${hp}  ${t('防弾', 'ARM')} ${armor}` : `HP ${hp}`;
+      const heavy = armorKind === 'suspectVest' ? t('（重）', ' (Heavy)') : '';
+      const hpText =
+        armorKind === null
+          ? `HP ${hp}`
+          : armor > 0
+            ? `HP ${hp}  ${t('防弾', 'ARM')} ${armor}${heavy}`
+            : `HP ${hp}  ${t('防弾', 'ARM')} ${t('破損', 'BROKEN')}${heavy}`;
+      this.hpTextEl.textContent = medkits > 0 ? `${hpText}  ${t('救急', 'MEDKIT')} ×${medkits} [H]` : hpText;
       this.hpFillEl.style.width = `${pct}%`;
       this.hpFillEl.style.background = pct > 55 ? '#5cd67d' : pct > 25 ? '#f2c14e' : '#ff5555';
     }

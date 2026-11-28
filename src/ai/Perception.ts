@@ -198,7 +198,7 @@ export class Perception {
         this.seen.set(s.id, Math.max(0, t - dt));
         continue;
       }
-      let need = s.profile.reactionTime * (alert ? v.alertReactionMultiplier : 1);
+      let need = (s.profile.reactionTime + s.fatigueReactionAddSec) * (alert ? v.alertReactionMultiplier : 1);
       if (s.isAmbushReady) {
         // 待ち伏せ中（pre-aim）: 入口方向の円錐内に入った入室者へは極短の反応時間で発砲に移る
         const cone = s.ambushCone;

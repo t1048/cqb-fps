@@ -32,6 +32,7 @@ import { HumanoidBody } from './HumanoidBody';
 import type { TextureLibrary } from '../world/Materials';
 import { Morale } from './Morale';
 import { StateMachine } from './StateMachine';
+import type { AiFatigueEffects } from '../rules/siegeFatigue';
 
 const SUSPECT_COLOR = 0x937969;
 const ARRESTED_COLOR = 0x3060b0;
@@ -110,6 +111,11 @@ export class Suspect implements HitTarget {
   /** ガス補正前の基準移動速度・基準拡散角（upgradeWeapon でも基準拡散角を更新） */
   private readonly baseMoveSpeed: number;
   private baseSpreadDeg: number;
+  /** 籠城の消耗による拡散倍率・反応時間の加算（applyFatigue で設定。基準拡散角に重なる） */
+  private fatigueSpreadMul = 1;
+  private fatigueReactionAddSecValue = 0;
+  /** 消耗による士気ペナルティを適用済みか（1 体につき 1 回だけ） */
+  private fatigueMoraleApplied = false;
   /** CS 催涙ガス露出度 (0..100、完全非致死) */
   private gasLevel = 0;
   private gasCoughCd = 0;
@@ -160,7 +166,9 @@ export class Suspect implements HitTarget {
     }
     this.engage =
       this.combat && ctx
-        ? new EngageBehavior(this.combat, this.id, this.body, bus, ctx, () => this.warned, this.mobility, this.nav)
+        ? new EngageBehavior(this.combat, this.id, this.body, bus, ctx, () => this.warned, this.mobility, this.nav, {
+            aimSettle: this.combat.aimSettle,
+          })
         : null;
     this.shield =
       profile.shield && this.combat && ctx?.civilians
@@ -365,6 +373,7 @@ export class Suspect implements HitTarget {
       return;
     }
     this.senseTarget();
+    this.engage?.tickAim(dt, this.visibleThreat?.id ?? null);
     this.checkShieldEntry(dt);
     const flushing = this.updateGasFlush(dt, density, gasK, gas?.origin ?? null);
     if (!flushing) {
@@ -384,7 +393,7 @@ export class Suspect implements HitTarget {
     if (!this.combat) return;
     const k = this.gasLevel / 100;
     this.combat.moveSpeed = this.baseMoveSpeed * (1 - GAS_MAX_SLOWDOWN * k);
-    this.combat.baseSpreadDeg = this.baseSpreadDeg + k * GAS_MAX_SPREAD_PENALTY;
+    this.combat.baseSpreadDeg = this.baseSpreadDeg * this.fatigueSpreadMul + k * GAS_MAX_SPREAD_PENALTY;
   }
 
   private updateGasFlush(dt: number, density: number, gasK: number, origin: Vec3 | null): boolean {
@@ -492,6 +501,25 @@ export class Suspect implements HitTarget {
     if (!this.managed) return;
     this.morale.shift(delta);
     this.prevMorale = this.morale.value;
+  }
+
+  /** 籠城の消耗の効果（拡散倍率・反応時間の加算）を反映する。士気は触らない（applyFatigueMorale） */
+  applyFatigue(e: AiFatigueEffects): void {
+    this.fatigueSpreadMul = e.spreadMul;
+    this.fatigueReactionAddSecValue = e.reactionAddSec;
+    this.syncGasCombatParams();
+  }
+
+  /** 籠城の消耗による士気の変化を 1 体につき最初の 1 回だけ適用する */
+  applyFatigueMorale(delta: number): void {
+    if (this.fatigueMoraleApplied) return;
+    this.fatigueMoraleApplied = true;
+    this.adjustMorale(delta);
+  }
+
+  /** 消耗による反応時間への加算（秒。既定 0） */
+  get fatigueReactionAddSec(): number {
+    return this.fatigueReactionAddSecValue;
   }
 
   /** 容疑者モードの籠城準備: 武器を改造（与ダメージ倍率・拡散倍率）。EngageBehavior は同じ参数オブジェクトを参照する */
@@ -817,7 +845,7 @@ export class Suspect implements HitTarget {
 
   /** pre-aim 状態の反応時間（秒）。非待ち伏せ時は profile.reactionTime */
   get ambushReactionSec(): number {
-    return this.profile.ambush?.preAimReactionSec ?? this.profile.reactionTime;
+    return (this.profile.ambush?.preAimReactionSec ?? this.profile.reactionTime) + this.fatigueReactionAddSecValue;
   }
 
   /** pre-aim 円錐の半角 cos と有効距離（Perception が参照） */

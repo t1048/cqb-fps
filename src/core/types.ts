@@ -890,6 +890,20 @@ export interface CombatParams {
   fakeSurrenderChance?: number;
   /** 偽装投降の放置判定秒数 */
   fakeSurrenderSec?: number;
+  /** 照準の収束（撃ち始めは横に散り、徐々に締まる）。無ければ収束なし */
+  aimSettle?: AimSettleParams;
+}
+
+/** 照準の収束（ai_profiles.json の combat.aimSettle / swatAimSettle）。時間 s、倍率は無次元。 */
+export interface AimSettleParams {
+  /** 標的へ撃ち始めた瞬間の横方向の拡散倍率（>= 1） */
+  startMul: number;
+  /** 倍率が 1.0 まで縮むまでの時間（撃ち始めから。線形） */
+  settleSec: number;
+  /** 標的を連続でこの秒数見失ったら収束をリセット */
+  resetSec: number;
+  /** 縦方向にも広げる割合（0 = 横だけ、1 = 円で広げる） */
+  verticalShare: number;
 }
 
 /** 人質盾（HOSTAGE_SHIELD）パラメータ（ai_profiles.json の profiles[].shield）。距離 m・速度 m/s・角度 度・時間 s。 */
@@ -1030,7 +1044,10 @@ export type MoveMode = 'run' | 'quiet' | 'crouch';
 export interface LeanConfig {
   maxOffset: number;
   maxRollDeg: number;
-  lerpSpeed: number;
+  /** 中央→最大までの秒数 */
+  outSec: number;
+  /** 最大→中央までの秒数 */
+  returnSec: number;
   /** 壁との最小クリアランス（頭の半径） */
   headRadius: number;
 }
@@ -1069,6 +1086,16 @@ export interface ArrestConfig {
   radioReportChance?: number;
 }
 
+/** 救急キット（容疑者モードだけ）。時間 s、回復量は HP */
+export interface MedkitConfig {
+  /** 押し続ける時間 */
+  holdSec: number;
+  /** 回復量（最大 HP まで） */
+  heal: number;
+  /** 交渉で 1 回に得る個数 */
+  tradeCount: number;
+}
+
 export interface PlayerConfig {
   maxHp: number;
   adsFovDeg: number;
@@ -1091,6 +1118,8 @@ export interface PlayerConfig {
   wounds: WoundsConfig;
   /** 防弾チョッキ（両モード共通の装甲モデル） */
   armor: ArmorConfig;
+  /** 救急キット（容疑者モードだけ） */
+  medkit: MedkitConfig;
   /** オプティワンド（鏡/ファイバースコープ型カメラ） */
   optiwand: OptiwandConfig;
 }
@@ -1100,7 +1129,21 @@ export interface PlayerConfig {
  * 有効 HP ≒ maxHp + 耐久値。肩代わり率は耐久残量に比例して absorb → minAbsorb へ劣化する。
  * 頭部は対象外。
  */
+export type ArmorKind = 'swatIssue' | 'suspectVest';
+
+/** ベストの重さの代償（装着中ずっと効く。耐久が尽きても脱げない） */
+export interface ArmorWeight {
+  /** 移動速度の倍率 (0..1] */
+  speedMul: number;
+  /** 足音の noise 半径の倍率 (>= 1) */
+  footstepRadiusMul: number;
+  /** リーンの速さの倍率 (0..1]。lean.outSec・lean.returnSec をこの値で割る */
+  leanSpeedMul: number;
+}
+
 export interface ArmorConfig {
+  /** 種類ごとの重さの代償 */
+  weight: Record<ArmorKind, ArmorWeight>;
   /** 新品時の肩代わり率 (0..1) */
   absorb: number;
   /** 耐久がほぼ尽きた時の肩代わり率 (0..absorb) */
@@ -1416,6 +1459,33 @@ export interface GameData {
   aiProfiles: AIProfile[];
   squad: SquadConfig;
   suspectAlert: SuspectAlertConfig;
+  /** 敵 SWAT（ライフル・盾持ち）の照準の収束 */
+  swatAimSettle: AimSettleParams;
+  /** 籠城の消耗（siege.json） */
+  siege: SiegeConfig;
+}
+
+/** 籠城の消耗: プレイヤー（容疑者モード）への段階別の効果。配列は [段階1, 段階2]。 */
+export interface SiegePlayerFatigue {
+  tiers: [number, number];
+  swayDeg: [number, number];
+  spreadAddDeg: [number, number];
+  reloadMul: [number, number];
+  speedMul: [number, number];
+}
+/** 籠城の消耗: 容疑者 AI への効果（正規化値 n = 消耗 / 100）。 */
+export interface SiegeAiFatigue {
+  spreadMulPerNorm: number;
+  reactionAddSecAt100: number;
+  moralePenaltyAt100: number;
+}
+/** 籠城の消耗の設定（public/data/siege.json） */
+export interface SiegeConfig {
+  startFatigue: number;
+  supplyFatigue: number;
+  startHour: number;
+  player: SiegePlayerFatigue;
+  ai: SiegeAiFatigue;
 }
 
 /**

@@ -141,6 +141,8 @@ export class SwatHunter implements HitTarget {
   goalTime = 0;
   goalRoom = '';
   huntTarget: Vec3 | null = null;
+  /** 偵察情報（breachIntel）をもう使ったか（リーダーが 1 回だけ向かう） */
+  private intelUsed = false;
   /** 挟撃（F7）の迂回目標へ向かっている途中か */
   huntingFlank = false;
   rushTarget: Vec3 | null = null;
@@ -295,6 +297,7 @@ export class SwatHunter implements HitTarget {
       {
         immediateFireOnEnter: true,
         immediateFireShots: 3,
+        aimSettle: this.team.aimSettle,
         skipRetreatOnHit: () => this.shielded || this.team.currentPressure >= 0.6 || this.state === 'rush',
       },
     );
@@ -507,6 +510,7 @@ export class SwatHunter implements HitTarget {
       return;
     }
     this.sense(dt);
+    this.engage.tickAim(dt, this.sees ? (this.threat?.id ?? null) : null);
     if (
       this.state !== 'engage' &&
       this.state !== 'rush' &&
@@ -1409,6 +1413,14 @@ export class SwatHunter implements HitTarget {
 
   private updateSweep(dt: number): void {
     const leader = this.leader;
+    // 偵察情報（差し入れ）: リーダーだけが入室後に偵察した部屋へ向かう。フォロワーは下の追従に任せる
+    const intel = this.team.breachIntel;
+    if (intel && !leader && !this.intelUsed) {
+      this.intelUsed = true;
+      this.huntTarget = { x: intel.x, y: intel.y, z: intel.z };
+      this.setState('hunt');
+      return;
+    }
     // §5-6: sweepUnclearedRoom はリーダー不在/ダウン時のみ適用し、フォロワーは隊形を維持する
     if (leader && leader.state !== 'engage' && leader.state !== 'rush' && leader.state !== 'staging') {
       // §5-5: リーダーの体ヨーではなく進行方向の低域通過を基準に後方・自サイドへ追従（ヒステリシス付き）

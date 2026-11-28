@@ -25,16 +25,35 @@ export interface SuspectNegotiationContext {
   /** 防弾チョッキを渡す（耐久値は player.json の armor.suspectVest） */
   giveArmor(): void;
   hasArmor(): boolean;
+  /** 防弾チョッキの仕様（説明文を設定値から作るため） */
+  vestSpec(): { durability: number; absorbPct: number; speedMul: number; footstepRadiusMul: number; leanSpeedMul: number };
   giveMagazines(n: number): void;
+  /** 救急キットを n 個渡す（容疑者モードだけ） */
+  giveMedkit(n: number): void;
+  /** 救急キットの仕様（説明文を設定値から作るため） */
+  medkitSpec(): { holdSec: number; heal: number; tradeCount: number };
   /** 突入班を 1 名下げさせる。成功で true */
   withdrawSwat(): boolean;
   swatCount(): number;
   /** 仲間の容疑者 NPC（士気が上がると投降しにくく、粘り強く戦う） */
   allies(): Suspect[];
+  /** 現在の消耗（0..100） */
+  fatigue(): number;
+  setFatigue(v: number): void;
+  /** 差し入れの後の値（siege.supplyFatigue） */
+  supplyFatigue(): number;
+  /** 籠城 N 時間目（siege.startHour） */
+  siegeHour(): number;
+  /** 消耗の段階（表示の色分け用。siege.player.tiers に従う） */
+  fatigueTier(): 0 | 1 | 2;
+  /** 差し入れに乗じて偵察された（突入時に SWAT がプレイヤーの部屋を知る） */
+  markScouted(): void;
 }
 
+const FATIGUE_COLORS = ['#5cd67d', '#f2c14e', '#ff5555'] as const;
+
 /**
- * 時間稼ぎ・人質交換（防弾チョッキ / 弾薬 / 時間）・脅迫。
+ * 時間稼ぎ・水食料の要求・人質交換（防弾チョッキ / 弾薬 / 時間）・脅迫。
  * SWAT 側の「忍耐」が 0 になると交渉決裂で即突入。人質を手放すほど盾が減るトレードオフ。
  */
 export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): NegotiationScenario {
@@ -45,6 +64,8 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
   const released: string[] = [];
   const gains: string[] = [];
   let rallyCount = 0;
+  let suppliesReceived = false;
+  let medkitReceived = false;
   const activeAllies = (): Suspect[] =>
     ctx.allies().filter((s) => s.alive && s.state !== SuspectState.SURRENDER && s.state !== SuspectState.ARRESTED);
   const teamMorale = (): number => {
@@ -202,16 +223,76 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       },
     },
     {
-      icon: '🦺',
-      label: t('人質と交換: 防弾チョッキ', 'Trade Hostage: Body Armor'),
+      icon: '💧',
+      label: t('水・食料を要求', 'Demand Food & Water'),
       desc: t(
-        '被弾ダメージの 60% を肩代わり（耐久 70）。人質を手放すので盾が減り、仲間も動揺する',
-        'Absorbs 60% of incoming damage (70 durability). Costs a hostage and shakes crew morale.',
+        '何時間も飲まず食わずだ。差し入れであなたと仲間の消耗が回復する。ただし差し入れに偵察機材を仕込まれ、突入時に SWAT にあなたの居場所を知られる',
+        "You've gone hours without food or water. Supplies restore fatigue for you and your crew, but the delivery is bugged: at breach, SWAT will know which room you're in.",
       ),
       effects: () => ({
-        gain: [t('防弾チョッキ', 'Body Armor'), t('忍耐 +8', 'Patience +8')],
-        cost: hostageCost(),
+        gain: [
+          t(`消耗 ${Math.round(ctx.fatigue())}→${Math.round(ctx.supplyFatigue())}`, `Fatigue ${Math.round(ctx.fatigue())}→${Math.round(ctx.supplyFatigue())}`),
+          t('忍耐 +5', 'Patience +5'),
+        ],
+        cost: [
+          t(
+            '偵察される（突入時、SWAT があなたのいる部屋を把握）',
+            'Scouted (at breach, SWAT knows the room you are in)',
+          ),
+        ],
       }),
+      disabledReason: () => (suppliesReceived ? t('差し入れはもう受け取った', 'Supplies already received') : null),
+      run: () => {
+        suppliesReceived = true;
+        ctx.setFatigue(ctx.supplyFatigue());
+        ctx.markScouted();
+        spend(+5);
+        gains.push(t('水・食料', 'Food & Water'));
+        const v = Math.round(ctx.fatigue());
+        return [
+          {
+            text: t('あなた「水と食い物をよこせ。話はそれからだ」', 'You: "Food and water. Then we talk."'),
+            tone: 'me',
+          },
+          {
+            text: t('交渉人「……いいだろう。玄関前に置く」', 'Negotiator: "...Fine. We\'ll leave it at the front door."'),
+            tone: 'them',
+          },
+          { text: t(`消耗が ${v} に回復した`, `Fatigue recovered to ${v}`), tone: 'good' },
+          {
+            text: t('（差し入れの袋に何か仕込まれていないか……）', '(Is there something hidden in that bag...?)'),
+            tone: 'bad',
+          },
+          ...breakdownLines(),
+        ];
+      },
+    },
+    {
+      icon: '🦺',
+      label: t('人質と交換: 防弾チョッキ', 'Trade Hostage: Body Armor'),
+      desc: (() => {
+        const v = ctx.vestSpec();
+        const move = Math.round((1 - v.speedMul) * 100);
+        const noise = Math.round((v.footstepRadiusMul - 1) * 100);
+        return t(
+          `被弾ダメージの ${v.absorbPct}% を肩代わり（耐久 ${v.durability}）。重いので移動 −${move}%・足音が ${noise}% 遠くまで届き・リーンが遅くなる。人質を手放すので盾が減り、仲間も動揺する`,
+          `Absorbs ${v.absorbPct}% of incoming damage (${v.durability} durability). Heavy: move -${move}%, footsteps carry ${noise}% farther, slower leaning. Costs a hostage and shakes crew morale.`,
+        );
+      })(),
+      effects: () => {
+        const v = ctx.vestSpec();
+        return {
+          gain: [t('防弾チョッキ', 'Body Armor'), t('忍耐 +8', 'Patience +8')],
+          cost: [
+            ...hostageCost(),
+            t(`移動 −${Math.round((1 - v.speedMul) * 100)}%`, `Move -${Math.round((1 - v.speedMul) * 100)}%`),
+            t(
+              `足音 +${Math.round((v.footstepRadiusMul - 1) * 100)}%・リーン遅く`,
+              `Footsteps +${Math.round((v.footstepRadiusMul - 1) * 100)}%, slower lean`,
+            ),
+          ],
+        };
+      },
       disabledReason: () =>
         needHostage() ?? (ctx.hasArmor() ? t('すでに防弾チョッキを受け取った', 'Already received body armor') : null),
       run: () =>
@@ -245,6 +326,39 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
           t(
             '交渉人「弾を渡すのは本意じゃないが……人質の安全が優先だ」',
             'Negotiator: "I hate handing over ammo... but the hostage\'s life comes first."',
+          ),
+        ),
+    },
+    {
+      icon: '⛑',
+      label: t('人質と交換: 救急キット', 'Trade Hostage: Medkit'),
+      desc: (() => {
+        const m = ctx.medkitSpec();
+        return t(
+          `救急キット ${m.tradeCount} 個（H を ${m.holdSec} 秒押し続けて HP +${m.heal}。使っている間は撃てず、歩きになる）。人質を手放すので盾が減り、仲間も動揺する`,
+          `Receive ${m.tradeCount} medkit(s) (hold H for ${m.holdSec}s to heal ${m.heal} HP; you can't shoot and move at walking speed while using it). Costs a hostage and shakes crew morale.`,
+        );
+      })(),
+      effects: () => {
+        const m = ctx.medkitSpec();
+        return {
+          gain: [t(`救急キット ×${m.tradeCount}`, `Medkit ×${m.tradeCount}`), t('忍耐 +5', 'Patience +5')],
+          cost: hostageCost(),
+        };
+      },
+      disabledReason: () =>
+        needHostage() ?? (medkitReceived ? t('救急キットはもう受け取った', 'Medkit already received') : null),
+      run: () =>
+        trade(
+          t('救急キット', 'Medkit'),
+          () => {
+            medkitReceived = true;
+            ctx.giveMedkit(ctx.medkitSpec().tradeCount);
+          },
+          +5,
+          t(
+            '交渉人「……医療品なら渡そう。人質が先だ」',
+            'Negotiator: "...Medical supplies we can do. The hostage comes out first."',
           ),
         ),
     },
@@ -425,8 +539,8 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
       },
       {
         text: t(
-          `状況: 人質 ${ctx.hostages().length} 名 / 突入班 SWAT ${ctx.swatCount()} 名 / 突入まで ${Math.round(ctx.prepSec())} 秒`,
-          `Status: ${ctx.hostages().length} Hostages / ${ctx.swatCount()} SWAT / ${Math.round(ctx.prepSec())}s to breach`,
+          `状況: 籠城 ${ctx.siegeHour()} 時間目 / 消耗 ${Math.round(ctx.fatigue())} / 人質 ${ctx.hostages().length} 名 / 突入班 SWAT ${ctx.swatCount()} 名 / 突入まで ${Math.round(ctx.prepSec())} 秒`,
+          `Status: Hour ${ctx.siegeHour()} of siege / Fatigue ${Math.round(ctx.fatigue())} / ${ctx.hostages().length} Hostages / ${ctx.swatCount()} SWAT / ${Math.round(ctx.prepSec())}s to breach`,
         ),
         tone: 'info',
       },
@@ -438,6 +552,17 @@ export function buildSuspectNegotiation(ctx: SuspectNegotiationContext): Negotia
         max: 100,
         color: patience > 50 ? '#5cd67d' : patience > 25 ? '#f2c14e' : '#ff5555',
         hint: t('0 になると交渉決裂 → 即突入', 'Hits 0 → Talks break down (immediate breach)'),
+      },
+      {
+        label: t(`消耗（籠城 ${ctx.siegeHour()} 時間目）`, `Fatigue (Hour ${ctx.siegeHour()})`),
+        value: ctx.fatigue(),
+        max: 100,
+        color: FATIGUE_COLORS[ctx.fatigueTier()],
+        text: `${Math.round(ctx.fatigue())}`,
+        hint: t(
+          '50 以上で照準が揺れ装填が遅い、75 以上で足も鈍る。あなたと仲間に効く',
+          'From 50: aim sways, reloads slow. From 75: you slow down too. Affects you and your crew.',
+        ),
       },
       {
         label: t('突入までの準備時間', 'Prep Time Before Breach'),
@@ -506,6 +631,13 @@ export interface SwatNegotiationContext {
   alertCfg?: SuspectAlertConfig;
   /** 交渉の状態が変わるたびに呼ばれる（突入時の警戒度ベースラインと緊張など） */
   onOutcome?(info: NegotiationAlertInfo, baseline: number): void;
+  /** 犯人の消耗（0..100） */
+  fatigue(): number;
+  setFatigue(v: number): void;
+  supplyFatigue(): number;
+  siegeHour(): number;
+  /** 消耗の段階（表示の色分け用） */
+  fatigueTier(): 0 | 1 | 2;
 }
 
 /**
@@ -581,16 +713,30 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
       icon: '🥪',
       label: t('信頼構築（食料・水を差し入れ）', 'Build Trust (Send Food & Water)'),
       desc: t(
-        '場を落ち着かせて信頼を築く。信頼は他の交渉の成功率を上げる。ただし犯人は休息で士気が少し回復する',
-        'De-escalate and build trust, boosting odds on other options. Suspects recover a little morale.',
+        '場を落ち着かせて信頼を築く。信頼は他の交渉の成功率を上げる。ただし犯人は休息で士気が少し回復し、食事で消耗が回復して、狙いと反応が戻る',
+        'De-escalate and build trust, boosting odds on other options. Suspects recover a little morale, and rest and food restore their fatigue so their aim and reactions recover.',
       ),
       effects: () => ({
         gain: [t('緊張 -15', 'Tension -15'), t('信頼 +20', 'Trust +20')],
-        cost: [t('犯人の士気 +4', 'Suspect Morale +4')],
+        cost: [
+          t('犯人の士気 +4', 'Suspect Morale +4'),
+          ...(ctx.fatigue() > ctx.supplyFatigue()
+            ? [
+                t(
+                  `犯人の消耗 ${Math.round(ctx.fatigue())}→${Math.round(ctx.supplyFatigue())}（手強くなる）`,
+                  `Suspect Fatigue ${Math.round(ctx.fatigue())}→${Math.round(ctx.supplyFatigue())} (tougher)`,
+                ),
+              ]
+            : []),
+        ],
       }),
       disabledReason: () => null,
       run: () => {
         for (const s of active()) s.adjustMorale(4);
+        const fatigueBefore = Math.round(ctx.fatigue());
+        const recovered = ctx.fatigue() > ctx.supplyFatigue();
+        if (recovered) ctx.setFatigue(ctx.supplyFatigue());
+        const fatigueAfter = Math.round(ctx.fatigue());
         return [
           {
             text: t(
@@ -607,6 +753,17 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
             text: t('緊張 -15 / 信頼 +20（犯人の士気 +4）', 'Tension -15 / Trust +20 (Suspect Morale +4)'),
             tone: 'info',
           },
+          ...(recovered
+            ? [
+                {
+                  text: t(
+                    `犯人の消耗が ${fatigueBefore}→${fatigueAfter} に回復した（狙いと反応が戻る）`,
+                    `Suspect fatigue recovered ${fatigueBefore}→${fatigueAfter} (aim and reactions recover)`,
+                  ),
+                  tone: 'info' as const,
+                },
+              ]
+            : []),
           ...spend(-15, +20),
         ];
       },
@@ -836,11 +993,25 @@ export function buildSwatNegotiation(ctx: SwatNegotiationContext): NegotiationSc
         tone: 'them',
       },
       {
-        text: t(`状況: 人質 ${ctx.hostages().length} 名`, `Status: ${ctx.hostages().length} Hostages`),
+        text: t(
+          `状況: 籠城 ${ctx.siegeHour()} 時間目 / 犯人の消耗 ${Math.round(ctx.fatigue())} / 人質 ${ctx.hostages().length} 名`,
+          `Status: Hour ${ctx.siegeHour()} of siege / Suspect Fatigue ${Math.round(ctx.fatigue())} / ${ctx.hostages().length} Hostages`,
+        ),
         tone: 'info',
       },
     ],
     meters: () => [
+      {
+        label: t(`犯人の消耗（籠城 ${ctx.siegeHour()} 時間目）`, `Suspect Fatigue (Hour ${ctx.siegeHour()})`),
+        value: ctx.fatigue(),
+        max: 100,
+        color: FATIGUE_COLORS[ctx.fatigueTier()],
+        text: `${Math.round(ctx.fatigue())}`,
+        hint: t(
+          '高いほど犯人の反応が鈍く狙いが粗い。食料・水の差し入れで回復する（手強くなる）',
+          'Higher fatigue means slower reactions and worse aim. Food & water restore it (making them tougher).',
+        ),
+      },
       {
         label: t('犯人の緊張', 'Suspect Tension'),
         value: tension,

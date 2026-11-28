@@ -2,14 +2,16 @@ import * as THREE from 'three';
 import { getSettings } from '../core/Settings';
 import type { InputManager } from '../core/InputManager';
 import type { GameEventBus } from '../core/events';
-import type { MapData, MoveMode, PlayerConfig } from '../core/types';
+import type { ArmorKind, ArmorWeight, MapData, MoveMode, PlayerConfig } from '../core/types';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import { collidersNear } from '../world/ColliderIndex';
 import { legacyZeroFallbackOf, nextFootY, probeGround, STEP_HEIGHT } from '../world/Walk';
+import { NO_PLAYER_FATIGUE, type PlayerFatigueEffects } from '../rules/siegeFatigue';
 import { applyHeadMultiplier, isHeadHit, woundLevelOf, type WoundLevel } from '../rules/wounds';
 
 const DEG2RAD = Math.PI / 180;
 const MAX_DT = 0.05;
+const NO_ARMOR_WEIGHT: ArmorWeight = { speedMul: 1, footstepRadiusMul: 1, leanSpeedMul: 1 };
 
 /**
  * 一人称移動: PointerLock 視点、WASD、Shift 静音、C しゃがみ（トグル）、AABB 壁スライディング衝突。
@@ -25,6 +27,7 @@ export class PlayerController {
   private mode: MoveMode = 'run';
   private stepTimer = 0;
   private moving = false;
+  private leanProgress = 0; // リーン進捗 [-1,1]（右が正）
   private leanOffset = 0; // 現在の横オフセット（右が正, m）
   private readonly eyeWorld = new THREE.Vector3();
   private readonly projScratch = new THREE.Vector3();
@@ -53,6 +56,8 @@ export class PlayerController {
   headshotsEnabled = true;
   private woundLv: WoundLevel = 0;
   private swayPhase = 0;
+  /** 籠城の消耗の効果（容疑者モードだけ main が設定。SWAT モードは常に既定＝効果なし） */
+  private fatigue: PlayerFatigueEffects = { ...NO_PLAYER_FATIGUE };
   /** 直近の被弾が頭部だったか（HUD/テスト用） */
   lastHitHead = false;
 
@@ -94,10 +99,48 @@ export class PlayerController {
   armorMax = 0;
 
   /** 防弾チョッキを装着する（既存より耐久が高い場合のみ更新）。 */
-  equipArmor(points: number): void {
-    if (!(points > 0) || points <= this.armor) return;
+  equipArmor(points: number, kind: ArmorKind = 'swatIssue'): void {
+    if (this.armorKindValue !== null) return; // すでに着ている（脱げない）
+    if (!(points > 0)) return;
     this.armor = points;
-    this.armorMax = Math.max(this.armorMax, points);
+    this.armorMax = points;
+    this.armorKindValue = kind;
+  }
+
+  private armorKindValue: ArmorKind | null = null;
+
+  /** 装着中のベストの種類（未装着は null。耐久が尽きても残る） */
+  get armorKind(): ArmorKind | null {
+    return this.armorKindValue;
+  }
+
+  /** 装着中のベストの重さ（未装着は等倍） */
+  get armorWeight(): ArmorWeight {
+    return this.armorKindValue === null ? NO_ARMOR_WEIGHT : this.config.armor.weight[this.armorKindValue];
+  }
+
+  /** 移動モードの上限（救急処置中は 'quiet'。走りを静音に落とす）。null = 制限なし */
+  moveModeCap: 'quiet' | null = null;
+
+  /** HP を回復する（生存中だけ。最大 HP まで。負傷レベルは下げない） */
+  heal(amount: number): void {
+    if (!this.alive || !(amount > 0)) return;
+    this.hpValue = Math.min(this.config.maxHp, this.hpValue + amount);
+  }
+
+  /** 籠城の消耗の効果を保存する（値を持つだけ。適用は各処理が読む） */
+  setFatigueEffects(e: PlayerFatigueEffects): void {
+    this.fatigue = { ...e };
+  }
+
+  /** 消耗による射撃拡散の加算（度） */
+  get fatigueSpreadAdd(): number {
+    return this.fatigue.spreadAddDeg;
+  }
+
+  /** 消耗による装填時間の倍率 */
+  get reloadTimeMul(): number {
+    return this.fatigue.reloadMul;
   }
 
   /** 現在の肩代わり率。耐久残量に比例して absorb → minAbsorb へ劣化する */
@@ -224,12 +267,15 @@ export class PlayerController {
     const fwd = (this.input.isDown('moveForward') ? 1 : 0) - (this.input.isDown('moveBackward') ? 1 : 0);
     const right = (this.input.isDown('moveRight') ? 1 : 0) - (this.input.isDown('moveLeft') ? 1 : 0);
     this.mode = this.crouching ? 'crouch' : this.input.isDown('walk') ? 'quiet' : 'run';
+    // 救急処置中は走れない（しゃがみはそのまま。足音も静音の半径になる）
+    if (this.moveModeCap === 'quiet' && this.mode === 'run') this.mode = 'quiet';
 
+    const armorWeight = this.armorWeight;
     const len = Math.hypot(fwd, right);
     // 外部要因で移動不可（ドア下ワンド展開中など）のときは歩行扱いにせず足音も出さない
     this.moving = len > 0 && this.externalMoveScale > 0;
     if (this.moving) {
-      const speed = cfg.speeds[this.mode] * this.speedMultiplier * this.externalMoveScale * this.woundSpeedMul;
+      const speed = cfg.speeds[this.mode] * this.speedMultiplier * this.externalMoveScale * this.woundSpeedMul * armorWeight.speedMul * this.fatigue.speedMul;
       const sin = Math.sin(this.yaw);
       const cos = Math.cos(this.yaw);
       // forward = (-sin, -cos), right = (cos, -sin)
@@ -241,7 +287,7 @@ export class PlayerController {
         this.stepTimer = cfg.footstep.interval[this.mode];
         this.bus.emit('noise', {
           pos: { x: this.position.x, y: this.position.y, z: this.position.z },
-          radius: cfg.footstep.radius[this.mode],
+          radius: cfg.footstep.radius[this.mode] * armorWeight.footstepRadiusMul,
           kind: 'footstep',
           source: 'player',
         });
@@ -256,17 +302,46 @@ export class PlayerController {
     this.eyeHeight += (target - this.eyeHeight) * (1 - Math.exp(-cfg.eyeHeightLerpSpeed * dt));
     // リーン（Q=左 / E=右、同時押しは相殺）
     const leanDir = (this.input.isDown('leanRight') ? 1 : 0) - (this.input.isDown('leanLeft') ? 1 : 0);
-    let leanTarget = 0;
-    if (leanDir !== 0) {
-      const limit = this.leanClearance(leanDir, cfg.lean.maxOffset);
-      leanTarget = leanDir * limit;
+    // 進捗 p ∈ [-1,1] を一定の速さで動かす。出る向きは 1/outSec、戻る向きは 1/returnSec。
+    // 反対側へ切り替えるときは必ず中央（p=0）を通る。
+    // ベストの重さ: 出・戻りの時間を leanSpeedMul で割る（0.8 → 時間 1.25 倍）。進捗は保つ
+    const outRate = armorWeight.leanSpeedMul / cfg.lean.outSec;
+    const retRate = armorWeight.leanSpeedMul / cfg.lean.returnSec;
+    let remain = dt;
+    const p0 = this.leanProgress;
+    if (leanDir === 0 || (p0 !== 0 && Math.sign(p0) !== leanDir)) {
+      // 中央へ戻る（目標なし、または反対側から）
+      const need = Math.abs(p0) / retRate;
+      if (remain >= need) {
+        this.leanProgress = 0;
+        remain -= need;
+      } else {
+        this.leanProgress = p0 - Math.sign(p0) * retRate * remain;
+        remain = 0;
+      }
     }
-    this.leanOffset += (leanTarget - this.leanOffset) * (1 - Math.exp(-cfg.lean.lerpSpeed * dt));
-    // 補間中に壁へ近づいた場合も、現在位置を許容量内へ押し戻す（壁越しに覗かせない）
+    if (leanDir !== 0 && remain > 0) {
+      this.leanProgress = Math.max(-1, Math.min(1, this.leanProgress + leanDir * outRate * remain));
+    }
+    const smooth = (t: number): number => t * t * (3 - 2 * t);
+    const sgn = Math.sign(this.leanProgress);
+    this.leanOffset = sgn * cfg.lean.maxOffset * smooth(Math.abs(this.leanProgress));
+    // 壁による制限。制限されたら進捗もそのオフセットに対応する値へ戻す（裏で溜めない）
     if (this.leanOffset !== 0) {
-      const dir = Math.sign(this.leanOffset);
-      const lim = this.leanClearance(dir, Math.abs(this.leanOffset));
-      if (Math.abs(this.leanOffset) > lim) this.leanOffset = dir * lim;
+      const lim = this.leanClearance(sgn, Math.abs(this.leanOffset));
+      if (Math.abs(this.leanOffset) > lim) {
+        this.leanOffset = sgn * lim;
+        const ratio = cfg.lean.maxOffset > 0 ? lim / cfg.lean.maxOffset : 0;
+        // smoothstep の逆を二分法で求める
+        let lo = 0;
+        let hi = 1;
+        for (let i = 0; i < 24; i++) {
+          const mid = (lo + hi) / 2;
+          if (smooth(mid) < ratio) lo = mid;
+          else hi = mid;
+        }
+        this.leanProgress = sgn * lo;
+      }
     }
     this.applyCamera();
   }
@@ -482,9 +557,10 @@ export class PlayerController {
     this.camera.position.copy(this.getEyePosition(this.eyeWorld));
     const roll = -this.leanAmount * this.config.lean.maxRollDeg * DEG2RAD; // 右リーンで右へ傾く
     const lv = this.woundLevel;
-    if (lv > 0) {
-      // 負傷中は視点が呼吸・脈動でふらつく（視点そのものは変えず、カメラのみ揺らす）
-      const amp = this.config.wounds.swayDeg[lv - 1]! * DEG2RAD;
+    const ampDeg = (lv > 0 ? this.config.wounds.swayDeg[lv - 1]! : 0) + this.fatigue.swayDeg;
+    if (ampDeg > 0) {
+      // 負傷・消耗中は視点が呼吸・脈動でふらつく（視点そのものは変えず、カメラのみ揺らす）
+      const amp = ampDeg * DEG2RAD;
       this.swayPhase += 0.016 * (lv === 2 ? 9 : 5);
       const sx = Math.sin(this.swayPhase) * amp;
       const sy = Math.sin(this.swayPhase * 0.73 + 1.3) * amp * 0.8;
