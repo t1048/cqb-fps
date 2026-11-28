@@ -99,4 +99,28 @@ describe('部屋ごとの内装', () => {
     expect(checked).toBeGreaterThan(4);
     world.dispose();
   });
+  it('地下の壁の天端が 1F 床面と同一平面に重ならない（床のちらつき防止）', () => {
+    const map = loadMap('random_small', 'clubhouse', true);
+    const world = new WorldBuilder(map, namedTextures());
+    world.root.updateMatrixWorld(true);
+    const meshes: THREE.Object3D[] = [];
+    world.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh && (m.material as THREE.MeshStandardMaterial).map) meshes.push(m);
+    });
+    const tops = map.walls.filter((w) => Math.abs((w.y ?? 0) + w.height) < 0.02 && (w.y ?? 0) < -1);
+    const slabs = map.floors.filter((f) => Math.abs((f.y ?? 0) + f.height) < 0.02);
+    let checked = 0;
+    for (const w of tops) {
+      const under = slabs.some((f) => Math.abs(w.x - f.x) < f.width / 2 - 0.3 && Math.abs(w.z - f.z) < f.depth / 2 - 0.3);
+      if (!under) continue;
+      const ray = new THREE.Raycaster(new THREE.Vector3(w.x, 1, w.z), new THREE.Vector3(0, -1, 0), 0, 2);
+      const atFloor = ray.intersectObjects(meshes, false).filter((h) => Math.abs(h.point.y) < 0.005);
+      const names = new Set(atFloor.map((h) => ((h.object as THREE.Mesh).material as THREE.MeshStandardMaterial).map?.name));
+      expect(names.size, `壁 (${w.x}, ${w.z}) の天端`).toBeLessThanOrEqual(1);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+    world.dispose();
+  });
 });
