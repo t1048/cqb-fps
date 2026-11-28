@@ -1107,8 +1107,24 @@ export function updateC2StandoffPhase(ctx: SquadContext, ally: AllyUnit, dt: num
     if (door.angle >= ctx.cfg.doorOpenAngle) {
       ally.phase = 'entering';
       ally.phaseTimer = 0;
+      return;
     }
-    return;
+    // 起爆役が倒れた・持ち場を離れた: 退避中の誰も起爆せず扉の前で止まり続けないよう、残った者が引き継ぐ
+    const leadActive = ctx.allies.some(
+      (u) =>
+        u !== ally &&
+        !u.down &&
+        u.c2IsLead &&
+        u.entryPortal?.id === portal.id &&
+        (u.phase === 'c2_plant' || u.phase === 'c2_standoff'),
+    );
+    if (leadActive) return;
+    const fallen = ctx.allies.find((u) => u !== ally && u.c2IsLead && u.entryPortal?.id === portal.id);
+    if (fallen) fallen.c2IsLead = false;
+    ally.c2IsLead = true;
+    // 退避中（設置済み）なら時限の続きから。設置の途中で倒れたなら、付いている爆薬をそのまま最初の時限で起爆する
+    ally.c2Timer = fallen?.phase === 'c2_standoff' ? fallen.c2Timer : 0;
+    ally.c2BeepTimer = 0;
   }
   ally.c2Timer += dt;
   ally.c2BeepTimer += dt;

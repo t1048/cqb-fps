@@ -204,6 +204,8 @@ export class SwatHunter implements HitTarget {
   private readonly skipDoorLeft = new Map<string, number>();
   /** 同じ扉のブリーチを成果なく始め直した回数（割り込み → 再開の往復を検知して、いったん別の手へ切り替える） */
   private readonly breachTries = new AttemptLog();
+  /** トラップ解除を途中でやめた扉 → 残りの所要秒（戻ったら続きから。くじを引き直して最初からやらない） */
+  private readonly disarmLeft = new Map<string, number>();
   /** 経路計画（施錠ドア越しの目標）の再確認までの秒・他隊員のブリーチ待ちの累計秒 */
   private routeCheckCd = Math.random() * ROUTE_CHECK_SEC;
   private routeWaitSec = 0;
@@ -360,6 +362,7 @@ export class SwatHunter implements HitTarget {
   setState(next: HunterState): void {
     if (this.state === 'down') return; // 倒れた隊員は二度と行動しない
     if (this.state === next) return;
+    const prevStateTime = this.stateTime;
     if (this.state === 'engage') {
       this.engage.exit();
       this.holdingFriendlyFire = false;
@@ -400,6 +403,7 @@ export class SwatHunter implements HitTarget {
     }
     if (next === 'sweep') this.goalCell = null;
     if (next !== 'disarm' && this.disarmDoor) {
+      this.disarmLeft.set(this.disarmDoor.id, Math.max(0.5, this.disarmSec - prevStateTime));
       this.team.abandonDisarm(this.disarmDoor);
       this.disarmDoor = null;
     }
@@ -885,6 +889,7 @@ export class SwatHunter implements HitTarget {
 
   /** 視覚。交戦中以外は視野角・反応時間あり。民間人・味方が射線上にいる場合は撃たない（位置は把握）。 */
   private sense(dt: number): void {
+    const prevThreatId = this.threat?.id ?? null;
     this.sees = false;
     this.threat = null;
     this.pepperThreat = null;
@@ -895,7 +900,7 @@ export class SwatHunter implements HitTarget {
     const engaged = this.state === 'engage' || this.state === 'rush';
     const range = engaged ? this.combat.engageRange : this.team.playerCrouching ? VISION_RANGE_CROUCH : VISION_RANGE;
     const eyeY = this.body.footY + 1.55;
-    const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, range);
+    const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, range, prevThreatId);
     if (!threat) {
       this.spotTimer = Math.max(0, this.spotTimer - dt);
       return;
@@ -948,7 +953,9 @@ export class SwatHunter implements HitTarget {
   }
 
   private updateEngage(dt: number): void {
-    if (this.sees) this.lostSec = 0;
+    // 見えているが人質・民間人が射線上で実弾を撃てない（ペッパーで撃つ）あいだも「見失った」に数えない。
+    // 数えると、交戦 → 見失い → 追跡 → また発見して交戦… を繰り返して同じ場所で行ったり来たりする
+    if (this.sees || this.pepperThreat) this.lostSec = 0;
     else this.lostSec += dt;
     const k = this.known ?? this.team.lastSighting;
 
@@ -1838,13 +1845,15 @@ export class SwatHunter implements HitTarget {
   beginDisarm(door: Door): void {
     this.setState('disarm');
     this.disarmDoor = door;
-    this.disarmSec = DISARM_SEC_MIN + Math.random() * (DISARM_SEC_MAX - DISARM_SEC_MIN);
+    this.disarmSec = this.disarmLeft.get(door.id) ?? DISARM_SEC_MIN + Math.random() * (DISARM_SEC_MAX - DISARM_SEC_MIN);
+    this.disarmLeft.delete(door.id);
     this.body.setPose('crouch');
   }
 
   private updateDisarm(_dt: number): void {
     const door = this.disarmDoor;
     if (!door || !this.team.trapStillThere(door)) {
+      if (door) this.disarmLeft.delete(door.id);
       this.disarmDoor = null;
       this.body.setPose('stand');
       this.setState('sweep');
