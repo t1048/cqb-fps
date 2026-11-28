@@ -121,7 +121,7 @@ describe('SwatProfile immutable base templates & cloning', () => {
       investigateMaxDist: 40,
       investigateSpeedScale: 0.9,
       reinforceOnGunshot: true,
-      repositionAfterLostSec: 1.6,
+      repositionAfterLostSec: 2.6,
       flankChance: 0.5,
       guardHostageRoom: false,
     });
@@ -177,12 +177,12 @@ describe('SwatProfile immutable base templates & cloning', () => {
     expect(SWAT_PEPPER_RANGE).toBe(20);
 
     expect(SWAT_RUSH_LOW_HP).toBe(40);
-    expect(SWAT_RUSH_RADIUS).toBe(14);
-    expect(SWAT_RUSH_DURATION_SEC).toBe(5.5);
-    expect(SWAT_RUSH_TEAM_COOLDOWN).toBe(6.0);
-    expect(SWAT_RUSH_SPEED_MIN).toBe(2.7);
-    expect(SWAT_RUSH_SPEED_MAX).toBe(2.9);
-    expect(SWAT_SHIELD_RUSH_SPEED).toBe(2.35);
+    expect(SWAT_RUSH_RADIUS).toBe(7);
+    expect(SWAT_RUSH_DURATION_SEC).toBe(3.0);
+    expect(SWAT_RUSH_TEAM_COOLDOWN).toBe(14.0);
+    expect(SWAT_RUSH_SPEED_MIN).toBe(2.25);
+    expect(SWAT_RUSH_SPEED_MAX).toBe(2.45);
+    expect(SWAT_SHIELD_RUSH_SPEED).toBe(2.15);
 
     expect(SWAT_SUPPRESS_START_SEC).toBe(0.35);
     expect(SWAT_SUPPRESS_END_SEC).toBe(3.5);

@@ -644,6 +644,8 @@ class App {
           else this.pepper?.hit();
         },
         aimSettle: swatAimSettle,
+        isPlayerSurrendering: () => this.suspectMission?.isSurrendering ?? false,
+        isPlayerSurrendered: () => this.suspectMission?.isSurrendered ?? false,
       });
       this.entities.attachHostileTargets(() => this.swatTeam?.livingTargets() ?? []);
       this.scene.add(this.swatTeam.root);

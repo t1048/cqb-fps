@@ -54,6 +54,9 @@ import type { AABB, Collider } from '../../world/WorldBuilder';
 import type { BarricadeInfo } from '../Fortify';
 import { lerp } from './swatHelpers';
 import {
+  CHALLENGE_GRACE_SEC,
+  CHALLENGE_HOLD_DIST,
+  CHALLENGE_LOST_SEC,
   COVER_NEAR,
   DEG2RAD,
   DISARM_FAIL_CHANCE,
@@ -80,8 +83,11 @@ import {
   GOAL_TIMEOUT_SEC,
   HEADING_MIN_SPEED,
   HEADING_TAU,
+  HOSTILE_AIM_DEG,
+  HOSTILE_AIM_SEC,
   HOT_PREAIM_RADIUS,
   HOT_PREAIM_REACT_SEC,
+  HUNT_DOOR_PAUSE_SEC,
   HUNT_SPEED,
   LOOK_HOLD_SEC,
   NAV_SMOOTH,
@@ -176,6 +182,16 @@ export class SwatHunter implements HitTarget {
   barricadeBurst = 0;
   /** 民間人が射線上で実弾を撃てない脅威（ペッパーボールで撃つ） */
   pepperThreat: Vec3 | null = null;
+  /** 投降勧告（challenge）中に視認しているプレイヤーの胸位置 */
+  private challengePlayerPoint: Vec3 | null = null;
+  /** 投降勧告を無視されている累計秒数 */
+  private challengeSec = 0;
+  private challengeNonLethalCalled = false;
+  /** プレイヤーが自分に銃口を向け続けている秒数 */
+  private aimAtMeSec = 0;
+  /** hunt 中に閉じた未施錠ドアの前で一瞬警戒停止するタイマー */
+  private huntDoorPause = 0;
+  private huntPausedDoorId: string | null = null;
   /** 味方 SWAT が射線上にいて発砲を保留中 */
   holdingFriendlyFire = false;
   friendlyBlockSec = 0;
@@ -305,7 +321,7 @@ export class SwatHunter implements HitTarget {
         immediateFireOnEnter: true,
         immediateFireShots: 3,
         aimSettle: this.team.aimSettle,
-        skipRetreatOnHit: () => this.shielded || this.team.currentPressure >= 0.6 || this.state === 'rush',
+        skipRetreatOnHit: () => this.shielded || this.state === 'rush',
       },
     );
   }
@@ -386,7 +402,11 @@ export class SwatHunter implements HitTarget {
       this.pieStepHold = 0;
       this.pieTimer = 0;
     }
-    if (this.state === 'hunt') this.huntingFlank = false;
+    if (this.state === 'hunt') {
+      this.huntingFlank = false;
+      this.huntDoorPause = 0;
+      this.huntPausedDoorId = null;
+    }
     if (this.state === 'sweep') this.following = false;
     if (this.state === 'breach') {
       this.clearBreachState();
@@ -396,6 +416,12 @@ export class SwatHunter implements HitTarget {
     this.state = next;
     this.stateTime = 0;
     if (!this.nav.onStair) this.nav.reset(); // 階段の途中では昇降状態を保持する
+    if (next === 'challenge') {
+      this.body.setPose('stand');
+      this.lostSec = 0;
+      this.challengeSec = 0;
+      this.challengeNonLethalCalled = false;
+    }
     if (next === 'engage') {
       this.body.setPose('stand');
       this.engage.enter(this.known);
@@ -565,6 +591,7 @@ export class SwatHunter implements HitTarget {
     this.sense(dt);
     this.engage.tickAim(dt, this.sees ? (this.threat?.id ?? null) : null);
     if (
+      this.state !== 'challenge' &&
       this.state !== 'engage' &&
       this.state !== 'rush' &&
       this.state !== 'disarm' &&
@@ -591,6 +618,9 @@ export class SwatHunter implements HitTarget {
         break;
       case 'entry':
         this.updateEntry(dt);
+        break;
+      case 'challenge':
+        this.updateChallenge(dt);
         break;
       case 'engage':
         this.updateEngage(dt);
@@ -646,7 +676,7 @@ export class SwatHunter implements HitTarget {
 
   /** フェーズ 1A: マズルディシプリン（非視認時に味方・至近壁が前方にあればローレディ、脅威視認時はハイレディ） */
   private updateReadyPose(): void {
-    if (this.sees || this.pepperThreat) {
+    if (this.sees || this.pepperThreat || this.state === 'challenge') {
       this.body.setReadyPose('high');
       return;
     }
@@ -931,17 +961,23 @@ export class SwatHunter implements HitTarget {
     }
   }
 
-  /** 視覚。交戦中以外は視野角・反応時間あり。民間人・味方が射線上にいる場合は撃たない（位置は把握）。 */
+  /** 投降勧告中も含め、現在フレームでプレイヤー（または脅威）を視認しているか */
+  get seesThreat(): boolean {
+    return this.sees || this.challengePlayerPoint !== null;
+  }
+
+  /** 視覚。交戦中以外は視野角・反応時間あり。非敵対・投降中のプレイヤーは撃たずに投降勧告（challenge）へ移る。 */
   private sense(dt: number): void {
     const prevThreatId = this.threat?.id ?? null;
     this.sees = false;
     this.threat = null;
     this.pepperThreat = null;
+    this.challengePlayerPoint = null;
     this.holdingFriendlyFire = false;
     this.acquiring = false;
     const p = this.ctx.player;
     if (p.alive === false) return;
-    const engaged = this.state === 'engage' || this.state === 'rush';
+    const engaged = this.state === 'engage' || this.state === 'rush' || this.state === 'challenge';
     const range =
       (engaged ? this.combat.engageRange : this.team.playerCrouching ? VISION_RANGE_CROUCH : VISION_RANGE) *
       this.team.visionRangeMul;
@@ -949,6 +985,7 @@ export class SwatHunter implements HitTarget {
     const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, range, prevThreatId);
     if (!threat) {
       this.spotTimer = Math.max(0, this.spotTimer - dt);
+      this.aimAtMeSec = Math.max(0, this.aimAtMeSec - dt * 2);
       return;
     }
     if (!engaged) {
@@ -978,11 +1015,67 @@ export class SwatHunter implements HitTarget {
       if (this.spotTimer < react) return;
       this.spotTimer = 0;
       this.known = { x: threat.x, y: p.position.y, z: threat.z };
+
+      // プレイヤーが未敵対または投降中なら、いきなり撃たずに投降勧告（challenge）へ
+      if (threat.isPlayer && (!this.team.playerHostile || this.team.playerSurrendering || this.team.playerSurrendered)) {
+        this.challengePlayerPoint = threat.point;
+        this.setState('challenge');
+        if (this.team.playerSurrendering || this.team.playerSurrendered) {
+          this.team.onPlayerSurrenderSpotted(this);
+        } else {
+          this.team.onChallengeContact(this, this.known);
+        }
+        return;
+      }
+
       this.team.onContact(this, this.known);
       if (this.state !== 'rush') this.setState('engage');
     }
+
     this.known = { x: threat.x, y: p.position.y, z: threat.z };
     this.team.shareSighting(this.known);
+
+    // プレイヤーへの交戦規定（RoE）: 投降中は即座に射撃を中止し、未敵対なら銃口を向け続けられない限り撃たない
+    if (threat.isPlayer) {
+      if (this.team.playerSurrendering || this.team.playerSurrendered) {
+        this.challengePlayerPoint = threat.point;
+        this.aimAtMeSec = 0;
+        if (this.state !== 'challenge') {
+          this.setState('challenge');
+          this.team.onPlayerSurrenderSpotted(this);
+        }
+        return;
+      }
+      if (!this.team.playerHostile) {
+        this.challengePlayerPoint = threat.point;
+        // プレイヤーが自分へ銃口を向け続けているかチェック
+        const pyaw = this.team.playerYawRad;
+        const pfx = -Math.sin(pyaw);
+        const pfz = -Math.cos(pyaw);
+        const toMeX = this.body.px - threat.x;
+        const toMeZ = this.body.pz - threat.z;
+        const toMeD = Math.hypot(toMeX, toMeZ);
+        const aimingAtMe = toMeD > 0.1 && (pfx * toMeX + pfz * toMeZ) / toMeD >= Math.cos(HOSTILE_AIM_DEG * DEG2RAD);
+        if (aimingAtMe) this.aimAtMeSec += dt;
+        else this.aimAtMeSec = Math.max(0, this.aimAtMeSec - dt * 1.5);
+
+        if (this.aimAtMeSec >= HOSTILE_AIM_SEC) {
+          this.team.markPlayerHostile('aim');
+          this.team.onContact(this, this.known);
+          this.setState('engage');
+        } else {
+          if (this.state !== 'challenge') {
+            this.setState('challenge');
+            this.team.onChallengeContact(this, this.known);
+          }
+          return;
+        }
+      } else if (this.state === 'challenge') {
+        // 敵対済みかつ投降を解除した（偽装投降含む）: 即座に交戦へ
+        this.setState('engage');
+      }
+    }
+
     const from = { x: this.body.px, y: eyeY, z: this.body.pz };
     if (this.team.civilianInLine(from, threat.point) || this.team.coveredByHostage(this.body.px, this.body.pz)) {
       // 人質・民間人が射線上: 実弾は撃たず、ペッパーボールで盾ごと制圧する
@@ -996,6 +1089,96 @@ export class SwatHunter implements HitTarget {
     }
     this.sees = true;
     this.threat = threat;
+  }
+
+  /**
+   * 投降勧告・制止・逮捕待機（RoE）:
+   * - 非敵対プレイヤーには実弾を撃たず、距離を保って銃口を向け投降を勧告する。
+   * - 勧告を無視し続ける場合はペッパーボール等の非致死装備で無力化を試みる。
+   * - プレイヤーが Space 長押しで投降中なら絶対に撃たず、投降完了後は接近して逮捕する。
+   */
+  private updateChallenge(dt: number): void {
+    const seesPlayer = this.challengePlayerPoint !== null;
+    if (seesPlayer) this.lostSec = 0;
+    else this.lostSec += dt;
+    const k = this.known ?? this.team.lastSighting;
+    if (k) this.body.faceToward(k.x, k.z, 6 * dt);
+
+    // 投降完了: 最寄りの隊員が接近して確保・手錠をかける
+    if (this.team.playerSurrendered) {
+      this.team.onPlayerArrestMove(this);
+      if (k) {
+        const dist = Math.hypot(k.x - this.body.px, k.z - this.body.pz);
+        if (dist > 1.35) {
+          this.nav.step(k, this.combat.moveSpeed * 0.85, dt, {
+            canOpenDoors: true,
+            canUseStairs: true,
+            faceTravel: false,
+            arriveDist: 1.25,
+            smooth: NAV_SMOOTH,
+          });
+          this.body.faceToward(k.x, k.z, 6 * dt);
+        } else {
+          this.body.setPose('crouch');
+        }
+      }
+      return;
+    }
+
+    // Space 長押しで投降中: 絶対に撃たず、その場で銃口を向けて監視する
+    if (this.team.playerSurrendering) {
+      this.challengeSec = 0;
+      this.body.setPose('stand');
+      return;
+    }
+
+    // すでに敵対確定している（投降を中断した等）かつ視認しているなら即座に交戦へ
+    if (this.team.playerHostile && seesPlayer) {
+      this.setState('engage');
+      return;
+    }
+
+    // 非敵対プレイヤーへの投降勧告: 距離が遠ければ慎重に詰め、理想距離以内なら構えて制止する
+    if (seesPlayer && k) {
+      this.challengeSec += dt;
+      const dist = Math.hypot(k.x - this.body.px, k.z - this.body.pz);
+      if (dist > CHALLENGE_HOLD_DIST + 1.2) {
+        this.nav.step(k, this.combat.moveSpeed * 0.65, dt, {
+          canOpenDoors: false,
+          canUseStairs: false,
+          faceTravel: false,
+          arriveDist: CHALLENGE_HOLD_DIST,
+          smooth: NAV_SMOOTH,
+        });
+        this.body.faceToward(k.x, k.z, 6 * dt);
+      } else if (this.moveSpeedEst < 0.25) {
+        const lean = computeCornerLean(
+          { x: this.body.px, y: this.body.footY, z: this.body.pz },
+          this.body.yawRad,
+          (x, z) => blockedAtFiltered(this.ctx.colliders, x, z, 0.2, this.body.footY),
+        );
+        this.body.setLean(lean);
+      }
+
+      // 勧告を一定時間無視し続ける: まず非致死（ペッパーボール）で動きを止めて逮捕を狙う
+      this.pepperCd = Math.max(0, this.pepperCd - dt);
+      if (this.challengeSec >= CHALLENGE_GRACE_SEC && this.challengePlayerPoint) {
+        if (!this.challengeNonLethalCalled) {
+          this.challengeNonLethalCalled = true;
+          this.team.onChallengeLessLethal(this);
+        }
+        if (this.pepperCd <= 0) {
+          this.pepperCd = SWAT_PEPPER_INTERVAL * 1.4;
+          this.team.firePepper(this, this.challengePlayerPoint);
+        }
+      }
+      return;
+    }
+
+    // 見失った: 地獄追いせず、一定時間で掃討（クリアリング）へ戻る
+    if (this.lostSec >= CHALLENGE_LOST_SEC) {
+      this.setState('sweep');
+    }
   }
 
   private updateEngage(dt: number): void {
@@ -1146,6 +1329,10 @@ export class SwatHunter implements HitTarget {
     this.rushFireCd = Math.max(0, this.rushFireCd - dt);
     this.pepperCd = Math.max(0, this.pepperCd - dt);
     if (this.sees && this.threat) {
+      if (this.threat.isPlayer && (!this.team.playerHostile || this.team.playerSurrendering || this.team.playerSurrendered)) {
+        this.setState('challenge');
+        return;
+      }
       this.body.faceToward(this.threat.x, this.threat.z);
       if (this.engage.ammoLeft <= 0) {
         this.setState('engage');
@@ -1207,6 +1394,23 @@ export class SwatHunter implements HitTarget {
       this.huntTarget = null;
       this.setState('sweep');
       return;
+    }
+    // 閉じた未施錠ドアの前で一瞬警戒してから開ける（ドアをパカパカ開けながら走る鬼ごっこを防ぐ）
+    if (this.huntDoorPause > 0) {
+      this.huntDoorPause = Math.max(0, this.huntDoorPause - dt);
+      const d = this.huntPausedDoorId ? this.team.doorById(this.huntPausedDoorId) : null;
+      if (d) this.body.faceToward(d.centerX, d.centerZ, 5 * dt);
+      return;
+    }
+    for (const door of this.ctx.doors?.doors ?? []) {
+      if (door.locked || door.angle > 5 || door.id === this.huntPausedDoorId) continue;
+      if (Math.abs(door.sillY - this.body.footY) > 0.75) continue;
+      if (Math.hypot(door.centerX - this.body.px, door.centerZ - this.body.pz) < 1.65) {
+        this.huntPausedDoorId = door.id;
+        this.huntDoorPause = HUNT_DOOR_PAUSE_SEC;
+        this.body.faceToward(door.centerX, door.centerZ, 5 * dt);
+        return;
+      }
     }
     const res = this.nav.step(t, this.combat.moveSpeed * HUNT_SPEED, dt, {
       canOpenDoors: true,

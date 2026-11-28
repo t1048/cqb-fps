@@ -44,7 +44,7 @@ export const SHIELD_COMBAT: CombatParams = cloneCombatProfile(BASE_SHIELD_COMBAT
 export const SHIELD_MOBILITY: Readonly<MobilityParams> = BASE_SHIELD_MOBILITY;
 
 /** 突入開始から圧力が最大になるまでの秒数 */
-export const PRESSURE_RAMP_SEC = 95;
+export const PRESSURE_RAMP_SEC = 180;
 /** 隊員が倒されるたびに残りが本気になる加算量 */
 export const PRESSURE_PER_DOWN = 0.12;
 /** 閃光弾の補充間隔(s)。圧力が高いほどクールダウンも短い */
@@ -64,9 +64,22 @@ export const HEARING_MUL = 1.0;
 export const OCCLUDED_MUL = 0.5;
 export const ENGAGE_LOST_SEC = 5;
 export const SWEEP_SPEED = 1.0;
-export const HUNT_SPEED = 1.05;
+export const HUNT_SPEED = 0.92;
 export const FLASH_TEAM_CD = 14;
 export const SELF_NOISE_RADIUS = 3.2;
+
+/** 交戦規定（RoE）・投降勧告（challenge）の定数 */
+/** 投降勧告を無視し続けた場合に非致死制圧（ペッパー/閃光）へ移るまでの猶予秒 */
+export const CHALLENGE_GRACE_SEC = 3.5;
+/** 投降勧告中に相手を見失ってから掃討へ戻るまでの秒数 */
+export const CHALLENGE_LOST_SEC = 3.0;
+/** プレイヤーが隊員へ銃口を向けているとみなす最大角度（度）と、敵対確定までの連続秒数 */
+export const HOSTILE_AIM_DEG = 20;
+export const HOSTILE_AIM_SEC = 1.2;
+/** 投降勧告時に保とうとする理想距離（m） */
+export const CHALLENGE_HOLD_DIST = 4.5;
+/** 追跡（hunt）中に閉じた未施錠ドアの前で一瞬警戒する秒数 */
+export const HUNT_DOOR_PAUSE_SEC = 0.5;
 /** 多方向同時突入（F6）のスタック・カウントダウン設定 */
 export const STACK_OFFSET = 0.48;
 export const STACK_PERSONAL_SPACE = 0.68;
@@ -177,8 +190,8 @@ export const ABANDON_TTL_SEC = 20;
 export const ABANDON_RADIUS = 3.5;
 export const ROUTE_BREACH_WAIT_SEC = 10;
 
-/** 停滞監視: 段階ごとに無進捗がこの秒数続いたら次の打開策（再計画 / 施錠ドアのブリーチ / ドローン / 直接押し込み）。最終段階は繰り返す */
-export const STALL_LEVEL_SEC = [8, 14, 20, 28] as const;
+/** 停滞監視: 段階ごとに無進捗がこの秒数続いたら次の打開策（再計画 / 施錠ドアのブリーチ / 再捜索 / 直接押し込み）。最終段階は繰り返す */
+export const STALL_LEVEL_SEC = [16, 28, 42, 60] as const;
 /** 交戦・ブリーチなどで進行中とみなす間、無進捗秒をこの値で頭打ちにする */
 export const STALL_BUSY_CAP_SEC = 4;
 
@@ -244,11 +257,14 @@ export type HunterState =
   | 'sweep'
   | 'hunt'
   | 'breach'
+  | 'challenge'
   | 'engage'
   | 'rush'
   | 'disarm'
   | 'restrain'
   | 'down';
+
+export type HostileReason = 'shot' | 'aim' | 'hostage' | 'trap' | 'fakeSurrender';
 
 /** 同じ入口に積んだ隊員の突入グループ（スタック枠・突入順・突入計画を共有） */
 export interface EntryGroup {
@@ -313,6 +329,10 @@ export interface SwatTeamDeps {
   shieldActive?: () => boolean;
   /** ペッパーボールの命中（プレイヤー本人 / 抱えた人質） */
   onPepper?: (target: 'player' | 'hostage') => void;
+  /** プレイヤーが Space 長押しで投降モーション中か（未指定なら false） */
+  isPlayerSurrendering?: () => boolean;
+  /** プレイヤーが投降を完了し逮捕待ちか（未指定なら false） */
+  isPlayerSurrendered?: () => boolean;
 }
 
 /** ドアのブービートラップ（Fortify が実装） */
@@ -338,6 +358,7 @@ export interface SwatTeamHost {
   readonly breachIntel: BreachIntel | null;
   readonly currentPressure: number;
   readonly playerCrouching: boolean;
+  readonly playerYawRad: number;
   readonly reactionSec: number;
   /** 視野角（度）。停電中は暗視装置の狭い視野になる（プレイヤーがライトを点けていれば光で気付く） */
   readonly visionFovDeg: number;
@@ -347,6 +368,18 @@ export interface SwatTeamHost {
   readonly lastSightingAge: number;
   readonly clock: number;
   readonly aimSettle?: AimSettleParams;
+  /** プレイヤーが発砲・銃口向け続け・人質拘束・トラップ起爆などで敵対確定しているか */
+  readonly playerHostile: boolean;
+  /** プレイヤーが Space 長押しで両手を上げて投降中か */
+  readonly playerSurrendering: boolean;
+  /** プレイヤーが投降を完了して確保待ちか */
+  readonly playerSurrendered: boolean;
+
+  markPlayerHostile(reason: HostileReason): void;
+  onChallengeContact(by: SwatHunter, pos: Vec3): void;
+  onChallengeLessLethal(by: SwatHunter): void;
+  onPlayerSurrenderSpotted(by: SwatHunter): void;
+  onPlayerArrestMove(by: SwatHunter): void;
 
   abandonDisarm(door: Door): void;
   checkTraps(h: SwatHunter): void;

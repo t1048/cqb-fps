@@ -348,27 +348,31 @@ export class SwatCoverage {
   private pursuitSec = 0;
 
   /**
-   * 追撃監視: 交戦も目撃も 15 秒以上途絶えたら、掃討役を（大まかな位置の推定で）
-   * プレイヤー付近へ向かわせる。奥へ逃げても SWAT が止まらないようにする。
+   * 追撃監視（最終フォールバック）:
+   * 未クリアの部屋が残っている間は発動せず、通常の CQB クリアリングを優先する。
+   * 全室クリア済みで交戦・目撃も 20 秒以上途絶えた場合のみ、再捜索の目安を出す（部屋スキップはしない）。
    */
   private watchPursuit(dt: number): void {
+    // 未クリア部屋が残っているなら地道にクリアリングを続ける（全知座標への地獄追いをしない）
+    if (this.cleared.size < this.host.rooms.length) {
+      this.pursuitSec = 0;
+      return;
+    }
     const hs = this.host.hunters;
     let busy = false;
     for (const x of hs) {
-      if (x.alive && (x.state === 'engage' || x.state === 'rush')) busy = true;
+      if (x.alive && (x.state === 'engage' || x.state === 'rush' || x.state === 'challenge')) busy = true;
     }
-    if (busy || this.host.lastSightingAge < 15) {
+    if (busy || this.host.lastSightingAge < 20) {
       this.pursuitSec = 0;
       return;
     }
     this.pursuitSec += dt;
-    if (this.pursuitSec < 3) return;
-    this.pursuitSec = -12; // 次の更新まで 15 秒空ける
+    if (this.pursuitSec < 4) return;
+    this.pursuitSec = -16; // 次の更新まで 20 秒空ける
     const p = this.host.d.player.position;
     for (const x of hs) {
       if (!x.alive || x.state !== 'sweep' || x.leader) continue;
-      const room = this.indoorRoomAt(x.body.px, x.body.pz, x.body.footY);
-      if (room) this.sweptRooms.add(room.id); // 部屋に閉じ込められず次へ進ませる
       const a = Math.random() * Math.PI * 2;
       const rr = 2 + Math.random() * 4;
       x.huntTarget = { x: p.x + Math.cos(a) * rr, y: p.y, z: p.z + Math.sin(a) * rr };
@@ -400,8 +404,18 @@ export class SwatCoverage {
     }
     for (const x of this.host.hunters) {
       if (!x.alive) continue;
-      // 交戦・ブリーチ・突入手順の最中は進行中とみなす（それぞれ固有のタイムアウトを持つ）
-      if (x.state === 'engage' || x.state === 'rush' || x.state === 'breach' || x.state === 'disarm' || x.state === 'restrain' || x.state === 'stack' || x.state === 'pie' || x.state === 'entry') {
+      // 交戦・投降勧告・ブリーチ・突入手順の最中は進行中とみなす（それぞれ固有のタイムアウトを持つ）
+      if (
+        x.state === 'challenge' ||
+        x.state === 'engage' ||
+        x.state === 'rush' ||
+        x.state === 'breach' ||
+        x.state === 'disarm' ||
+        x.state === 'restrain' ||
+        x.state === 'stack' ||
+        x.state === 'pie' ||
+        x.state === 'entry'
+      ) {
         this.stallSec = Math.min(this.stallSec, STALL_BUSY_CAP_SEC);
         return;
       }

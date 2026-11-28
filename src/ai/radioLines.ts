@@ -392,6 +392,32 @@ export const COVER_CALL: readonly RadioLine[] = [
   ['容疑者を確認。撃たず、降伏を叫ぶ！', 'Suspect spotted. Holding fire and calling him out!'],
 ];
 
+/** 容疑者モード: 非敵対プレイヤーへの投降勧告（まず撃たずに確保を試みる） */
+export const CHALLENGE_CALL: readonly RadioLine[] = [
+  ['容疑者を確認。まだ撃つな、投降を勧告する！', 'Suspect spotted. Hold fire, calling for compliance!'],
+  ['対象を視認。武器を捨てるよう命じている！', 'Eyes on suspect. Ordering him to drop the weapon!'],
+  ['容疑者発見。投降を呼びかけ中、カバーしろ！', 'Suspect in sight. Calling him out, cover me!'],
+];
+
+/** 容疑者モード: プレイヤーが投降（Space 長押し）を始めたときの射撃中止コール */
+export const CEASE_FIRE_SURRENDER: readonly RadioLine[] = [
+  ['撃つな！両手を上げている！', 'Cease fire! Hands are up!'],
+  ['射撃中止！投降するぞ、カバーしろ！', 'Hold your fire! He is surrendering, keep him covered!'],
+  ['撃つな、従う気がある！そのまま動くな！', 'Hold fire, he is complying! Do not move!'],
+];
+
+/** 容疑者モード: 投降勧告を無視された際の非致死制圧コール */
+export const CHALLENGE_LESS_LETHAL: readonly RadioLine[] = [
+  ['従わない！非致死で無力化して確保する！', 'Non-compliant! Deploying less-lethal to subdue!'],
+  ['武器を捨てない！ペッパーで制圧しろ！', 'Refusing to comply! Hit him with less-lethal!'],
+];
+
+/** 容疑者モード: プレイヤーの投降完了に伴う逮捕確保コール */
+export const ARREST_PLAYER: readonly RadioLine[] = [
+  ['投降完了を確認。確保に向かう！', 'Suspect is surrendering. Moving in to cuff!'],
+  ['動くな、手錠をかける！援護を頼む！', 'Stay down, moving to arrest! Cover me!'],
+];
+
 export const LESS_LETHAL: readonly RadioLine[] = [
   ['射線に人がいる。非致死で行く！', 'No shot. Deploying less-lethal!'],
   ['人質に注意！ペッパーボールで制圧する！', 'Hostage in the line. Pepperball only!'],

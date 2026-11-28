@@ -41,7 +41,7 @@ export const BASE_SWAT_MOBILITY: Readonly<MobilityParams> = Object.freeze({
   investigateMaxDist: 40,
   investigateSpeedScale: 0.9,
   reinforceOnGunshot: true,
-  repositionAfterLostSec: 1.6,
+  repositionAfterLostSec: 2.6,
   flankChance: 0.5,
   guardHostageRoom: false,
 });
@@ -97,12 +97,12 @@ export const SWAT_PEPPER_INTERVAL = 0.42;
 export const SWAT_PEPPER_RANGE = 20;
 
 export const SWAT_RUSH_LOW_HP = 40;
-export const SWAT_RUSH_RADIUS = 14;
-export const SWAT_RUSH_DURATION_SEC = 5.5;
-export const SWAT_RUSH_TEAM_COOLDOWN = 6.0;
-export const SWAT_RUSH_SPEED_MIN = 2.7;
-export const SWAT_RUSH_SPEED_MAX = 2.9;
-export const SWAT_SHIELD_RUSH_SPEED = 2.35;
+export const SWAT_RUSH_RADIUS = 7;
+export const SWAT_RUSH_DURATION_SEC = 3.0;
+export const SWAT_RUSH_TEAM_COOLDOWN = 14.0;
+export const SWAT_RUSH_SPEED_MIN = 2.25;
+export const SWAT_RUSH_SPEED_MAX = 2.45;
+export const SWAT_SHIELD_RUSH_SPEED = 2.15;
 
 export const SWAT_SUPPRESS_START_SEC = 0.35;
 export const SWAT_SUPPRESS_END_SEC = 3.5;

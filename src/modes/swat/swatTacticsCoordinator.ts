@@ -35,7 +35,6 @@ import {
   SWAT_GAS_MIN_DIST,
   SWAT_GAS_PER_TEAM,
   SWAT_PEPPER_RANGE,
-  SWAT_RUSH_LOW_HP,
   SWAT_RUSH_RADIUS,
   SWAT_RUSH_TEAM_COOLDOWN,
 } from '../../ai/SwatProfile';
@@ -233,24 +232,32 @@ export class SwatTacticsCoordinator {
       this.host.radio(by, contactJa, contactEn, true);
     }
     this.alertTeam(pos, true, 30, by);
-    if (this.host.d.player.hp !== undefined && this.host.d.player.hp > 0 && this.host.d.player.hp <= SWAT_RUSH_LOW_HP) {
-      this.triggerRush(pos, 'lowHp');
-    }
   }
 
-  /** プレイヤーの隙（白飛び・リロード・ペッパー命中・低HP）を突いて近隣の隊員を一斉突撃させる。 */
+  /** プレイヤーの隙（白飛び・至近リロード・ペッパー命中）を突いて近隣の隊員（最大 2 名・盾優先）を突撃させる。 */
   triggerRush(pos: Vec3, reason: 'blind' | 'reload' | 'pepper' | 'lowHp'): boolean {
     if (!this.host.started || this.rushCd > 0) return false;
+    if (reason === 'lowHp') return false; // 負傷だけでカバーを捨てて鬼ごっこ突撃しない
+    if (this.host.teamHost.playerSurrendering || this.host.teamHost.playerSurrendered) return false;
     this.host.abortStacking();
+    const maxRadius = reason === 'reload' ? 6 : SWAT_RUSH_RADIUS;
     const candidates = this.host.hunters
-      .filter((h) => h.alive && h.blindLeft <= 0 && h.state !== 'staging' && h.state !== 'breach' && h.state !== 'disarm')
+      .filter(
+        (h) =>
+          h.alive &&
+          h.blindLeft <= 0 &&
+          h.state !== 'staging' &&
+          h.state !== 'breach' &&
+          h.state !== 'disarm' &&
+          h.state !== 'challenge',
+      )
       .map((h) => ({
         h,
         dist: Math.hypot(h.body.px - pos.x, h.body.pz - pos.z) + Math.abs(h.body.footY - pos.y) * 3,
       }))
-      .filter((x) => x.dist <= SWAT_RUSH_RADIUS)
-      .sort((a, b) => a.dist - b.dist)
-      .slice(0, 3);
+      .filter((x) => x.dist <= maxRadius)
+      .sort((a, b) => a.dist - (a.h.shielded ? 3 : 0) - (b.dist - (b.h.shielded ? 3 : 0)))
+      .slice(0, 2);
     if (candidates.length === 0) return false;
     for (const { h } of candidates) {
       h.rushTarget = { x: pos.x, y: pos.y, z: pos.z };
@@ -324,7 +331,7 @@ export class SwatTacticsCoordinator {
           const pinMembers = cellMap.get(pinIdx);
           if (pinMembers) {
             for (const h of pinMembers) {
-              if (h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
+              if (h.state === 'challenge' || h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
               const target = { x: pos.x, y: pos.y, z: pos.z };
               if (this.holdUnclearedRoom(h, target, false)) continue;
               h.huntTarget = target;
@@ -345,7 +352,7 @@ export class SwatTacticsCoordinator {
         for (const [cellIndex, members] of cellMap) {
           if (cellIndex === pinIdx) {
             for (const h of members) {
-              if (h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
+              if (h.state === 'challenge' || h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
               const target = { x: pos.x, y: pos.y, z: pos.z };
               if (this.holdUnclearedRoom(h, target, false)) continue;
               h.huntTarget = target;
@@ -372,7 +379,7 @@ export class SwatTacticsCoordinator {
           });
           if (flank?.doorId) usedFlankDoors.add(flank.doorId);
           for (const h of members) {
-            if (h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
+            if (h.state === 'challenge' || h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
             const target = flank ? { ...flank.target } : { x: pos.x, y: pos.y, z: pos.z };
             if (this.holdUnclearedRoom(h, target, flank !== null)) continue;
             h.huntTarget = target;
@@ -397,7 +404,7 @@ export class SwatTacticsCoordinator {
     }
 
     for (const h of this.host.hunters) {
-      if (!h.alive || h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
+      if (!h.alive || h.state === 'challenge' || h.state === 'engage' || h.state === 'rush' || h.state === 'staging' || h.state === 'breach' || h.state === 'disarm') continue;
       const d = Math.hypot(h.body.px - pos.x, h.body.pz - pos.z) + Math.abs(h.body.footY - pos.y) * 3;
       if (!visual && d > maxDist) continue;
       if (h.leader && h.leader.alive && !visual) continue; // 音の調査は組のリーダーが判断
@@ -457,6 +464,7 @@ export class SwatTacticsCoordinator {
         h.huntTarget = target;
       }
       if (
+        h.state === 'challenge' ||
         h.state === 'engage' ||
         h.state === 'rush' ||
         h.state === 'breach' ||
@@ -820,7 +828,7 @@ export class SwatTacticsCoordinator {
     // 撃ち合い中は籠り時間を進めない（部屋から撃ち返しているだけでガスを投げ込まない）
     this.sinceFirefightSec += dt;
     for (const h of this.host.hunters) {
-      if (h.alive && h.sees) {
+      if (h.alive && h.seesThreat) {
         this.sinceFirefightSec = 0;
         break;
       }
@@ -911,7 +919,7 @@ export class SwatTacticsCoordinator {
     }
     const target = holding && Math.random() < 0.15 ? 'hostage' : 'player';
     this.host.d.onPepper?.(target);
-    if (target === 'player') {
+    if (target === 'player' && this.host.teamHost.playerHostile) {
       const p = this.host.d.player.position;
       this.triggerRush({ x: p.x, y: p.y, z: p.z }, 'pepper');
     }
@@ -941,25 +949,25 @@ export class SwatTacticsCoordinator {
     this.reactionSec = lerp(BASE_REACTION_SEC, 0.16, p);
     const c = SWAT_COMBAT;
     const b = BASE_SWAT_COMBAT;
-    c.coverSecMin = lerp(b.coverSecMin, 0.25, p);
-    c.coverSecMax = lerp(b.coverSecMax, 0.65, p);
+    c.coverSecMin = lerp(b.coverSecMin, 0.65, p);
+    c.coverSecMax = lerp(b.coverSecMax, 1.3, p);
     c.fireInterval = lerp(b.fireInterval, 0.14, p);
     c.baseSpreadDeg = lerp(b.baseSpreadDeg, 2.0, p);
     c.shotsPerPeek = Math.round(lerp(b.shotsPerPeek, 6, p));
     c.peekSecMax = lerp(b.peekSecMax, 2.1, p);
-    c.moveSpeed = lerp(b.moveSpeed, 2.75, p);
+    c.moveSpeed = lerp(b.moveSpeed, 2.48, p);
     c.flinchSec = lerp(b.flinchSec, 0.09, p);
     c.decisionSec = lerp(b.decisionSec, 0.5, p);
     const sc = SHIELD_COMBAT;
     const sb = BASE_SHIELD_COMBAT;
     sc.fireInterval = lerp(sb.fireInterval, 0.22, p);
     sc.baseSpreadDeg = lerp(sb.baseSpreadDeg, 1.8, p);
-    sc.moveSpeed = lerp(sb.moveSpeed, 2.35, p);
+    sc.moveSpeed = lerp(sb.moveSpeed, 2.2, p);
     sc.flinchSec = lerp(sb.flinchSec, 0.05, p);
     sc.decisionSec = c.decisionSec;
     const m = SWAT_MOBILITY;
     const bm = BASE_SWAT_MOBILITY;
-    m.repositionAfterLostSec = lerp(bm.repositionAfterLostSec, 0.5, p);
+    m.repositionAfterLostSec = lerp(bm.repositionAfterLostSec, 1.6, p);
     m.flankChance = lerp(bm.flankChance, 0.85, p);
     const step = p >= 1 ? 4 : p >= 0.66 ? 3 : p >= 0.33 ? 2 : 1;
     if (step > this.pressureStep) {

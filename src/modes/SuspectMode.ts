@@ -376,7 +376,7 @@ export class SuspectMission {
       this.showGauge(t('両手を上げて投降...', 'Surrendering (hands up)...'), this.surrenderHold / SURRENDER_HOLD_SEC);
       if (this.surrenderHold >= SURRENDER_HOLD_SEC) {
         this.subtitle.show(t('容疑者「わかった、投降する！撃つな！」', 'Suspect: "Okay, I surrender! Don\'t shoot!"'), 2.0);
-        this.conclude('arrested', 1.2);
+        this.conclude('arrested', 2.2);
       }
     } else {
       this.surrenderHold = 0;
@@ -430,6 +430,11 @@ export class SuspectMission {
   /** Space 長押しで投降中か */
   get isSurrendering(): boolean {
     return this.surrenderHold > 0;
+  }
+
+  /** 投降を完了し、SWAT の確保・逮捕を待っているか */
+  get isSurrendered(): boolean {
+    return this.outcome === 'arrested';
   }
 
   /** 今フレームの長押しゲージを要求（最後の要求を flushGauge で反映） */

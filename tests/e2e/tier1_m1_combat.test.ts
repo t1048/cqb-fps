@@ -133,7 +133,7 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
       body.dispose();
     });
 
-    it('F1.3: SwatTeam hunter fires immediately upon spotting player in open room without retreating first', () => {
+    it('F1.3: SwatTeam hunter fires immediately upon spotting hostile player in open room without retreating first', () => {
       const map = makeSingleRoomMap({ lockedDoor: false, includeCover: true });
       const h = track(
         createSwatHarness({
@@ -144,6 +144,7 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
           startAssault: true,
         }),
       );
+      h.team.markPlayerHostile('shot');
 
       h.step(1.5, 0.05);
       const swatShots = h.recorder.of('shotFired').filter((e) => e.payload.shooter.startsWith('swat_'));
@@ -378,7 +379,7 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
       expect(h.team.hunters.some((u) => u.state === 'rush')).toBe(true);
     });
 
-    it('F3.3: Player low HP (hp <= 40) via playerHit triggers vulnerability rush', () => {
+    it('F3.3: Player low HP (hp <= 40) alone does not trigger blind rush (preserves cover discipline)', () => {
       const h = track(
         createSwatHarness({
           map: makeSingleRoomMap(),
@@ -390,7 +391,7 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
         }),
       );
       h.bus.emit('playerHit', { shooter: 'swat_1', damage: 15, from: { x: 0, y: 0, z: 2.5 }, hp: 35 });
-      expect(h.team.hunters[0]!.state).toBe('rush');
+      expect(h.team.hunters[0]!.state).not.toBe('rush');
     });
 
     it('F3.4: Direct triggerRush with pepper reason transitions nearby SWAT into rush', () => {
@@ -408,7 +409,7 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
       expect(h.team.hunters[0]!.state).toBe('rush');
     });
 
-    it('F3.5: Rushing SWAT closes distance to player at high assault speed (>= 2.5 m/s)', () => {
+    it('F3.5: Rushing SWAT closes distance to hostile player at controlled assault speed (>= 2.0 m/s)', () => {
       const h = track(
         createSwatHarness({
           map: makeSingleRoomMap({ includeCover: false }),
@@ -418,12 +419,13 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
           startAssault: true,
         }),
       );
+      h.team.markPlayerHostile('shot');
       const hunter = h.team.hunters[0]!;
       const startZ = hunter.body.pz;
       h.team.triggerRush({ x: 0, y: 0, z: -3.0 }, 'blind');
       h.step(1.0, 0.05);
       const moved = startZ - hunter.body.pz;
-      expect(moved).toBeGreaterThanOrEqual(2.4);
+      expect(moved).toBeGreaterThanOrEqual(2.0);
     });
   });
 
@@ -436,8 +438,8 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
       expect(VISION_FOV_DEG).toBeLessThanOrEqual(130);
     });
 
-    it('F4.2: PRESSURE_RAMP_SEC is accelerated to <= 100s (95s)', () => {
-      expect(PRESSURE_RAMP_SEC).toBeLessThanOrEqual(100);
+    it('F4.2: PRESSURE_RAMP_SEC ramps gradually over the siege (180s)', () => {
+      expect(PRESSURE_RAMP_SEC).toBe(180);
       expect(PRESSURE_RAMP_SEC).toBeGreaterThan(0);
     });
 
@@ -451,16 +453,16 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
         }),
       );
       const p0 = h.team.currentPressure;
-      h.step(30, 0.05);
-      const p30 = h.team.currentPressure;
-      h.step(70, 0.05);
-      const p100 = h.team.currentPressure;
+      h.step(60, 0.05);
+      const p60 = h.team.currentPressure;
+      h.step(PRESSURE_RAMP_SEC - 55, 0.05);
+      const pEnd = h.team.currentPressure;
       expect(p0).toBe(0);
-      expect(p30).toBeGreaterThan(0.25);
-      expect(p100).toBeCloseTo(1.0, 2);
+      expect(p60).toBeGreaterThan(0.25);
+      expect(pEnd).toBeCloseTo(1.0, 2);
     });
 
-    it('F4.4: SWAT_COMBAT.moveSpeed ramps up toward 2.75 m/s at high pressure', () => {
+    it('F4.4: SWAT_COMBAT.moveSpeed ramps moderately toward 2.48 m/s at high pressure', () => {
       const h = track(
         createSwatHarness({
           map: makeSingleRoomMap(),
@@ -472,7 +474,7 @@ describe('Tier 1 — M1 Combat Overhaul (F1–F5)', () => {
       const baseSpeed = SWAT_COMBAT.moveSpeed;
       h.step(PRESSURE_RAMP_SEC + 2, 0.05);
       expect(SWAT_COMBAT.moveSpeed).toBeGreaterThan(baseSpeed);
-      expect(SWAT_COMBAT.moveSpeed).toBeGreaterThanOrEqual(2.7);
+      expect(SWAT_COMBAT.moveSpeed).toBeCloseTo(2.48, 2);
     });
 
     it('F4.5: Downed SWAT unit adds PRESSURE_PER_DOWN bonus to team pressure', () => {

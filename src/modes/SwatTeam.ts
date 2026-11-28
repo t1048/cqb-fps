@@ -5,13 +5,19 @@ import { disposeObject } from '../core/dispose';
 import type { AllyTarget, CombatContext } from '../ai/EngageBehavior';
 import { blockedAtFiltered } from '../ai/SquadRoute';
 import { RADIO_SAME_SPEAKER_SEC, RADIO_SAME_TEAM_SEC, RepeatGuard } from '../ai/actionGuard';
-import { radioGroupKey } from '../ai/radioLines';
+import {
+  ARREST_PLAYER,
+  CEASE_FIRE_SURRENDER,
+  CHALLENGE_CALL,
+  CHALLENGE_LESS_LETHAL,
+  pickRadio,
+  radioGroupKey,
+} from '../ai/radioLines';
 import type { EntryMode, FriendlyPos } from '../ai/cqbEntry';
 import {
   BASE_SHIELD_COMBAT,
   BASE_SWAT_COMBAT,
   BASE_SWAT_MOBILITY,
-  SWAT_RUSH_LOW_HP,
   isShieldRole,
 } from '../ai/SwatProfile';
 import {
@@ -85,6 +91,7 @@ import {
   LIT_TARGET_RANGE_MUL,
   type BreachIntel,
   type CoverCell,
+  type HostileReason,
   type HunterState,
   type SwatSpawn,
   type SwatTeamDeps,
@@ -157,6 +164,10 @@ export class SwatTeam implements SwatTeamHost {
   private shieldHintShown = false;
   private radioCd = 0;
   private started = false;
+  private _playerHostile = false;
+  private challengeContactCd = 0;
+  private surrenderSpottedCd = 0;
+  private arrestRadioSent = false;
   private scouted = false;
   private _breachIntel: BreachIntel | null = null;
   private disposed = false;
@@ -372,7 +383,11 @@ export class SwatTeam implements SwatTeamHost {
     if (focus) for (const h of this.hunters) h.body.faceToward(focus.x, focus.z);
 
     this.unsubs.push(
+      d.bus.on('shotFired', (e) => {
+        if (e.shooter === 'player') this.markPlayerHostile('shot');
+      }),
       d.bus.on('entityHit', (e) => {
+        if (e.shooter === 'player' && !e.nonlethal) this.markPlayerHostile('shot');
         if (e.nonlethal || e.shooter.startsWith('swat_')) return;
         const h = this.hunters.find((x) => x.id === e.targetId);
         if (!h || !h.alive) return;
@@ -412,12 +427,6 @@ export class SwatTeam implements SwatTeamHost {
       d.bus.on('noise', (e) => this.tactics.onNoise(e.pos, e.radius, e.kind, e.source)),
       d.bus.on('playerBlinded', (e) => {
         if (e.duration > 0.3) this.triggerRush(e.pos, 'blind');
-      }),
-      d.bus.on('playerHit', (e) => {
-        if (e.hp > 0 && e.hp <= SWAT_RUSH_LOW_HP) {
-          const p = d.player.position;
-          this.triggerRush({ x: p.x, y: p.y, z: p.z }, 'lowHp');
-        }
       }),
       d.bus.on('flashDetonated', (e) => {
         if (e.thrower && e.thrower.startsWith('swat_')) return; // 自チームの閃光は目を背ける
@@ -477,6 +486,79 @@ export class SwatTeam implements SwatTeamHost {
     return this.d.aimSettle;
   }
 
+  get playerHostile(): boolean {
+    return this._playerHostile;
+  }
+
+  get playerSurrendering(): boolean {
+    return this.d.isPlayerSurrendering?.() ?? false;
+  }
+
+  get playerSurrendered(): boolean {
+    return this.d.isPlayerSurrendered?.() ?? false;
+  }
+
+  markPlayerHostile(_reason: HostileReason): void {
+    this._playerHostile = true;
+  }
+
+  onChallengeContact(by: SwatHunter, pos: Vec3): void {
+    this.abortStacking();
+    this.shareSighting(pos);
+    if (this.challengeContactCd <= 0) {
+      this.challengeContactCd = 5.5;
+      const chest = by.body.chestPos();
+      const dx = pos.x - by.body.px;
+      const dz = pos.z - by.body.pz;
+      const l = Math.hypot(dx, dz) || 1;
+      this.d.bus.emit('warningCall', { pos: chest, dir: { x: dx / l, y: 0, z: dz / l } });
+      if (this.canPlayerHear(chest, 18)) {
+        this.d.subtitle.show(
+          t(
+            'SWAT「警察だ！武器を捨てろ！」（Space 長押しで投降）',
+            'SWAT: "Police! Drop your weapon!" (Hold Space to surrender)',
+          ),
+          2.6,
+        );
+      }
+      const [ja, en] = pickRadio(CHALLENGE_CALL);
+      this.radio(by, ja, en, true);
+    }
+  }
+
+  onChallengeLessLethal(by: SwatHunter): void {
+    const [ja, en] = pickRadio(CHALLENGE_LESS_LETHAL);
+    this.radio(by, ja, en, true);
+  }
+
+  onPlayerSurrenderSpotted(by: SwatHunter): void {
+    if (this.surrenderSpottedCd > 0) return;
+    this.surrenderSpottedCd = 4.0;
+    const [ja, en] = pickRadio(CEASE_FIRE_SURRENDER);
+    this.radio(by, ja, en, true);
+    const chest = by.body.chestPos();
+    if (this.canPlayerHear(chest, 18)) {
+      this.d.subtitle.show(
+        t('SWAT「撃つな！両手を上げている！そのまま動くな！」', 'SWAT: "Hold fire! Hands are up! Do not move!"'),
+        2.2,
+      );
+    }
+  }
+
+  onPlayerArrestMove(by: SwatHunter): void {
+    if (this.arrestRadioSent) return;
+    this.arrestRadioSent = true;
+    const [ja, en] = pickRadio(ARREST_PLAYER);
+    this.radio(by, ja, en, true);
+    const chest = by.body.chestPos();
+    if (this.canPlayerHear(chest, 18)) {
+      this.d.subtitle.show(
+        t('SWAT「よし、そのまま動くな！確保する！」', 'SWAT: "Good, stay down! Moving to cuff!"'),
+        2.2,
+      );
+    }
+  }
+
   get reactionSec(): number {
     return this.tactics.reactionSec;
   }
@@ -517,6 +599,10 @@ export class SwatTeam implements SwatTeamHost {
 
   get playerCrouching(): boolean {
     return this.d.player.isCrouching;
+  }
+
+  get playerYawRad(): number {
+    return this.d.player.yawRad;
   }
 
   get aliveCount(): number {
@@ -655,6 +741,11 @@ export class SwatTeam implements SwatTeamHost {
     const dt = Math.min(rawDt, 0.05);
     this.radioCd = Math.max(0, this.radioCd - dt);
     this.radioSpeakGap = Math.max(0, this.radioSpeakGap - dt);
+    this.challengeContactCd = Math.max(0, this.challengeContactCd - dt);
+    this.surrenderSpottedCd = Math.max(0, this.surrenderSpottedCd - dt);
+    if (this.started && !this._playerHostile && this.coverage.playerHoldsHostage()) {
+      this.markPlayerHostile('hostage');
+    }
     this.tactics.tickTimers(dt);
     this.routePlanner.tick(dt);
     this.coverage.tickTimers(dt);
@@ -980,6 +1071,7 @@ export class SwatTeam implements SwatTeamHost {
   }
 
   applyBlast(pos: Vec3, radius: number): void {
+    this.markPlayerHostile('trap');
     this.obstacles.applyBlast(pos, radius);
   }
 

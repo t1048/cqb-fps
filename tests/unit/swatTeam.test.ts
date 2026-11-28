@@ -80,7 +80,7 @@ function makeTestSwatTeam(overrides: Partial<SwatTeamDeps> = {}) {
 describe('SwatTeam — F2 Flinch Ramp, F3 Vulnerability Rush, F4 Perception/Speed/Pressure', () => {
   it('F4 & F2: exposes boosted perception/pressure constants and ramps flinchSec, speed, and reactionSec cleanly', () => {
     expect(VISION_FOV_DEG).toBe(120);
-    expect(PRESSURE_RAMP_SEC).toBe(95);
+    expect(PRESSURE_RAMP_SEC).toBe(180);
     expect(PRESSURE_PER_DOWN).toBe(0.12);
 
     const { team } = makeTestSwatTeam();
@@ -92,16 +92,16 @@ describe('SwatTeam — F2 Flinch Ramp, F3 Vulnerability Rush, F4 Perception/Spee
     expect(team.reactionSec).toBeCloseTo(0.35, 4);
 
     team.beginAssault();
-    // Advance full PRESSURE_RAMP_SEC (95s) in 0.05s steps
-    for (let i = 0; i < 1920; i++) {
+    // Advance full PRESSURE_RAMP_SEC (180s) in 0.05s steps
+    for (let i = 0; i < 3620; i++) {
       team.update(0.05);
     }
 
     expect(team.currentPressure).toBeCloseTo(1, 3);
     expect(SWAT_COMBAT.flinchSec).toBeCloseTo(0.09, 3);
     expect(SHIELD_COMBAT.flinchSec).toBeCloseTo(0.05, 3);
-    expect(SWAT_COMBAT.moveSpeed).toBeCloseTo(2.75, 3);
-    expect(SHIELD_COMBAT.moveSpeed).toBeCloseTo(2.35, 3);
+    expect(SWAT_COMBAT.moveSpeed).toBeCloseTo(2.48, 3);
+    expect(SHIELD_COMBAT.moveSpeed).toBeCloseTo(2.2, 3);
     expect(team.reactionSec).toBeCloseTo(0.16, 3);
 
     team.dispose();
@@ -115,7 +115,7 @@ describe('SwatTeam — F2 Flinch Ramp, F3 Vulnerability Rush, F4 Perception/Spee
     team2.dispose();
   });
 
-  it('F3: triggers rush on playerBlinded, reload noise (even < 3.2m), pepper hit, and low HP <= 40', () => {
+  it('F3: triggers rush on playerBlinded, close reload noise, and hostile pepper hit (but NOT on low HP alone)', () => {
     // 1. playerBlinded trigger
     {
       const { team, bus } = makeTestSwatTeam();
@@ -139,23 +139,21 @@ describe('SwatTeam — F2 Flinch Ramp, F3 Vulnerability Rush, F4 Perception/Spee
       team.dispose();
     }
 
-    // 3. playerHit low HP trigger (hp <= 40 triggers rush; hp > 40 does not)
+    // 3. playerHit low HP no longer triggers blind rush (avoids tag/chase behavior)
     {
       const { team, bus } = makeTestSwatTeam();
       team.beginAssault();
-      bus.emit('playerHit', { shooter: 'swat_1', damage: 20, from: { x: 0, y: 0, z: 6 }, hp: 60 });
-      expect(team.hunters.some((h) => h.state === 'rush')).toBe(false);
-
       bus.emit('playerHit', { shooter: 'swat_1', damage: 25, from: { x: 0, y: 0, z: 6 }, hp: 35 });
-      expect(team.hunters.some((h) => h.state === 'rush')).toBe(true);
+      expect(team.hunters.some((h) => h.state === 'rush')).toBe(false);
       team.dispose();
     }
 
-    // 4. firePepper hitting player triggers rush
+    // 4. firePepper hitting hostile player triggers rush
     {
       const onPepper = vi.fn();
       const { team } = makeTestSwatTeam({ onPepper });
       team.beginAssault();
+      team.markPlayerHostile('shot');
       const spy = vi.spyOn(Math, 'random').mockReturnValue(0.0);
       team.firePepper(team.hunters[0]!, { x: 0, y: 1.1, z: 0 });
       spy.mockRestore();
@@ -165,9 +163,10 @@ describe('SwatTeam — F2 Flinch Ramp, F3 Vulnerability Rush, F4 Perception/Spee
     }
   });
 
-  it('F3 & F2: rushing hunter preserves rush state on hit and does not mutate shared SWAT_COMBAT.moveSpeed', () => {
+  it('F3 & F2: rushing hunter preserves rush state on hit when player is hostile and does not mutate shared SWAT_COMBAT.moveSpeed', () => {
     const { team, bus } = makeTestSwatTeam();
     team.beginAssault();
+    team.markPlayerHostile('shot');
 
     const baseSwatSpeed = SWAT_COMBAT.moveSpeed;
     const baseShieldSpeed = SHIELD_COMBAT.moveSpeed;
@@ -176,7 +175,7 @@ describe('SwatTeam — F2 Flinch Ramp, F3 Vulnerability Rush, F4 Perception/Spee
     const rusher = team.hunters[1]!; // rifleman (index 0 is shielded)
     expect(rusher.state).toBe('rush');
 
-    // Step rush movement and verify shared combat configs were NOT mutated to rush speeds (2.7-2.9 / 2.35)
+    // Step rush movement and verify shared combat configs were NOT mutated to rush speeds
     team.update(0.05);
     expect(SWAT_COMBAT.moveSpeed).toBeCloseTo(baseSwatSpeed, 2);
     expect(SWAT_COMBAT.moveSpeed).toBeLessThan(2.5);
