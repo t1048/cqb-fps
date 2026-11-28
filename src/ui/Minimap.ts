@@ -118,6 +118,8 @@ export interface FloorPlanEnemy {
   z: number;
   /** 0〜1。見失ってから時間が経つほど薄くなる（省略時 1） */
   alpha?: number;
+  /** threat=武装容疑者（赤）, unarmed=投降者（灰）, civilian=民間人・人質（黄）。省略時 threat */
+  kind?: 'threat' | 'civilian' | 'unarmed';
 }
 
 /** 人質処刑の脅迫中に人質の位置で脈打つ警告（progress 0〜1 でカウントダウン） */
@@ -702,7 +704,7 @@ function drawDynamicFloorPlan(
       if (options.floorY !== undefined && Math.abs(e.y - options.floorY) > 1.4) continue;
       ctx.save();
       ctx.globalAlpha = Math.max(0, Math.min(1, e.alpha ?? 1));
-      ctx.fillStyle = '#ff3b3b';
+      ctx.fillStyle = e.kind === 'civilian' ? '#ffd24a' : e.kind === 'unarmed' ? '#b8c2cc' : '#ff3b3b';
       ctx.strokeStyle = '#09121a';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
