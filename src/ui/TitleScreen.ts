@@ -104,7 +104,7 @@ interface Shooter {
   homeZ: number;
   fireX: number;
   fireZ: number;
-  pose: 'stand' | 'kneel' | 'crouch';
+  pose: 'stand' | 'crouch';
   firePose: 'stand' | 'crouch';
   aim: THREE.Vector3;
 }
@@ -739,7 +739,7 @@ class StandoffScene {
     z: number,
     fireX: number,
     fireZ: number,
-    opts: { shield?: boolean; pose: 'stand' | 'kneel' | 'crouch'; firePose: 'stand' | 'crouch'; coverLean?: number; fireLean?: number },
+    opts: { shield?: boolean; pose: 'stand' | 'crouch'; firePose: 'stand' | 'crouch'; coverLean?: number; fireLean?: number },
   ): void {
     const body = new HumanoidBody(x, z, 180, 0x2a3440, true, { role: 'ally', shield: opts.shield });
     body.setReadyPose('high');
@@ -769,12 +769,12 @@ class StandoffScene {
     // SWAT: 装甲車の前後・パトカーのドアの陰から交互に身を乗り出して撃つ
     // 装甲車の陰（左）: 盾持ちが鼻先から、2 人目が後ろから身を乗り出す
     this.addShooter(-2.2, -2.2, -1.75, -2.5, { shield: true, pose: 'crouch', firePose: 'stand', fireLean: 0.5 });
-    this.addShooter(-3.4, -1.7, -3.1, -2.0, { pose: 'kneel', firePose: 'stand', coverLean: 0.1, fireLean: 0.7 });
-    this.addShooter(-7.7, -2.6, -8.0, -3.0, { pose: 'kneel', firePose: 'crouch', coverLean: -0.2, fireLean: -0.9 });
+    this.addShooter(-3.4, -1.7, -3.1, -2.0, { pose: 'crouch', firePose: 'stand', coverLean: 0.1, fireLean: 0.7 });
+    this.addShooter(-7.7, -2.6, -8.0, -3.0, { pose: 'crouch', firePose: 'crouch', coverLean: -0.2, fireLean: -0.9 });
     // パトカーの陰（右）: ボンネット越し・開いたドアの陰から撃つ
-    this.addShooter(2.6, -2.4, 2.25, -2.6, { pose: 'kneel', firePose: 'crouch', fireLean: -0.9 });
+    this.addShooter(2.6, -2.4, 2.25, -2.6, { pose: 'crouch', firePose: 'crouch', fireLean: -0.9 });
     this.addShooter(4.6, -2.3, 4.6, -2.3, { pose: 'crouch', firePose: 'stand', fireLean: -0.2 });
-    this.addShooter(7.0, -2.9, 7.3, -3.2, { pose: 'kneel', firePose: 'crouch', fireLean: 0.8 });
+    this.addShooter(7.0, -2.9, 7.3, -3.2, { pose: 'crouch', firePose: 'crouch', fireLean: 0.8 });
 
     // 容疑者と人質（入口のステップ上）。容疑者はカメラから見て人質の左後ろ。
     // カメラ向きなので容疑者の右手（銃）は画面左側＝人質の外側になる
