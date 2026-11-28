@@ -539,9 +539,30 @@ export class WorldBuilder {
           if (e > lo + 0.02 && e < hi - 0.02) cuts.add(e);
         }
       }
+      // 上端が床スラブ上面と同じ高さの壁（地下の壁が 1F 床面まで届く等）は、スラブに覆われる区間だけ
+      // 見た目の上端をスラブ下面まで下げる。天端が床と同一平面でちらつく（Z ファイティング）のを防ぐ
+      const wallTop = y0 + def.height;
+      const capSlabs = this.slabsCappingWall(wallTop, y0, alongX ? lo : crossC - crossHalf, alongX ? crossC - crossHalf : lo, alongX ? hi : crossC + crossHalf, alongX ? crossC + crossHalf : hi);
+      for (const s of capSlabs) {
+        for (const e of alongX ? [s.x0, s.x1] : [s.z0, s.z1]) {
+          if (e > lo + 0.02 && e < hi - 0.02) cuts.add(e);
+        }
+      }
       const edges = [...cuts].sort((a, b) => a - b);
       const exterior = exteriorName;
-      type Seg = { a: number; b: number; pos: TextureName; neg: TextureName };
+      const segTop = (a: number, b: number): number => {
+        if (capSlabs.length === 0) return wallTop;
+        const seg: Rect = alongX
+          ? { x0: a, z0: crossC - crossHalf, x1: b, z1: crossC + crossHalf }
+          : { x0: crossC - crossHalf, z0: a, x1: crossC + crossHalf, z1: b };
+        const over = capSlabs.filter((s) => s.x0 < seg.x1 - 1e-3 && s.x1 > seg.x0 + 1e-3 && s.z0 < seg.z1 - 1e-3 && s.z1 > seg.z0 + 1e-3);
+        if (over.length === 0) return wallTop;
+        // 一部だけ覆われる区間（階段穴の縁など）は天端が見えるので従来どおり
+        const rest = subtractRects(seg, over).filter((r) => r.x1 - r.x0 > 1e-3 && r.z1 - r.z0 > 1e-3);
+        if (rest.length > 0) return wallTop;
+        return Math.min(...over.map((s) => s.bottom));
+      };
+      type Seg = { a: number; b: number; pos: TextureName; neg: TextureName; top: number };
       const segs: Seg[] = [];
       for (let i = 0; i + 1 < edges.length; i++) {
         const a = edges[i]!;
@@ -551,9 +572,10 @@ export class WorldBuilder {
         const nc = crossC - crossHalf - FACE_PROBE;
         const pos = alongX ? this.wallFaceTex(m, yMid, pc, exterior) : this.wallFaceTex(pc, yMid, m, exterior);
         const neg = alongX ? this.wallFaceTex(m, yMid, nc, exterior) : this.wallFaceTex(nc, yMid, m, exterior);
+        const top = segTop(a, b);
         const last = segs[segs.length - 1];
-        if (last && last.pos === pos && last.neg === neg) last.b = b;
-        else segs.push({ a, b, pos, neg });
+        if (last && last.pos === pos && last.neg === neg && Math.abs(last.top - top) < 1e-4) last.b = b;
+        else segs.push({ a, b, pos, neg, top });
       }
       for (const [k, sg] of segs.entries()) {
         const len = sg.b - sg.a;
@@ -576,11 +598,28 @@ export class WorldBuilder {
         const mats = alongX
           ? [endTex(1), endTex(-1), capMat, capMat, posMat, negMat]
           : [posMat, negMat, capMat, capMat, endTex(1), endTex(-1)];
-        const geometry = new THREE.BoxGeometry(sw, def.height, sd);
-        alignBoxTexture(geometry, cx, yMid, cz, 0);
-        this.addBoxFaces(geometry, mats, cx, yMid, cz, 0, 'wall');
+        const sh = sg.top - y0;
+        if (sh < 0.01) continue;
+        const sy = y0 + sh / 2;
+        const geometry = new THREE.BoxGeometry(sw, sh, sd);
+        alignBoxTexture(geometry, cx, sy, cz, 0);
+        this.addBoxFaces(geometry, mats, cx, sy, cz, 0, 'wall');
       }
     }
+  }
+
+  /** 上面が壁の上端と同じ高さで、壁より上に下面がある床スラブ（XZ 矩形と下面高さ）。壁の矩形と重なるものだけ。 */
+  private slabsCappingWall(top: number, bottom: number, x0: number, z0: number, x1: number, z1: number): (Rect & { bottom: number })[] {
+    const out: (Rect & { bottom: number })[] = [];
+    for (const f of this.map.floors) {
+      const yaw = (f.yaw ?? 0) * DEG2RAD;
+      if (Math.abs(Math.sin(yaw)) > 1e-3 && Math.abs(Math.cos(yaw)) > 1e-3) continue;
+      const a = boxToAABB(f);
+      if (Math.abs(a.max.y - top) > 0.02 || a.min.y <= bottom + 0.05) continue;
+      if (a.min.x >= x1 || a.max.x <= x0 || a.min.z >= z1 || a.max.z <= z0) continue;
+      out.push({ ...aabbRect(a), bottom: a.min.y });
+    }
+    return out;
   }
 
   /**
