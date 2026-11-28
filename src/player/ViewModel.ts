@@ -39,6 +39,13 @@ export class ViewModel {
   private lastInteractKind: InteractAnimKind = 'lock';
   private interactPulseLeft = 0;
   private interactPulseKind: InteractAnimKind = 'doorTap';
+  /** ドア蹴りアニメーション用の右脚＋コンバットブーツ */
+  private readonly kickGroup = new THREE.Group();
+  private readonly kickGeos: THREE.BufferGeometry[] = [];
+  private readonly kickMats: THREE.Material[] = [];
+  private doorKickActive = false;
+  private doorKickT = 0;
+  private doorKickDuration = 0.65;
   /** オプティワンドの伸縮ロッド部 */
   private readonly wandShaft = new THREE.Group();
   /** オプティワンドの先端カメラヘッド（首振り追従） */
@@ -63,17 +70,26 @@ export class ViewModel {
 
   constructor(private readonly textures: TextureLibrary) {
     this.root.name = 'viewmodel';
-    this.root.add(this.holder, this.interactGroup);
+    this.root.add(this.holder, this.interactGroup, this.kickGroup);
     this.holder.add(this.gun);
     this.buildInteractHand();
     this.interactGroup.visible = false;
+    this.buildKickLeg();
+    this.kickGroup.visible = false;
     this.rebuild('rifle');
   }
 
   /** ドア開閉タップなど単発インタラクトの短い手アニメーションを発火する。 */
-  triggerInteractPulse(kind: InteractAnimKind, durationSec = 0.24): void {
+  triggerInteractPulse(kind: InteractAnimKind, durationSec = 0.32): void {
     this.interactPulseKind = kind;
     this.interactPulseLeft = Math.max(this.interactPulseLeft, durationSec);
+  }
+
+  /** ドアを蹴る一人称の足アニメーションを再生する。 */
+  triggerDoorKick(durationSec = 0.65): void {
+    this.doorKickDuration = Math.max(0.2, durationSec);
+    this.doorKickT = 0;
+    this.doorKickActive = true;
   }
 
   setStyle(style: string): void {
@@ -122,6 +138,80 @@ export class ViewModel {
     this.animateReload(reload ?? -1, emptyReload);
     if (this.style === 'optiwand') this.animateOptiwand(wand);
     this.animateInteract(dt, interact);
+    this.animateDoorKick(dt);
+  }
+
+  private animateDoorKick(dt: number): void {
+    if (!this.doorKickActive) {
+      this.kickGroup.visible = false;
+      return;
+    }
+    this.doorKickT += dt;
+    if (this.doorKickT >= this.doorKickDuration) {
+      this.doorKickActive = false;
+      this.kickGroup.visible = false;
+      return;
+    }
+    const p = this.doorKickT / this.doorKickDuration;
+    this.kickGroup.visible = true;
+
+    let x = 0.05;
+    let y = -0.62;
+    let z = -0.18;
+    let rx = 0.55;
+    let ry = 0.06;
+    let rz = -0.06;
+    let sway = 0;
+
+    if (p < 0.2) {
+      // 溜め: 膝を引き上げる
+      const k = smooth(p / 0.2);
+      x = 0.07 - k * 0.02;
+      y = -0.62 + k * 0.34;
+      z = -0.18 - k * 0.08;
+      rx = 0.45 + k * 0.3;
+      sway = k * 0.6;
+    } else if (p < 0.34) {
+      // 蹴り出し: ブーツ底を正面のドアへ一気に突き出す（p≈0.31 で着弾）
+      const k = smooth((p - 0.2) / 0.14);
+      x = 0.05 - k * 0.04;
+      y = -0.28 + k * 0.11;
+      z = -0.26 - k * 0.32;
+      rx = 0.75 + k * 0.58;
+      ry = 0.06 - k * 0.08;
+      rz = -0.06 - k * 0.06;
+      sway = 0.6 + k * 0.4;
+    } else if (p < 0.5) {
+      // 衝撃の反動でわずかに跳ね返る
+      const k = smooth((p - 0.34) / 0.16);
+      x = 0.01 + k * 0.02;
+      y = -0.17 - k * 0.03;
+      z = -0.58 + k * 0.07;
+      rx = 1.33 - k * 0.12;
+      ry = -0.02 + k * 0.04;
+      rz = -0.12 + k * 0.04;
+      sway = 1 - k * 0.25;
+    } else {
+      // 引き戻し: 足を下ろして体勢を戻す
+      const k = smooth((p - 0.5) / 0.5);
+      x = 0.03 + k * 0.05;
+      y = -0.20 - k * 0.45;
+      z = -0.51 + k * 0.35;
+      rx = 1.21 - k * 0.8;
+      ry = 0.02;
+      rz = -0.08 + k * 0.06;
+      sway = (1 - k) * 0.75;
+    }
+
+    this.kickGroup.position.set(x, y, z);
+    this.kickGroup.rotation.set(rx, ry, rz);
+
+    // 蹴りの反動に合わせて右手の装備もバランスを取るようにわずかに引く
+    this.holder.position.x += 0.04 * sway;
+    this.holder.position.y -= 0.045 * sway;
+    this.holder.position.z += 0.035 * sway;
+    this.holder.rotation.x += 0.08 * sway;
+    this.holder.rotation.z -= 0.12 * sway;
   }
 
   private animateInteract(dt: number, interact: InteractAnimKind | null): void {
@@ -216,14 +306,14 @@ export class ViewModel {
       ry = 0.15;
       rz = 0.25;
     } else if (kind === 'doorTap') {
-      // ドア開閉タップ: 素早く前方に伸ばして引く
-      const reach = Math.sin(Math.min(1, t / 0.24) * Math.PI);
-      tx = -0.06;
-      ty = -0.10 + reach * 0.02;
-      tz = -0.33 - reach * 0.10;
-      rx = -0.15 - reach * 0.15;
-      ry = 0.22;
-      rz = -0.2;
+      // ドア開閉タップ: ドアノブ高さへ低めに伸ばして軽くひねる
+      const reach = Math.sin(Math.min(1, t / 0.32) * Math.PI);
+      tx = -0.07 + reach * 0.015;
+      ty = -0.205 - reach * 0.015;
+      tz = -0.32 - reach * 0.05;
+      rx = -0.28 - reach * 0.08;
+      ry = 0.24;
+      rz = -0.35 + reach * 0.45;
     }
 
     this.interactGroup.position.set(
@@ -534,6 +624,7 @@ export class ViewModel {
 
     // 首振り先端カメラヘッド（wandHead）
     this.wandHead.position.set(0, 0, -0.435);
+    this.wandHead.rotation.order = 'YXZ';
     this.wandHead.rotation.set(0, 0, 0);
     this.wandShaft.add(this.wandHead);
     this.parent = this.wandHead;
@@ -598,6 +689,31 @@ export class ViewModel {
     this.interactTool.visible = false;
   }
 
+  /** ドア蹴り用の右脚（すね＋膝当て＋コンバットブーツ＋靴底）を構築する。 */
+  private buildKickLeg(): void {
+    const addPart = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
+      this.kickGeos.push(geo);
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      this.kickGroup.add(m);
+    };
+    const trouser = new THREE.MeshStandardMaterial({ map: this.textures.get('fabric'), color: 0x2b362d, roughness: 0.9 });
+    const pad = new THREE.MeshStandardMaterial({ map: this.textures.get('fabric'), color: 0x1c2124, roughness: 0.72 });
+    const boot = new THREE.MeshStandardMaterial({ map: this.textures.get('fabric'), color: 0x1a1d20, roughness: 0.62 });
+    const sole = new THREE.MeshStandardMaterial({ map: this.textures.get('metal'), color: 0x111315, roughness: 0.85, metalness: 0.08 });
+    this.kickMats.push(trouser, pad, boot, sole);
+
+    // すね〜ズボン（ローカル +Y が上、前傾時に足先が -Z へ突き出る）
+    addPart(new THREE.BoxGeometry(0.115, 0.34, 0.125), trouser, 0, -0.14, 0);
+    // 膝・すね当てパッド
+    addPart(new THREE.BoxGeometry(0.122, 0.13, 0.028), pad, 0, -0.24, -0.068);
+    // ブーツ足首〜甲
+    addPart(new THREE.BoxGeometry(0.108, 0.12, 0.128), boot, 0, 0.06, -0.006);
+    addPart(new THREE.BoxGeometry(0.114, 0.078, 0.23), boot, 0, 0.12, -0.055);
+    // 厚手の靴底（蹴り出し時に正面から見える）
+    addPart(new THREE.BoxGeometry(0.124, 0.028, 0.245), sole, 0, 0.165, -0.058);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -608,6 +724,11 @@ export class ViewModel {
     }
     for (const g of this.interactGeos) g.dispose();
     for (const m of this.interactMats) {
+      if (m instanceof THREE.MeshStandardMaterial) m.map = null;
+      m.dispose();
+    }
+    for (const g of this.kickGeos) g.dispose();
+    for (const m of this.kickMats) {
       if (m instanceof THREE.MeshStandardMaterial) m.map = null;
       m.dispose();
     }

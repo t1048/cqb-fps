@@ -382,7 +382,15 @@ export class Optiwand {
 
     this.pose = this.lockedDoor
       ? computeDoorPose(this.lockedDoor, eye, cfg, this.d.doorThickness, this.yawOff, this.pitch)
-      : computeFreePose(eye, this.freeLook.yaw, this.freeLook.pitch, this.d.colliders, cfg);
+      : computeFreePose(
+          eye,
+          player.yawRad,
+          player.pitchRad,
+          this.d.colliders,
+          cfg,
+          this.freeLook.yaw,
+          this.freeLook.pitch,
+        );
     player.externalMoveScale = 0;
 
     const p = this.pose;

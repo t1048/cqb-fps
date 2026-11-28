@@ -16,6 +16,10 @@ const MAX_DT = 0.05;
 const EPS = 0.01; // 度
 /** 同じドアへの連続蹴りを 1 回と数える間隔（秒）。AI が毎フレーム呼んでも 1 蹴りにまとめる。 */
 const SWAT_KICK_GAP_SEC = 0.48;
+/** プレイヤーのドア蹴りアニメーション全長および G キーのクールダウン（秒）。 */
+export const DOOR_KICK_DURATION_SEC = 0.65;
+/** 蹴り開始からブーツがドアに当たるまでの時間（秒）。 */
+const DOOR_KICK_IMPACT_SEC = 0.2;
 /** 失敗した蹴りで扉が跳ねる角度（度）。その後、元の角度へ戻る。 */
 const SWAT_KICK_BUMP_DEG = 14;
 const NON_DOOR_COLLIDER = (c: Collider): boolean => c.kind !== 'door';
@@ -787,6 +791,9 @@ export class DoorSystem {
   private readonly dir = new THREE.Vector3();
   private readonly sharedMaterials: DoorMaterials;
   private readonly leafMaterialPool = new Map<string, THREE.Material>();
+  private kickCooldown = 0;
+  private pendingKick: { door: Door; timer: number } | null = null;
+  private kickStartedThisFrame = false;
   private disposed = false;
 
   constructor(
@@ -886,14 +893,48 @@ export class DoorSystem {
     return target.door;
   }
 
+  /** 今フレームでプレイヤーがドア蹴りを開始したか（ViewModel 演出トリガ用）。 */
+  get kickJustStarted(): boolean {
+    return this.kickStartedThisFrame;
+  }
+
+  /** プレイヤーのドア蹴りクールダウン（アニメーション再生中）か。 */
+  get isKicking(): boolean {
+    return this.kickCooldown > 0;
+  }
+
   update(rawDt: number): void {
     if (this.disposed) return;
     const dt = Math.min(rawDt, MAX_DT);
     const { x, z } = this.player.position;
-    if (this.input.isPointerLocked && this.input.wasPressed('breach')) {
+    this.kickStartedThisFrame = false;
+    if (this.kickCooldown > 0) this.kickCooldown = Math.max(0, this.kickCooldown - dt);
+
+    if (this.pendingKick) {
+      if (!this.player.alive) {
+        this.pendingKick = null;
+      } else {
+        this.pendingKick.timer -= dt;
+        if (this.pendingKick.timer <= 0) {
+          const door = this.pendingKick.door;
+          this.pendingKick = null;
+          const maxDist = this.cfg.interactRange + door.width * 0.5 + 0.6;
+          if (Math.hypot(x - door.centerX, z - door.centerZ) <= maxDist) {
+            door.breach(x, z, this.playerFaction);
+            this.player.addViewKick(0.032, (Math.random() - 0.5) * 0.02);
+          }
+        }
+      }
+    }
+
+    if (this.kickCooldown <= 0 && this.player.alive && this.input.isPointerLocked && this.input.wasPressed('breach')) {
       // 蹴破りはドアに照準が合っている時のみ（F の Interaction 優先度とは独立）
       const t = this.resolveTarget();
-      if (t) t.door.breach(x, z, this.playerFaction);
+      if (t && !(t.door.stage === 'open' && !t.door.isMoving)) {
+        this.kickCooldown = DOOR_KICK_DURATION_SEC;
+        this.pendingKick = { door: t.door, timer: DOOR_KICK_IMPACT_SEC };
+        this.kickStartedThisFrame = true;
+      }
     }
     for (const d of this.doors) d.update(dt, x, z, this.playerRadius, this.player.position.y);
   }

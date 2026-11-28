@@ -140,6 +140,31 @@ describe('optiwand: 通常時の先端位置', () => {
     expect(pose.z).toBeLessThanOrEqual(0);
     expect(pose.z).toBeGreaterThan(-0.1);
   });
+
+  it('首振りしても回転軸はワンド先端に留まり、ロッドごと横の壁へ振り回さない', () => {
+    const eye = { x: 0, y: 1.6, z: 0 };
+    const base = computeFreePose(eye, 0, 0, [], cfg, 0, 0);
+    const pannedLeft = computeFreePose(eye, 0, 0, [], cfg, 70 * DEG, 15 * DEG);
+    const pannedRight = computeFreePose(eye, 0, 0, [], cfg, -70 * DEG, -10 * DEG);
+    // 先端位置はロッド方向 (yaw=0) の先に固定され、カメラ向きだけが先端を軸に回転する
+    expect(pannedLeft.x).toBeCloseTo(base.x, 5);
+    expect(pannedLeft.y).toBeCloseTo(base.y, 5);
+    expect(pannedLeft.z).toBeCloseTo(base.z, 5);
+    expect(pannedRight.x).toBeCloseTo(base.x, 5);
+    expect(pannedRight.y).toBeCloseTo(base.y, 5);
+    expect(pannedRight.z).toBeCloseTo(base.z, 5);
+    expect(pannedLeft.yaw).toBeCloseTo(70 * DEG, 5);
+    expect(pannedLeft.pitch).toBeCloseTo(15 * DEG, 5);
+    expect(pannedRight.yaw).toBeCloseTo(-70 * DEG, 5);
+  });
+
+  it('横の壁すれすれに伸ばしても wallClearance 分の離隔を保つ', () => {
+    const eye = { x: 0, y: 1.6, z: 0 };
+    // 右側 x = 0.02 に沿う壁（目線は壁の外）
+    const sideWall = wall(0.02, -2, 0.2, 2);
+    const pose = computeFreePose(eye, 0, 0, [sideWall], cfg, -60 * DEG, 0);
+    expect(pose.x).toBeLessThanOrEqual(0.02 - cfg.wallClearance + 1e-5);
+  });
 });
 
 describe('optiwand: スポット', () => {

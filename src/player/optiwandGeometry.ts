@@ -93,31 +93,105 @@ export function computeDoorPose(
   };
 }
 
+/** 先端カメラが側面・上下の壁に近すぎてニアクリップでめり込まないよう、最小離隔 clearance を確保する。 */
+function pushTipClearOfColliders(pos: Vec3, eye: Vec3, colliders: readonly Collider[], clearance: number): Vec3 {
+  if (clearance <= 0) return pos;
+  let { x, y, z } = pos;
+  for (let pass = 0; pass < 2; pass++) {
+    let moved = false;
+    for (const c of colliders) {
+      const a = c.aabb;
+      // 目線自体がコライダ内部にある異常ケースでは背後へ押し出さない
+      if (
+        eye.x >= a.min.x && eye.x <= a.max.x &&
+        eye.y >= a.min.y && eye.y <= a.max.y &&
+        eye.z >= a.min.z && eye.z <= a.max.z
+      ) {
+        continue;
+      }
+      if (
+        x < a.min.x - clearance || x > a.max.x + clearance ||
+        y < a.min.y - clearance || y > a.max.y + clearance ||
+        z < a.min.z - clearance || z > a.max.z + clearance
+      ) {
+        continue;
+      }
+      const cx = Math.max(a.min.x, Math.min(a.max.x, x));
+      const cy = Math.max(a.min.y, Math.min(a.max.y, y));
+      const cz = Math.max(a.min.z, Math.min(a.max.z, z));
+      const dx = x - cx;
+      const dy = y - cy;
+      const dz = z - cz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= clearance * clearance) continue;
+      if (d2 > 1e-8) {
+        const d = Math.sqrt(d2);
+        const push = clearance - d;
+        x += (dx / d) * push;
+        y += (dy / d) * push;
+        z += (dz / d) * push;
+      } else {
+        const oxMin = x - a.min.x;
+        const oxMax = a.max.x - x;
+        const oyMin = y - a.min.y;
+        const oyMax = a.max.y - y;
+        const ozMin = z - a.min.z;
+        const ozMax = a.max.z - z;
+        const m = Math.min(oxMin, oxMax, oyMin, oyMax, ozMin, ozMax);
+        if (m === oxMin) x = a.min.x - clearance;
+        else if (m === oxMax) x = a.max.x + clearance;
+        else if (m === oyMin) y = a.min.y - clearance;
+        else if (m === oyMax) y = a.max.y + clearance;
+        else if (m === ozMin) z = a.min.z - clearance;
+        else z = a.max.z + clearance;
+      }
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return { x, y, z };
+}
+
 /**
- * 通常時の先端位置: 目線（リーン込み）から視線方向へ cfg.reach 進めた点。
- * 壁（コライダ）を貫通しないよう、手前 wallClearance で止める。
+ * 通常時の先端位置と向き:
+ * - 先端位置は目線（リーン込み）からロッド方向 (rodYaw, rodPitch) へ cfg.reach 進めた点。
+ *   正面の壁はレイキャストで手前 wallClearance に止め、側面・上下の壁からも wallClearance を確保する。
+ * - カメラの向き (lookYaw, lookPitch) は先端を軸に首振りする（ロッド自体は振り回さない）。
  */
 export function computeFreePose(
   eye: Vec3,
-  yaw: number,
-  pitch: number,
+  rodYaw: number,
+  rodPitch: number,
   colliders: readonly Collider[],
   cfg: OptiwandConfig,
+  lookYaw: number = rodYaw,
+  lookPitch: number = rodPitch,
 ): WandPose {
-  const cp = Math.cos(pitch);
-  const dir = { x: -Math.sin(yaw) * cp, y: Math.sin(pitch), z: -Math.cos(yaw) * cp };
-  const hit = raycastColliders(colliders, eye, dir, cfg.reach + cfg.wallClearance);
+  const cpRod = Math.cos(rodPitch);
+  const rodDir = { x: -Math.sin(rodYaw) * cpRod, y: Math.sin(rodPitch), z: -Math.cos(rodYaw) * cpRod };
+  const hit = raycastColliders(colliders, eye, rodDir, cfg.reach + cfg.wallClearance);
   const dist = Math.max(0.04, Math.min(cfg.reach, hit - cfg.wallClearance));
+  const tip = pushTipClearOfColliders(
+    {
+      x: eye.x + rodDir.x * dist,
+      y: eye.y + rodDir.y * dist,
+      z: eye.z + rodDir.z * dist,
+    },
+    eye,
+    colliders,
+    cfg.wallClearance,
+  );
+  const cpLook = Math.cos(lookPitch);
   return {
     mode: 'free',
-    x: eye.x + dir.x * dist,
-    y: eye.y + dir.y * dist,
-    z: eye.z + dir.z * dist,
-    yaw,
-    pitch,
+    x: tip.x,
+    y: tip.y,
+    z: tip.z,
+    yaw: lookYaw,
+    pitch: lookPitch,
     doorId: null,
-    farX: dir.x,
-    farZ: dir.z,
+    farX: -Math.sin(lookYaw) * cpLook,
+    farZ: -Math.cos(lookYaw) * cpLook,
   };
 }
 

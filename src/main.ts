@@ -38,7 +38,7 @@ import { RoE } from './rules/RoE';
 import { Mission } from './rules/Mission';
 import { aiFatigueEffects, fatigueTier, playerFatigueEffects } from './rules/siegeFatigue';
 import { WorldBuilder, type Collider } from './world/WorldBuilder';
-import { DoorSystem } from './world/Door';
+import { DOOR_KICK_DURATION_SEC, DoorSystem } from './world/Door';
 import { normalizeSeed, randomSeed } from './world/generator/Rng';
 import { TextureLibrary } from './world/Materials';
 import { motifById } from './world/Motif';
@@ -989,6 +989,9 @@ class App {
     const pressedId = this.interaction.pressedProviderId;
     if (pressedId === 'door' || pressedId === 'doorWork' || pressedId === 'suspectDoor') {
       this.viewModel.triggerInteractPulse('doorTap');
+    }
+    if (this.doors.kickJustStarted) {
+      this.viewModel.triggerDoorKick(DOOR_KICK_DURATION_SEC);
     }
     const interactKind = wandEquipped ? null : this.resolveInteractAnim();
     this.viewModel.update(dt, this.player.isMoving, reloadP, this.weapons.reloadFromEmpty, wandState, interactKind);
