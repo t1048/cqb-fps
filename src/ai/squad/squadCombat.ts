@@ -525,7 +525,15 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
       tryTriggerPincer(ctx, ally, ally.known);
     }
   } else if (ally.engageActive || ally.known) {
-    ally.lostSec += dt;
+    // 直前の標的を無力化済み（死亡・ダウン・投降・逮捕）なら、見失った敵として捜索し続けない。
+    // 捜索の再配置移動がスタック中の目標ドアを開けて突入前に室内へ出てしまうのを防ぐ。
+    const prev = prevTargetId !== null ? ctx.entities.suspects.get(prevTargetId) : undefined;
+    if (prev && isNeutralized(prev) && !ctx.provoked.has(prev.id)) {
+      endEngagement(ally);
+      lastTargetId.delete(ally);
+    } else {
+      ally.lostSec += dt;
+    }
   }
 
   ally.engaging = ally.sees || ally.pepperTarget !== null || ally.holdingFire;
@@ -618,12 +626,25 @@ export function tryEngage(ctx: SquadContext, ally: AllyUnit, dt: number): void {
   }
 
   if (!ally.sees && !ally.pepperTarget && ally.lostSec >= ENGAGE_LOST_SEC) {
-    ally.engage.exit();
-    ally.engageActive = false;
-    ally.known = null;
-    ally.lostSec = 0;
-    ally.prevEngageLabel = '';
+    endEngagement(ally);
   }
+}
+
+function isNeutralized(s: { alive: boolean; state: SuspectState }): boolean {
+  return (
+    !s.alive ||
+    s.state === SuspectState.DOWN ||
+    s.state === SuspectState.SURRENDER ||
+    s.state === SuspectState.ARRESTED
+  );
+}
+
+function endEngagement(ally: AllyUnit): void {
+  ally.engage.exit();
+  ally.engageActive = false;
+  ally.known = null;
+  ally.lostSec = 0;
+  ally.prevEngageLabel = '';
 }
 
 export function firePepper(ctx: SquadContext, ally: AllyUnit, target: { id: string; pos: Vec3 }): void {
