@@ -767,13 +767,14 @@ class StandoffScene {
     this.addShooter(4.6, -2.3, 4.6, -2.3, { pose: 'crouch', firePose: 'stand', fireLean: -0.2 });
     this.addShooter(7.0, -2.9, 7.3, -3.2, { pose: 'kneel', firePose: 'crouch', fireLean: 0.8 });
 
-    // 容疑者と人質（入口のステップ上）
+    // 容疑者と人質（入口のステップ上）。容疑者はカメラから見て人質の左後ろ。
+    // カメラ向きなので容疑者の右手（銃）は画面左側＝人質の外側になる
     const footY = 0.32;
-    this.hostage = new HumanoidBody(-0.05, -14.45, 0, 0xc4ccd8, false, { role: 'civilian', footY });
+    this.hostage = new HumanoidBody(0.05, -14.45, 0, 0xc4ccd8, false, { role: 'civilian', footY });
     this.hostage.setRestrained(true);
     this.hostage.faceToward(0, 0, Math.PI * 2);
     this.scene.add(this.hostage.group);
-    this.suspect = new HumanoidBody(0.4, -14.9, 0, 0x5a2626, true, { role: 'suspect', footY });
+    this.suspect = new HumanoidBody(-0.4, -14.9, 0, 0x5a2626, true, { role: 'suspect', footY });
     this.suspect.setReadyPose('high');
     this.suspect.faceToward(0, 0, Math.PI * 2);
     this.scene.add(this.suspect.group);
@@ -786,9 +787,9 @@ class StandoffScene {
       coverLean: 0.55,
       fireLean: 0.95,
       exposed: 0,
-      homeX: 0.4,
+      homeX: -0.4,
       homeZ: -14.9,
-      fireX: 0.55,
+      fireX: -0.55,
       fireZ: -14.9,
       pose: 'stand',
       firePose: 'stand',
