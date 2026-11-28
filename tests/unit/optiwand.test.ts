@@ -309,3 +309,15 @@ describe('ミラー確認（隊員）', () => {
     expect(blocked.seen).toHaveLength(0);
   });
 });
+
+describe('fisheyeInverse（映像内マーカーの位置合わせ）', () => {
+  it('シェーダの歪み q = p(1+0.24|p|²) を逆算する', async () => {
+    const { fisheyeInverse } = await import('../../src/player/Optiwand');
+    for (const [x, y] of [[0, 0], [0.4, -0.2], [-0.7, 0.5]] as const) {
+      const p = fisheyeInverse(x, y);
+      const k = 1 + 0.24 * (p.x * p.x + p.y * p.y);
+      expect(p.x * k).toBeCloseTo(x, 4);
+      expect(p.y * k).toBeCloseTo(y, 4);
+    }
+  });
+});

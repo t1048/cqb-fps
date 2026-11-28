@@ -395,6 +395,7 @@ class App {
         subtitle: this.subtitle,
         weapons: this.weapons,
         host: document.body,
+        allyFeed: () => this.squad.getScoutFeed(),
       });
     }
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {

@@ -155,7 +155,8 @@ export class HumanoidBody {
     if (armed) {
       this.gun = new THREE.Group();
       const gunMat = this.makeMat(tex, 'metal', 0x22262a, 0.45);
-      const wood = this.makeMat(tex, 'wood', 0x6b4424, 0.7);
+      // 隊員は AR 系カービン（黒い樹脂ストック・レール・ドットサイト）。容疑者は木製ストックの小銃のまま
+      const wood = role === 'ally' ? this.makeMat(tex, 'metal', 0x2a2d31, 0.6) : this.makeMat(tex, 'wood', 0x6b4424, 0.7);
       if (this.hasShield) {
         // ハンドガン（盾の裏で構える短い銃）
         box(this.gun, gunMat, 0, 0.02, -0.06, 0.035, 0.045, 0.2);
@@ -165,6 +166,12 @@ export class HumanoidBody {
         box(this.gun, wood, 0, -0.02, 0.08, 0.035, 0.08, 0.14);
         box(this.gun, gunMat, 0, -0.06, 0.02, 0.03, 0.1, 0.04);
         box(this.gun, gunMat, 0, 0.05, -0.22, 0.02, 0.03, 0.08);
+        if (role === 'ally') {
+          // ハンドガード（太め）・ドットサイト・湾曲弾倉の下半分
+          box(this.gun, gunMat, 0, 0.02, -0.25, 0.05, 0.055, 0.16);
+          box(this.gun, gunMat, 0, 0.075, -0.06, 0.03, 0.035, 0.05);
+          box(this.gun, wood, 0, -0.07, -0.08, 0.028, 0.08, 0.05);
+        }
       }
       this.rig.add(this.gun);
     } else {

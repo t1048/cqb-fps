@@ -247,7 +247,9 @@ function recommendText(ctx: SquadContext, info: QuickOrderInfo): string {
         ? t(`敵${info.threats}・民間人${info.civilians}`, `${info.threats} hostile, ${info.civilians} civ`)
         : t(`敵${info.threats}`, `${info.threats} hostile`)
       : t('空', 'empty');
-  return `  ${t('推奨', 'Rec')}: ${label}（${who}${out ? t('・在庫なし', ' · out of stock') : ''}）`;
+  // Z は常に素の突入。推奨が閃光/ガスのときは右クリックメニューで選ぶ必要があることを明示する
+  const how = info.recommend !== 'clear' && !out && info.recommend !== info.order ? t('・右クリックで選択', ' · pick via RMB') : '';
+  return `  ${t('推奨', 'Rec')}: ${label}（${who}${out ? t('・在庫なし', ' · out of stock') : ''}${how}）`;
 }
 
 /** 画面下部に出す「Z : 〜〜」の文言。指示不可の状況では空文字。 */
@@ -267,7 +269,9 @@ export function quickOrderHint(ctx: SquadContext, dt: number): string {
     else if (info.stage === 'check') text = `Z : ${t('ドアチェック（罠・施錠）', 'Check Door (Trap & Lock)')}`;
     else if (info.stage === 'entry') {
       const trap = info.trapKnown ? t('（罠発見: 解除してから開ける）', ' (trap found: disarm first)') : '';
-      text = `Z : ${orderLabelText(ctx.cfg, info.order)}${trap}`;
+      const style =
+        info.order === 'clear' && ctx.entryMode === 'stealth' ? t('（ステルス: パイ切り）', ' (Stealth: pie)') : '';
+      text = `Z : ${orderLabelText(ctx.cfg, info.order)}${style}${trap}`;
     } else {
       text = `Z : ${orderLabelText(ctx.cfg, info.order)}`;
     }
