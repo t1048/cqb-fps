@@ -539,8 +539,9 @@ export class WorldBuilder {
           if (e > lo + 0.02 && e < hi - 0.02) cuts.add(e);
         }
       }
-      // 上端が床スラブ上面と同じ高さの壁（地下の壁が 1F 床面まで届く等）は、スラブに覆われる区間だけ
-      // 見た目の上端をスラブ下面まで下げる。天端が床と同一平面でちらつく（Z ファイティング）のを防ぐ
+      // 上端が床スラブ上面と同じ高さの壁（下階の壁が上階の床面まで届く。B1→1F、1F→2F など階を問わない）は、
+      // スラブに覆われる部分だけ見た目の上端をスラブ下面まで下げる。天端が床と同一平面でちらつく（Z ファイティング）のを防ぐ。
+      // 覆われない部分（階段穴・吹き抜けの縁にはみ出した厚み）は元の高さまで残す
       const wallTop = y0 + def.height;
       const capSlabs = this.slabsCappingWall(wallTop, y0, alongX ? lo : crossC - crossHalf, alongX ? crossC - crossHalf : lo, alongX ? hi : crossC + crossHalf, alongX ? crossC + crossHalf : hi);
       for (const s of capSlabs) {
@@ -550,19 +551,18 @@ export class WorldBuilder {
       }
       const edges = [...cuts].sort((a, b) => a - b);
       const exterior = exteriorName;
-      const segTop = (a: number, b: number): number => {
-        if (capSlabs.length === 0) return wallTop;
+      /** 区間の見た目の上端と、上端より上に残す覆われない部分（スラブ下面〜元の上端）。 */
+      const segTop = (a: number, b: number): { top: number; rest: Rect[] } => {
+        if (capSlabs.length === 0) return { top: wallTop, rest: [] };
         const seg: Rect = alongX
           ? { x0: a, z0: crossC - crossHalf, x1: b, z1: crossC + crossHalf }
           : { x0: crossC - crossHalf, z0: a, x1: crossC + crossHalf, z1: b };
         const over = capSlabs.filter((s) => s.x0 < seg.x1 - 1e-3 && s.x1 > seg.x0 + 1e-3 && s.z0 < seg.z1 - 1e-3 && s.z1 > seg.z0 + 1e-3);
-        if (over.length === 0) return wallTop;
-        // 一部だけ覆われる区間（階段穴の縁など）は天端が見えるので従来どおり
+        if (over.length === 0) return { top: wallTop, rest: [] };
         const rest = subtractRects(seg, over).filter((r) => r.x1 - r.x0 > 1e-3 && r.z1 - r.z0 > 1e-3);
-        if (rest.length > 0) return wallTop;
-        return Math.min(...over.map((s) => s.bottom));
+        return { top: Math.max(y0, Math.min(...over.map((s) => s.bottom))), rest };
       };
-      type Seg = { a: number; b: number; pos: TextureName; neg: TextureName; top: number };
+      type Seg = { a: number; b: number; pos: TextureName; neg: TextureName; top: number; rest: Rect[] };
       const segs: Seg[] = [];
       for (let i = 0; i + 1 < edges.length; i++) {
         const a = edges[i]!;
@@ -572,10 +572,10 @@ export class WorldBuilder {
         const nc = crossC - crossHalf - FACE_PROBE;
         const pos = alongX ? this.wallFaceTex(m, yMid, pc, exterior) : this.wallFaceTex(pc, yMid, m, exterior);
         const neg = alongX ? this.wallFaceTex(m, yMid, nc, exterior) : this.wallFaceTex(nc, yMid, m, exterior);
-        const top = segTop(a, b);
+        const { top, rest } = segTop(a, b);
         const last = segs[segs.length - 1];
-        if (last && last.pos === pos && last.neg === neg && Math.abs(last.top - top) < 1e-4) last.b = b;
-        else segs.push({ a, b, pos, neg, top });
+        if (last && last.pos === pos && last.neg === neg && Math.abs(last.top - top) < 1e-4 && last.rest.length === 0 && rest.length === 0) last.b = b;
+        else segs.push({ a, b, pos, neg, top, rest });
       }
       for (const [k, sg] of segs.entries()) {
         const len = sg.b - sg.a;
@@ -599,11 +599,23 @@ export class WorldBuilder {
           ? [endTex(1), endTex(-1), capMat, capMat, posMat, negMat]
           : [posMat, negMat, capMat, capMat, endTex(1), endTex(-1)];
         const sh = sg.top - y0;
-        if (sh < 0.01) continue;
-        const sy = y0 + sh / 2;
-        const geometry = new THREE.BoxGeometry(sw, sh, sd);
-        alignBoxTexture(geometry, cx, sy, cz, 0);
-        this.addBoxFaces(geometry, mats, cx, sy, cz, 0, 'wall');
+        if (sh >= 0.01) {
+          const sy = y0 + sh / 2;
+          const geometry = new THREE.BoxGeometry(sw, sh, sd);
+          alignBoxTexture(geometry, cx, sy, cz, 0);
+          this.addBoxFaces(geometry, mats, cx, sy, cz, 0, 'wall');
+        }
+        // スラブに覆われない帯（スラブの縁から外へはみ出した厚み）だけ元の上端まで積み増す
+        const fh = wallTop - sg.top;
+        if (fh < 0.01) continue;
+        for (const r of sg.rest) {
+          const fx = (r.x0 + r.x1) / 2;
+          const fz = (r.z0 + r.z1) / 2;
+          const fy = sg.top + fh / 2;
+          const geometry = new THREE.BoxGeometry(r.x1 - r.x0, fh, r.z1 - r.z0);
+          alignBoxTexture(geometry, fx, fy, fz, 0);
+          this.addBoxFaces(geometry, mats, fx, fy, fz, 0, 'wall');
+        }
       }
     }
   }
@@ -615,7 +627,8 @@ export class WorldBuilder {
       const yaw = (f.yaw ?? 0) * DEG2RAD;
       if (Math.abs(Math.sin(yaw)) > 1e-3 && Math.abs(Math.cos(yaw)) > 1e-3) continue;
       const a = boxToAABB(f);
-      if (Math.abs(a.max.y - top) > 0.02 || a.min.y <= bottom + 0.05) continue;
+      // 上面が壁の上端とほぼ同じ（数 cm 以内）。壁の方が少し低くても遠景では深度精度不足でちらつく
+      if (Math.abs(a.max.y - top) > 0.03 || a.min.y <= bottom + 0.05) continue;
       if (a.min.x >= x1 || a.max.x <= x0 || a.min.z >= z1 || a.max.z <= z0) continue;
       out.push({ ...aabbRect(a), bottom: a.min.y });
     }
