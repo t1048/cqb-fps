@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MapData } from '../../src/core/types';
 import type { StairMark } from '../../src/world/Walk';
-import { stairExitFloorY } from '../../src/ai/squad/squadStairs';
+import { stairExitFloorY, stairTravelDir } from '../../src/ai/squad/squadStairs';
 import { blockedAt } from '../../src/ai/EngageBehavior';
 import { createSquadHarness, generateRealMap, type SquadHarness } from './helpers/squadSimDriver';
 
@@ -200,5 +200,39 @@ describe('階段クリア（実機）', () => {
     const target = sus.ambushTarget;
     expect(target?.doorwayId).toBe(`stair:${stair.id}:top`);
     expect(Math.abs(target!.aim.y - (stair.topY + 1.1))).toBeLessThan(0.05);
+  });
+
+  it('3人分隊の階段クリア: 最後尾は背後を警戒し、先頭はクレストで腰を落として左右をスキャンする', () => {
+    const { h, stair, aimAtStair } = setup(3);
+    aimAtStair();
+    const ctx = h.squad.menu.resolveContext('gold');
+    h.squad.executeOrder('stairClear', ctx);
+    const dir = stairTravelDir(stair, true);
+    let sawRearWatch = false;
+    let sawLeadCrestCrouch = false;
+    let leadYawMin = Infinity;
+    let leadYawMax = -Infinity;
+
+    for (let i = 0; i < 400; i++) {
+      h.step(0.1);
+      const lead = h.squad.allies.find((a) => a.roleIndex === 0)!;
+      const rear = h.squad.allies.find((a) => a.roleIndex === 2)!;
+      if (lead.phase === 'stair_climb' && lead.stairStartT >= 0) {
+        if (lead.body.height < 1.3) sawLeadCrestCrouch = true;
+        leadYawMin = Math.min(leadYawMin, lead.body.yawRad);
+        leadYawMax = Math.max(leadYawMax, lead.body.yawRad);
+      }
+      if (rear.phase === 'stair_climb' && rear.stairStartT >= 0) {
+        const fx = -Math.sin(rear.body.yawRad);
+        const fz = -Math.cos(rear.body.yawRad);
+        if (fx * dir.x + fz * dir.z < -0.5) sawRearWatch = true;
+      }
+      if (h.squad.allies.every((a) => a.phase === 'stair_secure')) break;
+    }
+
+    expect(sawRearWatch).toBe(true);
+    expect(sawLeadCrestCrouch).toBe(true);
+    expect(leadYawMax - leadYawMin).toBeGreaterThan(0.25);
+    for (const a of h.squad.allies) expect(a.phase).toBe('stair_secure');
   });
 });

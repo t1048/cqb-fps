@@ -449,7 +449,7 @@ export class HumanoidBody {
       const sinR = Math.sin(leanRoll);
       const targetGunX = hipShift + gx * cosR + dy * sinR;
       const targetGunY = WAIST_Y - gx * sinR + dy * cosR;
-      const targetPitch = this.readyPose === 'high' ? this.aimPitch * 0.65 : -0.28;
+      const targetPitch = this.readyPose === 'high' ? this.aimPitch * 0.8 : -0.28;
       const targetRoll = -leanRoll * 0.9;
       this.gun.position.x += (targetGunX - this.gun.position.x) * blend;
       this.gun.position.y += (targetGunY - this.gun.position.y) * blend;
@@ -598,7 +598,7 @@ export class HumanoidBody {
     const headYaw = THREE.MathUtils.clamp(neck, -HEAD_YAW_LIMIT, HEAD_YAW_LIMIT);
     this.headPivot.rotation.y += (headYaw - this.headPivot.rotation.y) * blend;
     const rawPitch = Math.atan2(y - (this.footY + 1.55), dist);
-    const pitch = THREE.MathUtils.clamp(rawPitch, -0.45, 0.45);
+    const pitch = THREE.MathUtils.clamp(rawPitch, -0.68, 0.68);
     this.headPivot.rotation.x += (pitch - this.headPivot.rotation.x) * blend;
     this.aimPitch += (pitch - this.aimPitch) * blend;
   }

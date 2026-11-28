@@ -96,4 +96,41 @@ describe('motif scenery', () => {
     }
     expect(found).toBe(true);
   });
+
+  it('never generates beam props and keeps stair cores and stairs clear of hall ceiling props', () => {
+    const files = ['house_compact.json', 'house.json', 'embassy.json'] as const;
+    for (const file of files) {
+      const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/generators', file), 'utf8')) as unknown;
+      const tpl = validateGeneratorTemplate(raw, file);
+      for (const seed of [0, 1, 2, 7, 13, 42]) {
+        const map = generateMap(tpl, seed, 'random_house', 2.18, 'hospital');
+        expect(map.covers.some((c) => c.prop === 'beam'), `${file} seed=${seed}`).toBe(false);
+        for (const r of map.rooms) {
+          if (r.id.startsWith('core')) {
+            expect(/ホール|ラウンジ|ロビー|座敷/.test(r.name), `${file} seed=${seed} ${r.id}`).toBe(false);
+          }
+        }
+        for (const c of map.covers) {
+          if (c.prop !== 'lamp') continue;
+          const cy = c.y ?? 0;
+          for (const st of map.stairs ?? []) {
+            const baseY = st.y ?? 0;
+            if (Math.abs(baseY - cy) > 2.5 && Math.abs(baseY + st.steps * st.rise - cy) > 2.5) continue;
+            const yawRad = ((st.yaw ?? 0) * Math.PI) / 180;
+            const cos = Math.abs(Math.cos(yawRad));
+            const sin = Math.abs(Math.sin(yawRad));
+            const stLen = st.steps * st.run;
+            const hx = (st.width * cos + stLen * sin) / 2;
+            const hz = (st.width * sin + stLen * cos) / 2;
+            const overlaps =
+              c.x + c.width / 2 > st.x - hx &&
+              c.x - c.width / 2 < st.x + hx &&
+              c.z + c.depth / 2 > st.z - hz &&
+              c.z - c.depth / 2 < st.z + hz;
+            expect(overlaps, `${file} seed=${seed} lamp overlaps stair`).toBe(false);
+          }
+        }
+      }
+    }
+  });
 });

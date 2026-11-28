@@ -469,7 +469,7 @@ function placeToiletFixtures(covers: BoxDef[], map: GeneratedMapRaw, room: RoomD
 }
 
 function pickHall(rooms: readonly RoomDef[], doors: readonly DoorDef[]): RoomDef | undefined {
-  const indoor = rooms.filter((r) => !r.outdoor && !r.id.includes('stair') && !isToiletId(r.id) && (r.floorY ?? 0) > -0.4 && (r.floorY ?? 0) < 1.2);
+  const indoor = rooms.filter((r) => !r.outdoor && !r.id.includes('stair') && !r.id.startsWith('core') && !isToiletId(r.id) && (r.floorY ?? 0) > -0.4 && (r.floorY ?? 0) < 1.2);
   let best: RoomDef | undefined;
   let bestScore = 12;
   for (const r of indoor) {
@@ -528,33 +528,17 @@ function placeColumns(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, pro
   }
 }
 
-/** 天井際の梁と吊り灯。歩行高さ（目線 1.6m）より上なので通路は塞がない。 */
-function placeHallDress(covers: BoxDef[], room: RoomDef): void {
+/** 天井際の吊り灯。歩行高さ（目線 1.6m）より上なので通路は塞がない。階段上は避ける。 */
+function placeHallDress(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef): void {
   const floorY = room.floorY ?? 0;
-  const inset = 0.7;
-  const spanX = room.width - inset * 2;
-  const spanZ = room.depth - inset * 2;
-  if (spanX > 2 && spanZ > 2) {
-    const beamY = floorY + 2.08;
-    const alongX: Spec = { prop: 'beam', width: round3(spanX), depth: 0.16, height: 0.18, place: 'center' };
-    const alongZ: Spec = { prop: 'beam', width: 0.16, depth: round3(spanZ), height: 0.18, place: 'center' };
-    const z0 = room.z - room.depth / 2 + inset;
-    const z1 = room.z + room.depth / 2 - inset;
-    const x0 = room.x - room.width / 2 + inset;
-    const x1 = room.x + room.width / 2 - inset;
-    pushHigh(covers, room, alongX, room.x, z0, beamY);
-    pushHigh(covers, room, alongX, room.x, z1, beamY);
-    pushHigh(covers, room, alongZ, x0, room.z, beamY);
-    pushHigh(covers, room, alongZ, x1, room.z, beamY);
-  }
   const lamp: Spec = { prop: 'lamp', width: 0.36, depth: 0.36, height: 0.7, place: 'center' };
-  pushHigh(covers, room, lamp, room.x, room.z - room.depth * 0.18, floorY + 1.92);
+  pushHigh(covers, map, room, lamp, room.x, room.z - room.depth * 0.18, floorY + 1.92);
   if (Math.min(room.width, room.depth) >= 5) {
-    pushHigh(covers, room, lamp, room.x, room.z + room.depth * 0.18, floorY + 1.92);
+    pushHigh(covers, map, room, lamp, room.x, room.z + room.depth * 0.18, floorY + 1.92);
   }
 }
 
-function pushHigh(covers: BoxDef[], room: RoomDef, spec: Spec, x: number, z: number, y: number): boolean {
+function pushHigh(covers: BoxDef[], map: GeneratedMapRaw, room: RoomDef, spec: Spec, x: number, z: number, y: number): boolean {
   const box: BoxDef = {
     x: round3(x),
     z: round3(z),
@@ -565,6 +549,13 @@ function pushHigh(covers: BoxDef[], room: RoomDef, spec: Spec, x: number, z: num
     prop: spec.prop,
   };
   if (!inside(rectOf(room), box, 0.02)) return false;
+  const floorY = room.floorY ?? 0;
+  const r = xzOf(box);
+  for (const st of map.stairs ?? []) {
+    const baseY = st.y ?? 0;
+    if (!sameFloor(baseY, floorY) && !sameFloor(baseY + st.steps * st.rise, floorY)) continue;
+    if (rectsOverlap(r, stairKeepRect(st))) return false;
+  }
   covers.push(box);
   return true;
 }
@@ -779,7 +770,7 @@ export function applyMotifScenes<T extends GeneratedMapRaw>(map: T): T {
     hall.name = HALL_NAME[motif.id];
     if (floors) retile(floors, hall, HALL_FLOOR[motif.id]);
     placeColumns(covers, map, hall, motif.id === 'japanese_house' ? 'post' : 'column');
-    placeHallDress(covers, hall);
+    placeHallDress(covers, map, hall);
   }
   const toilet = motif.id === 'japanese_house' ? pickHouseToilet(rooms, hall) : pickToilet(rooms, hall);
   if (toilet) {

@@ -147,30 +147,81 @@ export function stairThreatPoint(s: StairMark, up: boolean): Vec3 {
   return { x: e.x + d.x * 1.6, y: stairExitFloorY(s, up) + 1.25, z: e.z + d.z * 1.6 };
 }
 
-/** 縦列の k 番目が受け持つ照準点（0: 出口正面 / 1・2: 出口の左右 / 最後尾: 後方 / それ以外: 頭上の吹き抜け）。 */
+/** 縦列の k 番目が受け持つ照準点（0: 出口正面 / 最後尾(3人以上): 後方警戒 / 中間: 出口の左右・吹き抜け）。 */
 export function stairSectorLook(s: StairMark, up: boolean, k: number, n: number, secured: boolean): Vec3 {
   const e = stairExit(s, up);
+  const entry = stairEntry(s, up);
   const d = stairTravelDir(s, up);
   const px = -d.z;
   const pz = d.x;
-  const y = stairExitFloorY(s, up) + 1.3;
+  const exitY = stairExitFloorY(s, up);
+  const entryY = stairFloorY(s, up);
+  const y = exitY + 1.3;
   if (k === 0) {
     const fwd = secured ? 5 : 1.6;
-    return { x: e.x + d.x * fwd, y, z: e.z + d.z * fwd };
+    return { x: e.x + d.x * fwd, y: exitY + 1.35, z: e.z + d.z * fwd };
   }
-  if (k === 1 || k === 2) {
-    const side = k === 1 ? 1 : -1;
-    const lat = secured ? 5 : 1.8;
-    const fwd = secured ? 0.6 : 0.8;
-    return { x: e.x + d.x * fwd + px * side * lat, y, z: e.z + d.z * fwd + pz * side * lat };
-  }
-  if (secured || (k === n - 1 && n >= 4)) {
-    // 出口側の床で階段穴の向こう（後方）: 吹き抜け越しの撃ち下ろし・背後を押さえる
-    const back = secured ? 4 : 2.2;
+  if (n >= 3 && k === n - 1) {
+    if (!secured) {
+      // 3人以上では最後尾が元の階（背後）を警戒する
+      return { x: entry.x - d.x * 3.2, y: entryY + 1.35, z: entry.z - d.z * 3.2 };
+    }
     const lat = k % 2 === 0 ? 0.6 : -0.6;
-    return { x: e.x - d.x * back + px * lat, y, z: e.z - d.z * back + pz * lat };
+    return { x: e.x - d.x * 4 + px * lat, y, z: e.z - d.z * 4 + pz * lat };
   }
-  return { x: e.x - d.x * 1.4, y, z: e.z - d.z * 1.4 };
+  const side = k % 2 === 1 ? 1 : -1;
+  const lat = secured ? 5 : 1.8;
+  const fwd = secured ? 0.6 : 0.85;
+  return {
+    x: e.x + d.x * fwd + px * side * lat,
+    y: exitY + (up && !secured ? 1.55 : 1.3),
+    z: e.z + d.z * fwd + pz * side * lat,
+  };
+}
+
+/** 昇降中の動的な戦術スキャン照準点（先頭: 左右パイイング / 最後尾: 背後警戒 / 中間: 反対側・上方カバー）。 */
+export function stairClimbLook(s: StairMark, up: boolean, k: number, n: number, simTime: number, frac: number): Vec3 {
+  const e = stairExit(s, up);
+  const entry = stairEntry(s, up);
+  const d = stairTravelDir(s, up);
+  const px = -d.z;
+  const pz = d.x;
+  const exitY = stairExitFloorY(s, up);
+  const entryY = stairFloorY(s, up);
+  if (k === 0) {
+    const inCrest = frac >= 0.48 && frac <= 0.8;
+    const sweep = Math.sin(simTime * (inCrest ? 3.2 : 2.1)) * (inCrest ? 1.65 : 0.95);
+    const fwd = inCrest ? 1.9 : 1.5;
+    return {
+      x: e.x + d.x * fwd + px * sweep,
+      y: exitY + (up ? 1.42 : 1.2),
+      z: e.z + d.z * fwd + pz * sweep,
+    };
+  }
+  if (n >= 3 && k === n - 1) {
+    if (frac < 0.8) {
+      const scan = Math.sin(simTime * 1.7 + 1.2) * 1.1;
+      return {
+        x: entry.x - d.x * 3.2 + px * scan,
+        y: entryY + 1.35,
+        z: entry.z - d.z * 3.2 + pz * scan,
+      };
+    }
+    return stairSectorLook(s, up, k, n, true);
+  }
+  const side = k % 2 === 1 ? 1 : -1;
+  const lat = side * (1.7 + 0.65 * Math.sin(simTime * 1.9 + k * 1.7));
+  const fwd = 0.85 + 0.45 * Math.cos(simTime * 1.5 + k);
+  return {
+    x: e.x + d.x * fwd + px * lat,
+    y: exitY + (up ? 1.6 : 1.15),
+    z: e.z + d.z * fwd + pz * lat,
+  };
+}
+
+/** 射線が被らないよう階段上で左右にずらす千鳥オフセット（m）。 */
+export function stairStaggerOffset(idx: number): number {
+  return idx % 2 === 0 ? 0.22 : -0.22;
 }
 
 /** 階段の進入点→退出点の線分上での進み具合（m）。 */
@@ -353,8 +404,9 @@ function updateStackStage(ctx: SquadContext, ally: AllyUnit, op: StairOp, dt: nu
   ally.stalled = 0;
   ally.stuckStage = 0;
   ally.anchor = { x: body.px, z: body.pz };
+  if (!ally.engaging) body.setPose('stand');
   const n = op.members.length;
-  aimAtLook(ally, idx === 0 ? stairThreatPoint(op.stair, op.up) : stairSectorLook(op.stair, op.up, idx, n, false), dt);
+  aimAtLook(ally, stairClimbLook(op.stair, op.up, idx, n, ctx.simTime, 0), dt);
   if (op.stage === 'flash') ally.progress = t('閃光炸裂待ち', 'Waiting on the Bang');
   else if (op.stackOnly) ally.progress = t('階段口で待機', 'Holding at Stairs');
   else ally.progress = t('階段口スタック完了', 'Stacked at Stairs');
@@ -368,7 +420,11 @@ function updateClimbStage(ctx: SquadContext, ally: AllyUnit, op: StairOp, dt: nu
   const exitY = stairExitFloorY(s, op.up);
   const entryY = stairFloorY(s, op.up);
   const slot = op.exitSlots[idx] ?? stairExit(s, op.up);
-  const look = idx === 0 ? stairThreatPoint(s, op.up) : stairSectorLook(s, op.up, idx, n, false);
+  const entry = stairEntry(s, op.up);
+  const exit = stairExit(s, op.up);
+  const stairLen = Math.max(0.5, Math.hypot(exit.x - entry.x, exit.z - entry.z));
+  const frac = THREE.MathUtils.clamp(stairProgress(s, op.up, body.px, body.pz) / stairLen, 0, 1);
+  const look = stairClimbLook(s, op.up, idx, n, ctx.simTime, frac);
 
   if (ally.stairStartT < 0) {
     if (!fileGateOpen(ctx, op, ally)) {
@@ -392,6 +448,7 @@ function updateClimbStage(ctx: SquadContext, ally: AllyUnit, op: StairOp, dt: nu
   if (onExitFloor && dSlot <= STAIR_EXIT_ARRIVE) {
     ally.phase = 'stair_secure';
     ally.settled = true;
+    body.setPose('stand');
     ally.holdPos = { x: slot.x, y: exitY, z: slot.z };
     ally.progress = t('階段口確保', 'Landing Secured');
     return;
@@ -400,6 +457,7 @@ function updateClimbStage(ctx: SquadContext, ally: AllyUnit, op: StairOp, dt: nu
     // 詰まった: その場で確保扱い（指示の流れを止めない）
     ally.phase = 'stair_secure';
     ally.settled = true;
+    body.setPose('stand');
     ally.holdPos = { x: body.px, y: body.footY, z: body.pz };
     return;
   }
@@ -409,24 +467,32 @@ function updateClimbStage(ctx: SquadContext, ally: AllyUnit, op: StairOp, dt: nu
     return;
   }
 
-  const speed = ally.combat.moveSpeed * (op.flash ? STAIR_FLASH_SPEED_MUL : STAIR_SLOW_SPEED_MUL);
-  const entry = stairEntry(s, op.up);
+  let speed = ally.combat.moveSpeed * (op.flash ? STAIR_FLASH_SPEED_MUL : STAIR_SLOW_SPEED_MUL);
+  // 先頭は頭が上階に出るクレスト付近でわずかに腰を落として減速クリアし、抜けたら一気に展開する
+  if (idx === 0 && !op.flash && !onExitFloor && frac >= 0.48 && frac <= 0.78) {
+    body.setPose('crouch');
+    speed *= 0.72;
+  } else {
+    body.setPose('stand');
+    if (idx === 0 && !op.flash && !onExitFloor && frac > 0.78) speed *= 1.32;
+  }
+
   const onEntryFloor = Math.abs(body.footY - entryY) < 0.3;
   if (ally.activeStair === null && onEntryFloor) {
     // 進入点に着くまでは床を歩き、着いたらこの階段で昇降を始める（別の階段を選ばせない）
     const dEntry = Math.hypot(entry.x - body.px, entry.z - body.pz);
     if (dEntry > Math.max(0.3, ctx.cfg.stairArrive * 0.5)) {
       navigateTo(ctx, ally, entry.x, entry.z, entryY, dt, true, false, null, speed, false);
-      aimAtLook(ally, look, dt);
+      aimAtLook(ally, look, dt, Math.PI * 2.6);
       ally.progress = op.up ? t('階段下へ前進', 'Moving to the Stairs') : t('階段上へ前進', 'Moving to the Stairs');
       return;
     }
     ally.activeStair = { id: s.id, up: op.up };
     ally.stairPick = null;
   }
-  navigateTo(ctx, ally, slot.x, slot.z, exitY, dt, true, false, null, speed);
-  // 昇降中も銃口は出口へ（進行方向へは向けない）
-  aimAtLook(ally, onExitFloor ? stairSectorLook(s, op.up, idx, n, true) : look, dt, Math.PI * 2.4);
+  navigateTo(ctx, ally, slot.x, slot.z, exitY, dt, true, false, null, speed, true, stairStaggerOffset(idx));
+  // 昇降中も各自の担当セクターへ銃口を向ける（進行方向へは向けない）
+  aimAtLook(ally, onExitFloor ? stairSectorLook(s, op.up, idx, n, true) : look, dt, Math.PI * 2.8);
   ally.progress = op.up ? t('階段を警戒前進（上り）', 'Clearing Stairs (Up)') : t('階段を警戒前進（下り）', 'Clearing Stairs (Down)');
 }
 
@@ -434,6 +500,7 @@ function updateSecureStage(ctx: SquadContext, ally: AllyUnit, op: StairOp, dt: n
   const body = ally.body;
   const idx = slotIndex(op, ally);
   const hp = ally.holdPos;
+  if (!ally.engaging) body.setPose('stand');
   if (hp && !ally.engaging) {
     const d = Math.hypot(hp.x - body.px, hp.z - body.pz);
     if (d > STAIR_EXIT_ARRIVE + ARRIVE_HYST || Math.abs(hp.y - body.footY) > 0.4) {

@@ -211,12 +211,15 @@ export function navigateTo(
   excludeDoorId: string | null = null,
   speedOverride?: number,
   decelAtGoal = true,
+  stairLateralOffset = 0,
 ): void {
   const body = ally.body;
   ally.navThisFrame = true;
   const moveSpeed = speedOverride ?? ally.combat.moveSpeed;
   let routeDest: XZ = { x: goalX, z: goalZ };
   let onStairRun = false;
+  let runStair: StairMark | null = null;
+  let runUp = true;
   const sameFloor = Math.abs(destY - body.footY) <= 0.75;
   let passableReady = false;
   let passable: ReadonlySet<Collider> | undefined;
@@ -286,6 +289,8 @@ export function navigateTo(
     } else if (plan.kind === 'run' && plan.stair) {
       ally.activeStair = { id: plan.stair.id, up: plan.up ?? true };
       onStairRun = true;
+      runStair = plan.stair;
+      runUp = plan.up ?? true;
       routeDest = plan.target ?? routeDest;
     } else if (plan.kind === 'enter' && plan.stair) {
       forcedStair = { stair: plan.stair, up: plan.up ?? true };
@@ -307,6 +312,8 @@ export function navigateTo(
       ally.activeStair = { id: stair.id, up };
       ally.stairPick = null;
       onStairRun = true;
+      runStair = stair;
+      runUp = up;
       routeDest = stairRunTarget(stair, up, body.px, body.pz);
     } else {
       routeDest = entry;
@@ -314,9 +321,23 @@ export function navigateTo(
   }
 
   if (onStairRun) {
-    if (!ally.engaging && faceTravel) body.faceToward(routeDest.x, routeDest.z, Math.PI * 1.8 * dt);
-    const sd = smoothedStep(ally, routeDest, moveSpeed, Infinity, dt);
-    stepToward(body, ctx.colliders, routeDest.x, routeDest.z, sd, ctx.cfg.bodyRadius);
+    let target = routeDest;
+    if (stairLateralOffset !== 0 && runStair) {
+      const dx = runUp ? runStair.highX - runStair.lowX : runStair.lowX - runStair.highX;
+      const dz = runUp ? runStair.highZ - runStair.lowZ : runStair.lowZ - runStair.highZ;
+      const len = Math.hypot(dx, dz);
+      const distToEnd = Math.hypot(routeDest.x - body.px, routeDest.z - body.pz);
+      // 出口直前（0.45m 以内）は中央へ収束させ、踊り場への抜けを確実にする
+      if (len > 1e-4 && distToEnd > 0.45) {
+        const px = -dz / len;
+        const pz = dx / len;
+        const clamped = Math.max(-0.24, Math.min(0.24, stairLateralOffset));
+        target = { x: routeDest.x + px * clamped, z: routeDest.z + pz * clamped };
+      }
+    }
+    if (!ally.engaging && faceTravel) body.faceToward(target.x, target.z, Math.PI * 1.8 * dt);
+    const sd = smoothedStep(ally, target, moveSpeed, Infinity, dt);
+    stepToward(body, ctx.colliders, target.x, target.z, sd, ctx.cfg.bodyRadius);
     return;
   }
 
