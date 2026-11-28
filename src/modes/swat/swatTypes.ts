@@ -144,7 +144,7 @@ export const DISARM_FAIL_CHANCE = 0.15;
 export const TRAP_TRIGGER_DIST = 2.8;
 
 /** プレイヤーが抱えた人質の正面 ±この角度にいる隊員は発砲しない */
-export const HOSTAGE_COVER_DEG = 55;
+export const HOSTAGE_COVER_DEG = 65;
 
 /** 隊員同士がこれより近づいたら押し分ける（m）と、その最大速度（m/s） */
 export const SEPARATION_DIST = 0.7;

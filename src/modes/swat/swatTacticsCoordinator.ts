@@ -1034,7 +1034,7 @@ export class SwatTacticsCoordinator {
         break;
       }
     }
-    const target = holding && Math.random() < 0.22 ? 'hostage' : 'player';
+    const target = holding && Math.random() < 0.15 ? 'hostage' : 'player';
     this.host.d.onPepper?.(target);
     if (target === 'player') {
       const p = this.host.d.player.position;

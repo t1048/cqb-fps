@@ -11,18 +11,22 @@ import type { PlayerController } from '../player/PlayerController';
 import type { Subtitle } from '../ui/Subtitle';
 import type { Collider } from '../world/WorldBuilder';
 
-const GRAB_RANGE = 1.9;
+/** 拘束できる距離（m）。少し離れていても掴めるよう広めに取る */
+const GRAB_RANGE = 2.3;
 const GRAB_CONE_COS = Math.cos((70 / 2) * (Math.PI / 180));
-const GRAB_HOLD_SEC = 0.6;
+/** F 長押しで拘束が完了するまでの秒数（短くして咄嗟に盾にできる） */
+const GRAB_HOLD_SEC = 0.4;
 /** 人質を抱えている間の移動速度倍率（平常時の中心値。実際は抵抗で不規則に揺らぐ） */
-const CARRY_SPEED = 0.78;
-/** 抵抗（0〜100）が 100 に達すると人質が振りほどいて逃げる */
-const RESIST_PER_SEC = 2.2;
-const RESIST_MOVING_PER_SEC = 1.1;
-const RESIST_PER_SHOT = 3;
-const RESIST_PER_PEPPER = 12;
-/** 振りほどかれた人質を再び掴めるまでの秒数 */
-const REGRAB_COOLDOWN = 10;
+const CARRY_SPEED = 0.85;
+/** 抵抗（0〜100）が 100 に達すると人質が振りほどいて逃げる。増え方は緩やかで、盾として長く使える */
+const RESIST_PER_SEC = 1.2;
+const RESIST_MOVING_PER_SEC = 0.6;
+const RESIST_PER_SHOT = 1.5;
+const RESIST_PER_PEPPER = 7;
+/** 拘束していない民間人の抵抗が毎秒これだけ落ち着く（離せば回復する） */
+const RESIST_DECAY_PER_SEC = 4;
+/** 振りほどかれた人質を再び掴めるまでの秒数（短めで、すぐ掴み直せる） */
+const REGRAB_COOLDOWN = 4;
 /**
  * 立ち位置はカメラ基準（リーンで目線が横に動いても画面中央に戻さない）。
  * 頭は目線の高さ（約 1.56m）にあり半幅約 0.11m、肩の張りは約 0.30m。
@@ -57,6 +61,7 @@ const pickLine = (): string => {
 
 /**
  * 容疑者モード: 民間人を人質として拘束し連れ回す（人間の盾）。
+ * 抵抗は離している間に下がる（掴み直しやすい）。
  * 人質は抵抗する: 足取りが不規則に鈍り、不定期に暴れて（視点ブレ・盾が外れる）、抵抗が満タンになると振りほどいて逃げる。
  * F 長押しで拘束、拘束中に F で解放。拘束中は移動が遅くなり、人質はカメラの前方左（左が壁なら右）に立たされる。
  * SWAT は射線上に民間人がいると発砲しないため、正面からの撃ち合いを避けられる（側面・背後は無防備）。
@@ -131,16 +136,16 @@ export class HostageGrab {
     return this.held;
   }
 
-  /** 盾が有効か（人質が暴れている最中は SWAT の正面でも盾にならない） */
+  /** 盾が有効か（人質が暴れている最中は SWAT の正面でも盾にならないが、抵抗が 40 未満の軽いもがきなら盾は保たれる） */
   get shieldEffective(): boolean {
-    return this.held !== null && this.struggleLeft <= 0;
+    return this.held !== null && (this.struggleLeft <= 0 || (this.resist.get(this.held.id) ?? 0) < 40);
   }
 
   /** SWAT のペッパーボールが人質に当たった */
   onHostagePeppered(): void {
     if (!this.held) return;
     this.addResist(this.held, RESIST_PER_PEPPER);
-    this.struggleLeft = Math.max(this.struggleLeft, 0.9);
+    this.struggleLeft = Math.max(this.struggleLeft, 0.6);
     this.subtitle.show(
       t('人質「目が、目がぁっ！」— ペッパーボールで人質が暴れ出した', 'Hostage: "My eyes, my eyes!" — Hostage panics from pepperball'),
       1.4,
@@ -203,6 +208,12 @@ export class HostageGrab {
       if (t - dt <= 0) this.cooldown.delete(id);
       else this.cooldown.set(id, t - dt);
     }
+    // 拘束していない民間人の抵抗は時間とともに下がる
+    for (const [id, v] of this.resist) {
+      if (this.held?.id === id) continue;
+      if (v - RESIST_DECAY_PER_SEC * dt <= 0) this.resist.delete(id);
+      else this.resist.set(id, v - RESIST_DECAY_PER_SEC * dt);
+    }
     const c = this.held;
     this.renderResist(c ? (this.resist.get(c.id) ?? 0) : -1);
     if (!c) return;
@@ -225,17 +236,17 @@ export class HostageGrab {
     // 不規則な足取り: 2 つの周期の違う揺らぎ + 抵抗で全体が鈍る
     this.phase += dt;
     const wobble = 0.5 * Math.sin(this.phase * 2.3) + 0.5 * Math.sin(this.phase * 0.77 + 1.3);
-    let speed = CARRY_SPEED + 0.16 * wobble - r * 0.0022;
+    let speed = CARRY_SPEED + 0.16 * wobble - r * 0.0015;
     // もがき（暴れる）: 不定期に発生。発生中はほとんど進めず視点がぶれ、盾が外れる
     this.nextStruggle -= dt;
     if (this.struggleLeft <= 0 && this.nextStruggle <= 0) {
-      this.struggleLeft = 0.35 + Math.random() * (0.4 + r * 0.006);
-      this.nextStruggle = (1.0 + Math.random() * 3.2) * (1 - r / 160);
+      this.struggleLeft = 0.25 + Math.random() * (0.25 + r * 0.004);
+      this.nextStruggle = (2.5 + Math.random() * 4) * (1 - r / 200);
       if (Math.random() < 0.35) this.subtitle.show(pickLine(), 1.0);
     }
     if (this.struggleLeft > 0) {
       this.struggleLeft -= dt;
-      speed = 0.18;
+      speed = 0.35;
       const k = 0.5 + r / 200;
       this.player.addViewKick((Math.random() - 0.5) * 0.012 * k, (Math.random() - 0.5) * 0.03 * k);
     }
@@ -276,7 +287,7 @@ export class HostageGrab {
     const p = this.player.position;
     c.breakFree(p.x, p.z);
     if (c.alive) this.weapons.addTarget(c);
-    this.resist.set(c.id, 55);
+    this.resist.set(c.id, 35);
     this.cooldown.set(c.id, REGRAB_COOLDOWN);
     this.player.addViewKick(0.03, (Math.random() - 0.5) * 0.08);
     this.subtitle.show(t('人質が拘束を振りほどいて逃げた！', 'The hostage broke free and escaped!'), 1.8);
