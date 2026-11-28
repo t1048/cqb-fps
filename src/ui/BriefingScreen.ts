@@ -594,7 +594,9 @@ export class BriefingScreen {
     b.disabled = opts.locked;
     const head = document.createElement('div');
     head.className = 'bfs-lo-name';
-    head.appendChild(document.createTextNode(opts.locked ? `🔒 ${opts.name}` : opts.name));
+    const label = document.createElement('span');
+    label.textContent = opts.locked ? `🔒 ${opts.name}` : opts.name;
+    head.appendChild(label);
     if (opts.active && !opts.locked) {
       const ck = document.createElement('span');
       ck.textContent = '✓';
