@@ -3,6 +3,7 @@ import type { NoiseKind } from '../core/events';
 import { hasLineOfSight } from '../weapons/Flashbang';
 import { collidersNear } from '../world/ColliderIndex';
 import type { Collider } from '../world/WorldBuilder';
+import type { StairMark } from '../world/Walk';
 import { blockedAt } from './EngageBehavior';
 
 /**
@@ -71,6 +72,55 @@ export function doorwaysOfRoom(doors: readonly Doorway[], room: RoomRect): Doorw
     const insideZ = room.depth / 2 - Math.abs(d.z - room.z);
     if (Math.min(insideX, insideZ) > 0.9) continue;
     out.push(d);
+  }
+  return out;
+}
+
+/**
+ * 階段の昇降口を待ち伏せの入口として扱う（階段の先の階から上がって/下りてくる者を、昇降口の先で待つ）。
+ * floorY の階にある昇降口（上階側 = 上り切った所、下階側 = 下り切った所）を返す。
+ * 法線は「階段から床へ出る向き」。他階の床高 otherY は相手が来る階（id の末尾で上下を区別）。
+ */
+export function stairDoorways(
+  stairs: readonly StairMark[],
+  floorY: number,
+): (Doorway & { otherY: number })[] {
+  const out: (Doorway & { otherY: number })[] = [];
+  for (const s of stairs) {
+    const dx = s.highX - s.lowX;
+    const dz = s.highZ - s.lowZ;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) continue;
+    const ux = dx / len;
+    const uz = dz / len;
+    if (Math.abs(s.topY - floorY) <= 0.75) {
+      out.push({
+        id: `stair:${s.id}:top`,
+        x: s.approachHigh.x,
+        z: s.approachHigh.z,
+        nx: ux,
+        nz: uz,
+        ax: -uz,
+        az: ux,
+        sillY: s.topY,
+        width: 1.0,
+        otherY: s.baseY,
+      });
+    }
+    if (Math.abs(s.baseY - floorY) <= 0.75) {
+      out.push({
+        id: `stair:${s.id}:bottom`,
+        x: s.approachLow.x,
+        z: s.approachLow.z,
+        nx: -ux,
+        nz: -uz,
+        ax: -uz,
+        az: ux,
+        sillY: s.baseY,
+        width: 1.0,
+        otherY: s.topY,
+      });
+    }
   }
   return out;
 }

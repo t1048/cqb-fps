@@ -527,6 +527,11 @@ export function throwFlashbangIntoRoom(ctx: SquadContext, thrower: AllyUnit, por
   }
 
   const target: Vec3 = { x: landX, y: portal.sillY + 0.08, z: landZ };
+  throwFlashbangAt(ctx, thrower, start, target);
+}
+
+/** start（投擲者の目の位置付近）から target の床へ閃光弾を投げる。携行数を 1 減らす。 */
+export function throwFlashbangAt(ctx: SquadContext, thrower: AllyUnit, start: THREE.Vector3, target: Vec3): void {
   const fuseSec = Math.max(0.35, ctx.cfg.flashDelay);
 
   if (ctx.flashbang) {

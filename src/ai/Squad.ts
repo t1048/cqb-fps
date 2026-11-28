@@ -112,6 +112,7 @@ import {
   updateRestraining,
   updateSweeping,
 } from './squad/squadClearing';
+import { updateStairPhase } from './squad/squadStairs';
 import {
   checkWeaknessRush,
   createAllyEngageBus,
@@ -287,7 +288,7 @@ export class SquadSystem implements SquadContext {
     const yaw0 = Number.isFinite(player.yawRad) ? player.yawRad : 0;
     this.followHeading = { x: -Math.sin(yaw0), z: -Math.cos(yaw0) };
     this.lastPlayerPos = { x: player.position.x, z: player.position.z };
-    this.menu = new CommandMenu(cfg, player, doors, colliders, entities, rooms);
+    this.menu = new CommandMenu(cfg, player, doors, colliders, entities, rooms, stairs);
     this.menu.setGearProvider({
       gear: () => ({ flash: this.flashesLeft, gas: this.gasLeft }),
       trapKnown: (doorId) => this.traps?.isDiscovered(doorId) === true,
@@ -475,6 +476,8 @@ export class SquadSystem implements SquadContext {
         checkStarted: false,
         disarmLeft: 0,
         disarmStarted: false,
+        stairOp: null,
+        stairStartT: -1,
         targetWrapper,
         label,
         getAABB: () => body.getAABB(),
@@ -497,6 +500,8 @@ export class SquadSystem implements SquadContext {
             ally.rushTimer > 0 ||
             ally.order === 'hold' ||
             ally.order === 'overwatch' ||
+            ally.phase === 'stair_climb' ||
+            ally.phase === 'stair_secure' ||
             isRoomConfined(ally),
         },
       );
@@ -1022,6 +1027,12 @@ export class SquadSystem implements SquadContext {
 
       case 'restraining':
         updateRestraining(this, ally, dt);
+        return;
+
+      case 'stair_stack':
+      case 'stair_climb':
+      case 'stair_secure':
+        updateStairPhase(this, ally, dt);
         return;
 
       case 'secured': {

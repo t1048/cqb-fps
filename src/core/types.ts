@@ -1323,7 +1323,11 @@ export type SquadOrder =
   /** ドアのチェック（施錠・ブービートラップ確認）。スタック中の先頭が行う */
   | 'check'
   /** ドアのブービートラップ解除（確認済みのトラップ） */
-  | 'disarm';
+  | 'disarm'
+  /** 階段クリア: 階段口にスタックし、上階（下階）の出口へ銃口を向けたまま縦列で昇降して出口を確保する */
+  | 'stairClear'
+  /** 閃光＆階段クリア: 出口へ閃光弾を投げ込み、炸裂後に昇降して出口を確保する */
+  | 'stairFlashClear';
 
 export type SquadElement = 'gold' | 'alpha' | 'bravo';
 

@@ -22,6 +22,7 @@ import {
   ambushProbability,
   doorwaysOfRoom,
   findAmbushSpot,
+  stairDoorways,
   pointInRoom,
   roomRectOf,
   type AmbushSpot,
@@ -912,6 +913,18 @@ export class Suspect implements HitTarget {
       })),
       rect,
     );
+    // 別の階からの物音: その階へ通じる階段の昇降口（上り切った所 / 下り切った所）で待ち伏せる。
+    // 漫然と階段を昇降してくる者は、頭や足から先に昇降口へ姿を見せる
+    const noiseY = resolveFloorY(pos, this.ctx.rooms, kind);
+    if (Math.abs(noiseY - rect.floorY) > 0.75 && this.ctx.stairs && this.ctx.stairs.length > 0) {
+      const stairCand = stairDoorways(this.ctx.stairs, rect.floorY).filter(
+        (d) => Math.abs(d.otherY - noiseY) <= 0.75 && pointInRoom(rect, d.x, d.z, d.sillY, 0.6),
+      );
+      if (stairCand.length > 0) {
+        cand.length = 0;
+        cand.push(...stairCand);
+      }
+    }
     if (cand.length === 0) return false;
     cand.sort((a, b) => Math.hypot(a.x - pos.x, a.z - pos.z) - Math.hypot(b.x - pos.x, b.z - pos.z));
     const entry = cand[0]!;
