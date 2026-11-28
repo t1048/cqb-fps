@@ -127,6 +127,20 @@ export interface AllyScoutFeed {
   progress: number;
 }
 
+/** ワンド先端カメラの視錐台（ミニマップの視認セル塗りつぶし用） */
+export interface WandCoverageView {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  fovDeg: number;
+  aspect: number;
+  range: number;
+  /** 塗りつぶす床の高さ（覗いている階） */
+  floorY: number;
+}
+
 /** 映像内マーカー（発見済みの接触） */
 interface FeedMark {
   id: string;
@@ -182,6 +196,10 @@ export class Optiwand {
   private allyPose: WandPose | null = null;
   private allyFeedId: string | null = null;
   private allyFeedT = 0;
+  /** 隊員映像のドア床高さ（視認セル用） */
+  private allyFloorY = 0;
+  /** 今フレーム、プレイヤー／隊員のワンド映像に映っている接触（発見待ちを含む） */
+  private readonly visibleNow = new Map<string, WandContactSource>();
   private readonly eyeTmp = new THREE.Vector3();
   private readonly eyeScratch = new THREE.Vector3();
   private readonly vpTmp = new THREE.Vector4();
@@ -288,6 +306,31 @@ export class Optiwand {
 
   get currentPose(): WandPose | null {
     return this.pose;
+  }
+
+  /**
+   * 今映像が出ているワンド先端カメラ（プレイヤー自身・隊員のドア下偵察）の視錐台。
+   * 分隊の視認セル判定に渡し、ワンド映像に映った床もミニマップで塗りつぶす。
+   */
+  coverageViews(): WandCoverageView[] {
+    const out: WandCoverageView[] = [];
+    const { cfg } = this.d;
+    const aspect = cfg.renderSize[0] / Math.max(1, cfg.renderSize[1]);
+    if (this.active && this.pose) {
+      const p = this.pose;
+      const floorY = this.lockedDoor ? this.lockedDoor.sillY : this.d.player.position.y;
+      out.push({ x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, fovDeg: cfg.fovDeg, aspect, range: cfg.viewRange, floorY });
+    }
+    if (this.allyPose && this.allyFeedT >= cfg.deploySec) {
+      const p = this.allyPose;
+      out.push({ x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, fovDeg: cfg.fovDeg, aspect, range: cfg.viewRange, floorY: this.allyFloorY });
+    }
+    return out;
+  }
+
+  /** 今フレームいずれかのワンド映像に映っている容疑者・民間人（発見待ちの蓄積を問わない）。 */
+  visibleContacts(): Iterable<WandContactSource> {
+    return this.visibleNow.values();
   }
 
   toolLabel(): string | null {
@@ -408,6 +451,7 @@ export class Optiwand {
       if (left - dt <= 0) this.noticeCd.delete(id);
       else this.noticeCd.set(id, left - dt);
     }
+    this.visibleNow.clear();
     this.updateAllyFeed(dt);
     if (!this.equippedFlag) return;
 
@@ -487,11 +531,9 @@ export class Optiwand {
    */
   private updateAllyFeed(dt: number): void {
     const feed = this.d.allyFeed?.() ?? null;
-    if (!feed || this.viewingFlag) {
-      if (!feed) {
-        this.allyFeedId = null;
-        this.allyPose = null;
-      } else this.allyPose = null;
+    if (!feed) {
+      this.allyFeedId = null;
+      this.allyPose = null;
       return;
     }
     const { cfg, intel, rooms, colliders } = this.d;
@@ -506,17 +548,21 @@ export class Optiwand {
     const sweep = -Math.cos(Math.min(1, feed.progress / 0.9) * Math.PI);
     const pose = computeDoorPose(feed.door, { x: feed.x, z: feed.z }, cfg, this.d.doorThickness, sweep * lim, 6 * DEG2RAD);
     this.allyPose = pose;
-    this.camera.position.set(pose.x, pose.y, pose.z);
-    this.camera.rotation.set(pose.pitch, pose.yaw, 0);
-    this.camera.updateMatrixWorld(true);
+    this.allyFloorY = feed.door.sillY;
     // 隊員の映像は確認に専念しているので見落としにくい（発見に要する時間を短めに）
     const allyCfg = { ...cfg, spotSec: cfg.spotSec * 0.6 };
     const { visible } = this.allySpotter.update(dt, pose, allyCfg, this.camera.aspect, this.collectSources(), colliders);
     for (const c of visible) {
+      this.visibleNow.set(c.id, c);
       if (!this.allySpotter.hasSpotted(c.id)) continue;
       const room = roomAtPoint(rooms, c.chest.x, c.chest.z, c.chest.y - 1.2);
       if (room) intel.reportContact(room.id, this.toContact(c), 'ally');
     }
+    // プレイヤー自身がワンドを伸ばしている間は PiP を自分の映像に譲る（偵察・塗りつぶしは続ける）
+    if (this.viewingFlag) return;
+    this.camera.position.set(pose.x, pose.y, pose.z);
+    this.camera.rotation.set(pose.pitch, pose.yaw, 0);
+    this.camera.updateMatrixWorld(true);
     this.marks = this.toMarks(visible, pose, this.allySpotter);
     this.lblEl.textContent = `OPTIWAND · ${feed.callsign}`;
     this.hintEl.textContent = t('隊員のドア下ワンド映像', 'Teammate under-door feed');
@@ -606,6 +652,7 @@ export class Optiwand {
     const aspect = this.camera.aspect;
     const { visible, fresh } = this.spotter.update(dt, pose, cfg, aspect, this.collectSources(), colliders);
     this.marks = this.toMarks(visible, pose, this.spotter);
+    for (const c of visible) this.visibleNow.set(c.id, c);
 
     // 一度「発見」した対象は、見えている間は位置・武装状態を更新し続ける
     for (const c of visible) {
@@ -686,6 +733,11 @@ export class Optiwand {
     if (own) {
       this.lblEl.textContent = 'OPTIWAND';
       const p = this.pose!;
+      this.camera.position.set(p.x, p.y, p.z);
+      this.camera.rotation.set(p.pitch, p.yaw, 0);
+      this.camera.updateMatrixWorld(true);
+    } else {
+      const p = this.allyPose!;
       this.camera.position.set(p.x, p.y, p.z);
       this.camera.rotation.set(p.pitch, p.yaw, 0);
       this.camera.updateMatrixWorld(true);

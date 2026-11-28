@@ -76,6 +76,8 @@ const EMPTY_COVERAGE: readonly Cell[] = [];
 const ENEMY_DOT_HOLD_SEC = 2.5;
 /** ミニマップの敵赤点: 保持後にフェードアウトする秒数 */
 const ENEMY_DOT_FADE_SEC = 1.5;
+/** ミニマップの民間人（人質）点: 見失った後も残す最小の濃さ */
+const CIVILIAN_DOT_MIN_ALPHA = 0.45;
 
 let sharedRenderer: THREE.WebGLRenderer | null = null;
 let sharedEnvTex: THREE.Texture | null = null;
@@ -136,7 +138,10 @@ class App {
   private readonly replyProjScratch = new THREE.Vector3();
   private readonly replyEyeScratch = new THREE.Vector3();
   private readonly minimapEyeScratch = new THREE.Vector3();
-  private readonly enemySightings = new Map<string, { x: number; y: number; z: number; t: number }>();
+  private readonly enemySightings = new Map<
+    string,
+    { x: number; y: number; z: number; t: number; kind: 'threat' | 'civilian' | 'unarmed' }
+  >();
   private readonly scene = new THREE.Scene();
   private readonly equipmentScene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -377,9 +382,10 @@ class App {
     this.equipmentScene.add(equipmentLight);
     this.subtitle = new Subtitle(document.body);
     if (!suspect) {
-      // オプティワンド（プレイヤー）・ミラー確認（隊員）で見つけた容疑者もミニマップに一時表示
+      // オプティワンド（プレイヤー）・ミラー確認（隊員）で見つけた容疑者・民間人もミニマップに点で表示
       this.scoutIntel.onContact = (c) => {
-        if (c.kind === 'suspect') this.recordEnemySighting(c.id, c.x, c.y, c.z);
+        const kind = c.kind === 'civilian' ? 'civilian' : c.armed ? 'threat' : 'unarmed';
+        this.recordEnemySighting(c.id, c.x, c.y, c.z, kind);
       };
       this.optiwand = new Optiwand({
         player: this.player,
@@ -397,6 +403,8 @@ class App {
         host: document.body,
         allyFeed: () => this.squad.getScoutFeed(),
       });
+      // ワンド映像に映った床も、人の視線と同じく視認済みとしてミニマップを塗りつぶす
+      this.squad.extraCoverageViews = () => this.optiwand?.coverageViews() ?? [];
     }
     this.bus.on('suspectStateChanged', ({ id, from, to }) => {
       const reply =
@@ -1219,7 +1227,13 @@ class App {
   }
 
   /** ミニマップの敵赤点: 発見から一定時間で消える（最後の確認位置に残り、徐々に薄くなる） */
-  private recordEnemySighting(id: string, x: number, y: number, z: number): void {
+  private recordEnemySighting(
+    id: string,
+    x: number,
+    y: number,
+    z: number,
+    kind: 'threat' | 'civilian' | 'unarmed' = 'threat',
+  ): void {
     const now = performance.now() / 1000;
     const rec = this.enemySightings.get(id);
     if (rec) {
@@ -1227,41 +1241,70 @@ class App {
       rec.y = y;
       rec.z = z;
       rec.t = now;
+      rec.kind = kind;
     } else {
-      this.enemySightings.set(id, { x, y, z, t: now });
+      this.enemySightings.set(id, { x, y, z, t: now, kind });
     }
   }
 
+  /** プレイヤーの視界（40m 以内・画面内・視線が通る）か隊員の視線に点が入っているか */
+  private sightedByTeam(point: Vec3, eye: Vec3): boolean {
+    if (
+      Math.hypot(point.x - eye.x, point.z - eye.z) <= 40 &&
+      this.player.inCameraView(point) &&
+      hasLineOfSight(this.world.colliders, eye, point)
+    ) {
+      return true;
+    }
+    return this.squad.allySeesPoint(point);
+  }
+
   /**
-   * ミニマップ用: プレイヤー・隊員の視界、オプティワンド/ミラーで確認した容疑者（赤点表示）。
-   * 見えている間は現在位置を追従し、見失うと最後の確認位置で ENEMY_DOT_HOLD_SEC 保持後にフェードして消える。
+   * ミニマップ用: プレイヤー・隊員の視界、オプティワンド（自分・隊員のドア下偵察）の映像に映った
+   * 容疑者（赤）・投降者（灰）・民間人/人質（黄）を点で表示する。
+   * 見えている間は現在位置を追従し、見失うと最後の確認位置で保持後にフェードする（民間人は薄く残す）。
    */
-  private minimapVisibleEnemies(): { x: number; y: number; z: number; alpha: number }[] {
+  private minimapVisibleEnemies(): { x: number; y: number; z: number; alpha: number; kind: 'threat' | 'civilian' | 'unarmed' }[] {
     const eye = this.player.getEyePosition(this.minimapEyeScratch);
+    const wandSeen = new Set<string>();
+    if (this.optiwand) for (const c of this.optiwand.visibleContacts()) wandSeen.add(c.id);
     for (const s of this.entities.suspects.values()) {
-      if (!s.alive || s.state === SuspectState.ARRESTED) {
+      if (s.friendly || !s.alive || s.state === SuspectState.ARRESTED) {
         this.enemySightings.delete(s.id);
         continue;
       }
       const chest = s.body.chestPos();
-      const seenByPlayer =
-        Math.hypot(chest.x - eye.x, chest.z - eye.z) <= 40 &&
-        this.player.inCameraView(chest) &&
-        hasLineOfSight(this.world.colliders, eye, chest);
-      if (seenByPlayer || this.squad.allySeesPoint(chest)) {
-        this.recordEnemySighting(s.id, s.body.px, s.body.footY, s.body.pz);
+      if (wandSeen.has(s.id) || this.sightedByTeam(chest, eye)) {
+        const kind = s.state === SuspectState.SURRENDER ? 'unarmed' : 'threat';
+        this.recordEnemySighting(s.id, s.body.px, s.body.footY, s.body.pz, kind);
+      }
+    }
+    for (const c of this.entities.civilians.values()) {
+      if (!c.alive || c.evacuated) {
+        this.enemySightings.delete(c.id);
+        continue;
+      }
+      const chest = c.body.chestPos();
+      if (wandSeen.has(c.id) || this.sightedByTeam(chest, eye)) {
+        this.recordEnemySighting(c.id, c.body.px, c.body.footY, c.body.pz, 'civilian');
       }
     }
     const now = performance.now() / 1000;
-    const out: { x: number; y: number; z: number; alpha: number }[] = [];
+    const out: { x: number; y: number; z: number; alpha: number; kind: 'threat' | 'civilian' | 'unarmed' }[] = [];
     for (const [id, rec] of this.enemySightings) {
       const age = now - rec.t;
+      // 民間人・人質はほとんど動かないので、見失っても最後の確認位置に薄く残す
+      if (rec.kind === 'civilian') {
+        const alpha = age <= ENEMY_DOT_HOLD_SEC ? 1 : Math.max(CIVILIAN_DOT_MIN_ALPHA, 1 - (age - ENEMY_DOT_HOLD_SEC) / ENEMY_DOT_FADE_SEC);
+        out.push({ x: rec.x, y: rec.y, z: rec.z, alpha, kind: rec.kind });
+        continue;
+      }
       if (age >= ENEMY_DOT_HOLD_SEC + ENEMY_DOT_FADE_SEC) {
         this.enemySightings.delete(id);
         continue;
       }
       const alpha = age <= ENEMY_DOT_HOLD_SEC ? 1 : 1 - (age - ENEMY_DOT_HOLD_SEC) / ENEMY_DOT_FADE_SEC;
-      out.push({ x: rec.x, y: rec.y, z: rec.z, alpha });
+      out.push({ x: rec.x, y: rec.y, z: rec.z, alpha, kind: rec.kind });
     }
     return out;
   }
@@ -1270,8 +1313,8 @@ class App {
   private minimapContacts(): { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] {
     const out: { x: number; y: number; z: number; kind: 'threat' | 'civilian' | 'unarmed' }[] = [];
     for (const c of this.scoutIntel.all()) {
-      // 容疑者は時間で消える赤点（minimapVisibleEnemies）で表示するため、ここでは民間人のみ
-      if (c.kind !== 'civilian') continue;
+      // 視認した人物は minimapVisibleEnemies の点で表示する。ここは点が消えた後の民間人の記録だけ
+      if (c.kind !== 'civilian' || this.enemySightings.has(c.id)) continue;
       out.push({ x: c.x, y: c.y, z: c.z, kind: 'civilian' });
     }
     return out;

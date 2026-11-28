@@ -351,6 +351,22 @@ export interface RestrainTask {
  * `SquadSystem` と `src/ai/squad/*` 各行動モジュール間で共有する状態・依存コンテキスト。
  * `SquadSystem` 自身がこれを実装する。
  */
+/** 視認セル判定に加えるカメラ視錐台（yaw/pitch は前方 = (-sin yaw·cos pitch, sin pitch, -cos yaw·cos pitch)） */
+export interface CoverageCamera {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  /** 垂直画角（度） */
+  fovDeg: number;
+  aspect: number;
+  /** 見える距離(m) */
+  range: number;
+  /** 塗りつぶす床の高さ */
+  floorY: number;
+}
+
 export interface SquadContext {
   readonly cfg: SquadConfig;
   readonly player: PlayerController;
@@ -400,6 +416,10 @@ export interface SquadContext {
 
   sampleTimer: number;
   coverageCursor: number;
+  /**
+   * 人の視線以外で床を確認できるカメラ（オプティワンド先端など）。視錐台に入り視線が通るセルを視認扱いにする。
+   */
+  extraCoverageViews?: (() => readonly CoverageCamera[]) | null;
   doorStages: string;
   ack: string;
   ackLeft: number;

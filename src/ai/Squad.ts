@@ -75,6 +75,7 @@ import {
   type AllyUnit,
   type C2BlastFx,
   type Cell,
+  type CoverageCamera,
   type DoorCheckResult,
   type PortalGroup,
   type SquadContext,
@@ -169,6 +170,8 @@ export class SquadSystem implements SquadContext {
   sampleTimer = 0;
   /** 視認セル判定の巡回位置（毎フレーム一部ずつ処理する） */
   coverageCursor = 0;
+  /** オプティワンド等の先端カメラ（視認セルの塗りつぶしに加える） */
+  extraCoverageViews: (() => readonly CoverageCamera[]) | null = null;
   doorStages = '';
   ack = '';
   ackLeft = 0;
