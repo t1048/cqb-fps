@@ -482,11 +482,15 @@ export function hasClothColor(root: THREE.Object3D, hex: number): boolean {
 
 // ---------- Order Menu Label Matchers (Opaque-Box CommandMenu Driving) ----------
 
+/** CommandMenu の 1 行あたりのマウス移動量（offsetPx / 28 が選択行） */
+const MENU_ROW_PX = 28;
+
 const ORDER_MENU_PATTERNS: Record<ParitySquadOrder, RegExp> = {
   stack: /スタック/,
   clear: /オープン|突入＆クリア|突入クリア/,
   flashClear: /フラッシュ|閃光/,
-  breachClear: /ブリーチ|強行突入/,
+  // 「C2＆クリア（爆破ブリーチ突入）」に誤マッチしないよう強行突入のみで判定する
+  breachClear: /強行突入/,
   c2Clear: /C2|爆破/i,
   gasClear: /ガス|催涙|CS/i,
   pieDoor: /扉開放|開放警戒/,
@@ -495,6 +499,11 @@ const ORDER_MENU_PATTERNS: Record<ParitySquadOrder, RegExp> = {
   hold: /現在位置で待機|現在位置待機/,
   follow: /追従/,
   restrain: /確保/,
+  mirror: /ミラー確認/,
+  check: /ドアチェック/,
+  disarm: /トラップ解除/,
+  stairClear: /^階段クリア/,
+  stairFlashClear: /フラッシュ＆階段クリア/,
 };
 
 // ---------- SquadHarness ----------
@@ -753,27 +762,20 @@ export function createSquadHarness(opts: SquadHarnessOptions): SquadHarness {
     if (!input.onOrderMenu) return false;
     input.onOrderMenu('open', 0);
 
+    // メニューは番号を持たず、開いた直後は「キャンセル」行が選択されている。
+    // マウス上下（28px/行）で目的の行まで動かして confirm する（実機の操作と同じ）。
     const rows = dom.document.querySelectorAll('.cqb-cmd-row') as FakeElement[];
     const pattern = ORDER_MENU_PATTERNS[order];
-    let pickedNum: number | null = null;
-    for (const row of rows) {
-      if (row.classList.contains('disabled')) continue;
-      const numEl = row.querySelector('.cqb-cmd-num');
-      const rawNum = Number.parseInt(numEl?.textContent ?? '', 10);
-      if (!Number.isFinite(rawNum) || rawNum <= 0) continue;
-      const text = row.textContent;
-      if (pattern.test(text)) {
-        pickedNum = rawNum;
-        break;
-      }
-    }
+    const activeIdx = rows.findIndex((row) => row.classList.contains('active'));
+    const targetIdx = rows.findIndex((row) => !row.classList.contains('disabled') && pattern.test(row.textContent));
 
-    if (pickedNum === null) {
+    if (activeIdx < 0 || targetIdx < 0) {
       input.onOrderMenu('cancel', 0);
       return false;
     }
 
-    input.onOrderMenu('select', pickedNum);
+    input.onOrderMenu('move', (targetIdx - activeIdx) * MENU_ROW_PX);
+    input.onOrderMenu('confirm', 0);
     return true;
   };
 

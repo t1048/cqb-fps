@@ -326,7 +326,9 @@ describe('Tier 2 — M2 Boundary & Corner Cases (F6–F9)', () => {
       door.dispose();
     });
 
-    it('F8.B4: Killing SWAT unit mid-C2-arming cancels detonation cleanly (no phantom explosion)', () => {
+    // 設置途中（未起爆・時限未開始）の隊員が倒れたら爆薬は起爆しない。
+    // 設置が終わり時限が動き出した爆薬はチームの時限で爆ぜる（設置者が倒れても止まらない: 47a5cc8）。
+    it('F8.B4: Killing SWAT unit mid-C2-planting cancels detonation cleanly (no phantom explosion)', () => {
       const map = makeSingleRoomMap({ lockedDoor: true });
       const h = track(
         createSwatHarness({
@@ -347,7 +349,50 @@ describe('Tier 2 — M2 Boundary & Corner Cases (F6–F9)', () => {
         h.bus.emit('entityHit', { targetId: id, shooter: 'player', damage: 200, pos: { x: 1, y: 1, z: 6 } });
       }
       h.team.beginAssault();
-      // Wait for first c2Beep, then kill the breacher
+      // 設置が始まったら（時限開始＝最初の c2Beep より前に）設置役を倒す
+      let sawPlant = false;
+      for (let i = 0; i < 1200; i++) {
+        h.step(0.05, 0.05);
+        const breacher = h.team.hunters[0]!;
+        if (breacher.c2Phase === 'plant' && breacher.c2Timer > 0) {
+          sawPlant = true;
+          expect(h.recorder.count('c2Beep')).toBe(0);
+          h.bus.emit('entityHit', {
+            targetId: 'swat_1',
+            shooter: 'player',
+            damage: 200,
+            pos: { x: breacher.body.px, y: 1, z: breacher.body.pz },
+          });
+          break;
+        }
+      }
+      expect(sawPlant).toBe(true);
+      h.step(8.0, 0.05);
+      expect(h.recorder.count('c2Beep')).toBe(0);
+      expect(h.recorder.count('c2Detonated')).toBe(0);
+    });
+
+    it('F8.B4b: An armed (fuse running) C2 still detonates on the team fuse after the planter is killed', () => {
+      const map = makeSingleRoomMap({ lockedDoor: true });
+      const h = track(
+        createSwatHarness({
+          map,
+          spawns: [
+            { x: 0, y: 0, z: 5.5 },
+            { x: 1.2, y: 0, z: 6.0 },
+            { x: -1.2, y: 0, z: 6.0 },
+            { x: 2.4, y: 0, z: 6.0 },
+            { x: -2.4, y: 0, z: 6.0 },
+          ],
+          count: 5,
+          playerPos: { x: 0, y: 0, z: -2.0 },
+          startAssault: false,
+        }),
+      );
+      for (const id of ['swat_2', 'swat_3', 'swat_4', 'swat_5']) {
+        h.bus.emit('entityHit', { targetId: id, shooter: 'player', damage: 200, pos: { x: 1, y: 1, z: 6 } });
+      }
+      h.team.beginAssault();
       let sawBeep = false;
       for (let i = 0; i < 1200; i++) {
         h.step(0.05, 0.05);
@@ -363,8 +408,8 @@ describe('Tier 2 — M2 Boundary & Corner Cases (F6–F9)', () => {
         }
       }
       expect(sawBeep).toBe(true);
-      h.step(5.0, 0.05);
-      expect(h.recorder.count('c2Detonated')).toBe(0);
+      h.step(8.0, 0.05);
+      expect(h.recorder.count('c2Detonated')).toBe(1);
     });
 
     it('F8.B5: C2 breach on a booby-trapped door handles trap interaction without throwing or infinite recursion', () => {
