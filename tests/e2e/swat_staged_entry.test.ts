@@ -48,37 +48,35 @@ function setup(opts: { trapped?: boolean; entities?: EntityDef[]; locked?: boole
   return { h, door, aim, pressZ };
 }
 
-describe('Z の 3 段階（実機）', () => {
-  it('Z#1 スタック（突入しない）→ Z#2 チェック（トラップを発見・報告）→ Z#3 解除してオープン&クリア（起爆しない）', () => {
-    const { h, door, pressZ } = setup({ trapped: true });
-    h.squad.rand = () => 0; // チェックは必ず発見。解除失敗なし（failChance 判定は rand < failChance… 下で個別に調整）
+describe('Z の段階（実機）', () => {
+  // 閉じた未チェックのドアへのスタックは、そのままドアチェック（罠・施錠）も行う（ddabde7）。
+  // そのため Z は「Z#1 スタック＆チェック → Z#2 （罠があれば解除してから）オープン&クリア」の 2 段階。
+  it('Z#1 スタック＆チェック（突入しない・トラップを発見して報告）→ Z#2 解除してオープン&クリア（起爆しない）', () => {
+    const { h, door, aim, pressZ } = setup({ trapped: true });
+    h.squad.rand = () => 0; // チェックは必ず発見
     let blasts = 0;
     h.bus.on('doorTrapDetonated', () => blasts++);
 
-    // Z#1: スタック。まだドアは開けない
+    aim();
+    expect(h.squad.quickOrderHint(1)).toContain('スタック＆ドアチェック');
+
+    // Z#1: スタック＆チェック。まだドアは開けない
     pressZ();
     for (const a of h.squad.allies) expect(a.order).toBe('stack');
-    h.step(8);
+    h.step(1);
     expect(door.angle).toBe(0);
-    expect(h.squad.quickOrderHint(1)).toContain('チェック');
-    expect(h.squad.doorChecks.size).toBe(0);
-
-    // Z#2: チェック（約 1.7 秒・しゃがんで確認）
-    pressZ();
-    const lead = h.squad.allies.find((a) => a.checkLeft > 0) ?? h.squad.allies[0]!;
-    h.step(0.5);
-    expect(door.angle).toBe(0);
-    h.step(2.5);
+    h.step(9);
     const res = h.squad.doorChecks.get(door.id);
     expect(res).toBeDefined();
     expect(res!.trapFound).toBe(true);
     expect(res!.locked).toBe(false);
     expect(h.traps!.isDiscovered(door.id)).toBe(true);
-    expect(lead.checkLeft).toBe(0);
+    for (const a of h.squad.allies) expect(a.checkLeft).toBe(0);
     expect(door.angle).toBe(0);
     expect(h.squad.quickOrderHint(1)).toContain('オープン&クリア');
+    expect(h.squad.quickOrderHint(1)).toContain('罠発見');
 
-    // Z#3: オープン&クリア。確認済みのトラップを先に解除してから開ける（解除は数秒かかる）
+    // Z#2: オープン&クリア。確認済みのトラップを先に解除してから開ける（解除は数秒かかる）
     h.squad.rand = () => 0.99; // 解除は成功
     pressZ();
     h.step(2);
@@ -119,12 +117,11 @@ describe('Z の 3 段階（実機）', () => {
     expect(h.traps!.disarmed).toBe(1);
   });
 
-  it('トラップなしのドアでも Z の段階は同じ。チェックは「トラップ無し」を報告する', () => {
+  it('トラップなしのドアでも Z の段階は同じ。スタック時のチェックは「トラップ無し」を報告する', () => {
     const { h, door, pressZ } = setup({ trapped: false, locked: true });
     pressZ();
-    h.step(8);
-    pressZ();
-    h.step(3);
+    h.step(10);
+    expect(door.angle).toBe(0);
     expect(h.squad.doorChecks.get(door.id)).toMatchObject({ trapFound: false, locked: true });
     expect(h.squad.quickOrderHint(1)).toContain('強行突入');
   });
