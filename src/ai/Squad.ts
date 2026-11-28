@@ -22,7 +22,7 @@ import type { BlastVictim, DoorTrapSystem } from '../world/DoorTraps';
 import type { AABB, Collider } from '../world/WorldBuilder';
 import type { StairMark } from '../world/Walk';
 import type { TextureLibrary } from '../world/Materials';
-import type { DoorSystem } from '../world/Door';
+import type { Door, DoorSystem } from '../world/Door';
 import { AIDebugLabel } from '../ui/AIDebugLabel';
 import { CommandMenu, type OrderContext } from '../ui/CommandMenu';
 import type { FloorPlanAllyState, FloorPlanWaypoint } from '../ui/Minimap';
@@ -634,6 +634,25 @@ export class SquadSystem implements SquadContext {
 
   getRoster(): SquadRosterEntry[] {
     return getRosterImpl(this);
+  }
+
+  /**
+   * 隊員がドア下ワンド（ミラー確認）で偵察中なら、その映像を出すための情報。進行度 0→1。偵察中の隊員がいなければ null。
+   */
+  getScoutFeed(): { allyId: string; callsign: string; door: Door; x: number; z: number; progress: number } | null {
+    const total = Math.max(0.001, this.cfg.mirror.durationSec);
+    for (const a of this.allies) {
+      if (a.down || !a.mirrorStarted || a.mirrorLeft <= 0 || !a.door) continue;
+      return {
+        allyId: a.id,
+        callsign: a.callsign,
+        door: a.door,
+        x: a.body.px,
+        z: a.body.pz,
+        progress: Math.min(1, Math.max(0, 1 - a.mirrorLeft / total)),
+      };
+    }
+    return null;
   }
 
   /** HUD 用: 分隊の携行数（残り / 初期） */

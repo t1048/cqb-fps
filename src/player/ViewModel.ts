@@ -434,17 +434,11 @@ export class ViewModel {
     else if (style === 'suspect_shotgun') this.buildShotgun(true);
     else if (style === 'suspect_ar') this.buildSuspectAr();
     else if (style === 'machine_pistol') this.buildPistol();
-    else this.buildGun(0.46, 0.22);
+    else this.buildCarbine();
   }
 
   private metal(color = 0x565f68): THREE.MeshStandardMaterial {
     const m = new THREE.MeshStandardMaterial({ map: this.textures.get('metal'), color, roughness: 0.48, metalness: 0.15 });
-    this.mats.push(m);
-    return m;
-  }
-
-  private wood(): THREE.MeshStandardMaterial {
-    const m = new THREE.MeshStandardMaterial({ map: this.textures.get('wood'), color: 0x6b4424, roughness: 0.75 });
     this.mats.push(m);
     return m;
   }
@@ -494,7 +488,7 @@ export class ViewModel {
     const foreEnd = barrel - 0.16;
     this.add(new THREE.BoxGeometry(0.052, 0.052, foreEnd), dark, 0, 0, -0.14 - foreEnd / 2);
     this.add(new THREE.CylinderGeometry(0.011, 0.011, 0.12, 12).rotateX(Math.PI / 2), metal, 0, 0, -barrel + 0.04);
-    this.add(new THREE.BoxGeometry(0.06, 0.065, stock), this.wood(), 0, -0.01, stock / 2 + 0.02);
+    this.add(new THREE.BoxGeometry(0.06, 0.065, stock), this.metal(0x1c1f22), 0, -0.01, stock / 2 + 0.02);
     this.withMag(0, -0.025, -0.095, 0.12, () => {
       this.add(new THREE.BoxGeometry(0.037, 0.10, 0.055).rotateX(0.12), dark, 0, -0.045, -0.006);
       this.add(new THREE.BoxGeometry(0.041, 0.012, 0.06), this.metal(0x2a2f34), 0, -0.095, -0.012);
@@ -504,11 +498,17 @@ export class ViewModel {
     this.buildHand(0.015, -0.08, 0.026);
   }
 
-  /** 消音カービン: 通常カービン＋銃口サプレッサー */
+  private wood(color = 0x5c3e26): THREE.MeshStandardMaterial {
+    const m = new THREE.MeshStandardMaterial({ map: this.textures.get('wood'), color, roughness: 0.78 });
+    this.mats.push(m);
+    return m;
+  }
+
+  /** 消音カービン: AR 系カービン＋銃口サプレッサー */
   private buildSuppressedGun(): void {
-    this.buildGun(0.42, 0.22);
+    this.buildCarbine();
     const supp = this.metal(0x252a30);
-    this.add(new THREE.CylinderGeometry(0.019, 0.019, 0.17, 14).rotateX(Math.PI / 2), supp, 0, 0, -0.52);
+    this.add(new THREE.CylinderGeometry(0.019, 0.019, 0.17, 14).rotateX(Math.PI / 2), supp, 0, -0.002, -0.62);
   }
 
   /** ショットガン（sawedOff=true で容疑者用ソードオフ） */
@@ -549,6 +549,99 @@ export class ViewModel {
     });
     this.add(new THREE.BoxGeometry(0.046, 0.095, 0.05), woodMat, 0, -0.065, 0.012);
     this.buildHand(0.015, -0.08, 0.026);
+  }
+
+  /**
+   * カービン（AR 系 5.56mm）: フラットトップのアッパー＋ピカティニーレール、M-LOK フリーフロートハンドガード、
+   * バッファーチューブ＋伸縮ストック、樹脂グリップ、湾曲 STANAG 弾倉、マイクロドットサイト、ウェポンライト。
+   * 黒アルマイト／樹脂色のみで木部はない。
+   */
+  private buildCarbine(): void {
+    const anod = this.metal(0x3a3f45);
+    const polymer = this.metal(0x2a2d31);
+    const rail = this.metal(0x464c53);
+    const steel = this.metal(0x15181b);
+    const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number): void => this.add(geo, m, x, y, z);
+    const rodZ = (r0: number, r1: number, len: number, seg = 12): THREE.CylinderGeometry =>
+      new THREE.CylinderGeometry(r0, r1, len, seg).rotateX(Math.PI / 2);
+
+    // アッパーレシーバー＋トップレール（ハンドガードまで連続）
+    add(new THREE.BoxGeometry(0.05, 0.048, 0.2), anod, 0, 0.004, -0.08);
+    add(new THREE.BoxGeometry(0.032, 0.01, 0.46), rail, 0, 0.033, -0.2);
+    for (let i = 0; i < 22; i++) add(new THREE.BoxGeometry(0.036, 0.005, 0.009), rail, 0, 0.04, 0.018 - i * 0.021);
+    // エジェクションポートカバー・フォワードアシスト（右側面）
+    add(new THREE.BoxGeometry(0.004, 0.022, 0.06), steel, 0.026, 0.004, -0.085);
+    add(rodZ(0.008, 0.008, 0.03, 8).rotateY(-0.5), anod, 0.026, 0.012, -0.03);
+    // チャージングハンドル（後端の T 字）
+    add(new THREE.BoxGeometry(0.05, 0.01, 0.018), polymer, 0, 0.022, 0.026);
+
+    // ロワーレシーバー＋マガジンウェル＋トリガーガード
+    add(new THREE.BoxGeometry(0.046, 0.036, 0.18), anod, 0, -0.036, -0.072);
+    add(new THREE.BoxGeometry(0.05, 0.05, 0.072), anod, 0, -0.068, -0.112);
+    add(new THREE.BoxGeometry(0.012, 0.006, 0.06), anod, 0, -0.072, -0.045);
+    add(new THREE.BoxGeometry(0.005, 0.022, 0.012).rotateX(0.3), steel, 0, -0.064, -0.05);
+    // セレクター・マグキャッチ
+    add(rodZ(0.007, 0.007, 0.012, 8).rotateY(Math.PI / 2), steel, -0.025, -0.03, -0.01);
+    add(new THREE.BoxGeometry(0.006, 0.012, 0.012), steel, 0.026, -0.05, -0.075);
+
+    // 樹脂ピストルグリップ（指掛けの段付き）
+    add(new THREE.BoxGeometry(0.036, 0.105, 0.046).rotateX(0.32), polymer, 0, -0.094, 0.006);
+    add(new THREE.BoxGeometry(0.038, 0.012, 0.05).rotateX(0.32), polymer, 0, -0.148, 0.024);
+
+    // M-LOK フリーフロートハンドガード（八角断面）＋スロット
+    const hgLen = 0.27;
+    const hgZ = -0.18 - hgLen / 2;
+    add(rodZ(0.031, 0.031, hgLen, 8).rotateZ(Math.PI / 8), anod, 0, -0.002, hgZ);
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        add(new THREE.BoxGeometry(0.004, 0.012, 0.03), steel, side * 0.0295, -0.002, -0.21 - i * 0.06);
+      }
+    }
+    for (let i = 0; i < 4; i++) add(new THREE.BoxGeometry(0.012, 0.004, 0.03), steel, 0, -0.031, -0.21 - i * 0.06);
+    // バレル＋A2 フラッシュハイダー
+    add(rodZ(0.0095, 0.0095, 0.08), steel, 0, -0.002, -0.49);
+    add(rodZ(0.012, 0.012, 0.05), steel, 0, -0.002, -0.55);
+    for (let i = 0; i < 3; i++) add(new THREE.BoxGeometry(0.026, 0.004, 0.008), anod, 0, 0.008, -0.54 - i * 0.012);
+
+    // 折りたたみ式バックアップサイト（前後、倒した状態）
+    add(new THREE.BoxGeometry(0.026, 0.012, 0.03), polymer, 0, 0.045, -0.41);
+    add(new THREE.BoxGeometry(0.026, 0.012, 0.028), polymer, 0, 0.045, 0.005);
+
+    // マイクロドットサイト（ライザーマウント＋筒＋レンズ）
+    add(new THREE.BoxGeometry(0.03, 0.022, 0.05), rail, 0, 0.052, -0.07);
+    add(rodZ(0.019, 0.019, 0.055, 14), polymer, 0, 0.082, -0.07);
+    add(new THREE.BoxGeometry(0.014, 0.014, 0.014), polymer, 0.02, 0.082, -0.07);
+    add(new THREE.BoxGeometry(0.014, 0.012, 0.014), polymer, 0, 0.104, -0.07);
+    const lens = new THREE.MeshStandardMaterial({ color: 0x3c5a66, roughness: 0.08, metalness: 0.4, transparent: true, opacity: 0.6 });
+    this.mats.push(lens);
+    add(new THREE.CircleGeometry(0.015, 14), lens, 0, 0.082, -0.0424);
+    const dot = new THREE.MeshBasicMaterial({ color: 0xff3020 });
+    this.mats.push(dot);
+    add(new THREE.CircleGeometry(0.0016, 8), dot, 0, 0.082, -0.0422);
+
+    // ウェポンライト（右側 3 時位置）
+    add(new THREE.BoxGeometry(0.012, 0.016, 0.03), rail, 0.034, -0.002, -0.4);
+    add(rodZ(0.012, 0.012, 0.07, 12), polymer, 0.05, -0.002, -0.405);
+    const bezel = new THREE.MeshBasicMaterial({ color: 0xd8e2ea });
+    this.mats.push(bezel);
+    add(new THREE.CircleGeometry(0.0105, 12).rotateY(Math.PI), bezel, 0.05, -0.002, -0.4405);
+
+    // バッファーチューブ＋伸縮ストック（チークレスト・バットパッド）＋ロックレバー
+    add(rodZ(0.016, 0.016, 0.17, 12), anod, 0, -0.004, 0.105);
+    add(new THREE.BoxGeometry(0.044, 0.06, 0.1), polymer, 0, -0.016, 0.205);
+    add(new THREE.BoxGeometry(0.036, 0.014, 0.085), polymer, 0, 0.018, 0.2);
+    add(new THREE.BoxGeometry(0.046, 0.098, 0.022), steel, 0, -0.03, 0.262);
+    add(new THREE.BoxGeometry(0.02, 0.022, 0.05), polymer, 0, -0.054, 0.16);
+
+    // 湾曲 STANAG 弾倉（上下 2 段で前方へ反る）
+    this.withMag(0, -0.088, -0.112, 0.12, () => {
+      add(new THREE.BoxGeometry(0.03, 0.075, 0.064).rotateX(0.1), polymer, 0, -0.03, 0.002);
+      add(new THREE.BoxGeometry(0.03, 0.06, 0.06).rotateX(0.38), polymer, 0, -0.092, -0.016);
+      add(new THREE.BoxGeometry(0.034, 0.012, 0.066).rotateX(0.38), steel, 0, -0.124, -0.03);
+      for (let i = 0; i < 3; i++) add(new THREE.BoxGeometry(0.032, 0.003, 0.05).rotateX(0.1), steel, 0, -0.006 - i * 0.02, 0.004);
+    });
+
+    this.buildHand(0.015, -0.088, 0.03);
   }
 
   /** 改造フルオート拳銃: 短いスライド＋延長マガジン（ストックなし） */

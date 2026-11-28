@@ -445,6 +445,7 @@ class App {
           subtitle: this.subtitle,
           weapons: this.weapons,
           host: document.body,
+          allyFeed: () => this.squad.getScoutFeed(),
         });
       }
     }
