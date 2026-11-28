@@ -8,7 +8,7 @@ import {
   squadRoute,
   STAIR_FLOOR_MATCH,
   stairEntry,
-  stairExitReached,
+  stairRunPlan,
   stairRunTarget,
 } from '../SquadRoute';
 import { blockedAt, resolveOverlap, stepToward, type XZ } from '../EngageBehavior';
@@ -253,27 +253,49 @@ export function navigateTo(
     }
   }
 
-  // 昇降中: 退出点に着くまで同じ階段を進む（停滞が続いたときだけやめる）
-  if (ally.activeStair) {
-    const act = ally.activeStair;
-    const s = ctx.stairs.find((m) => m.id === act.id);
-    if (!s || stairExitReached(s, act.up, body.px, body.pz, body.footY, ctx.cfg.stairExitRadius)) {
+  // 昇降判断（Squad / Suspect 共通の stairRunPlan）: 継続・退出・停滞放棄・階段途中の目的地への到達/進入
+  let forcedStair: { stair: StairMark; up: boolean } | null = null;
+  if (ctx.stairs.length > 0) {
+    const plan = stairRunPlan({
+      stairs: ctx.stairs,
+      active: ally.activeStair,
+      px: body.px,
+      pz: body.pz,
+      footY: body.footY,
+      stalled: ally.stalled,
+      stallResetSec: ctx.cfg.stairStallResetSec,
+      exitRadius: ctx.cfg.stairExitRadius,
+      arriveTol,
+      dest: { x: goalX, z: goalZ, y: destY },
+    });
+    if (plan.kind === 'arrived') {
+      // 階段途中の目的地に着いた: その場で止まる（行き過ぎて遠い床へ出ない）
       ally.activeStair = null;
-    } else if (ally.stalled >= ctx.cfg.stairStallResetSec) {
-      ally.activeStair = null;
-      ally.stairPick = null;
       ally.stalled = 0;
       ally.stuckStage = 0;
       ally.anchor = { x: body.px, z: body.pz };
-    } else {
+      ally.vel.x = 0;
+      ally.vel.z = 0;
+      return;
+    }
+    if (plan.kind === 'exit') {
+      ally.activeStair = null;
+    } else if (plan.kind === 'giveup') {
+      // 停滞カウンタ（stalled / stuckStage）は戻さない: 段階的な停滞復帰（recoverStuckAlly）を必ず動かすため
+      ally.activeStair = null;
+    } else if (plan.kind === 'run' && plan.stair) {
+      ally.activeStair = { id: plan.stair.id, up: plan.up ?? true };
       onStairRun = true;
-      routeDest = stairRunTarget(s, act.up, body.px, body.pz);
+      routeDest = plan.target ?? routeDest;
+    } else if (plan.kind === 'enter' && plan.stair) {
+      forcedStair = { stair: plan.stair, up: plan.up ?? true };
     }
   }
 
-  if (!onStairRun && !sameFloor && ctx.stairs.length > 0) {
-    const up = destY > body.footY;
-    const stair = chooseStair(ctx, ally, up, dt, allowOpenUnlockedDoors, excludeDoorId, { x: goalX, z: goalZ, y: destY });
+  if (!onStairRun && (forcedStair || !sameFloor) && ctx.stairs.length > 0) {
+    const up = forcedStair ? forcedStair.up : destY > body.footY;
+    const stair =
+      forcedStair?.stair ?? chooseStair(ctx, ally, up, dt, allowOpenUnlockedDoors, excludeDoorId, { x: goalX, z: goalZ, y: destY });
     const entry = stairEntry(stair, up);
     const onFlight =
       (up ? body.footY > stair.baseY + 0.35 : body.footY < stair.topY - 0.35) &&

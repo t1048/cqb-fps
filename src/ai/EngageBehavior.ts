@@ -16,7 +16,7 @@ import {
   squadRoute,
   STAIR_FLOOR_MATCH,
   stairEntry,
-  stairExitReached,
+  stairRunPlan,
   stairRunTarget,
 } from './SquadRoute';
 
@@ -732,30 +732,51 @@ export class SuspectNavigator {
     let routeDest: XZ = { x: dest.x, z: dest.z };
     let onStairRun = false;
 
-    // 階段昇降中
-    if (this.activeStair) {
-      const act = this.activeStair;
-      const s = this.ctx.stairs?.find((m) => m.id === act.id);
-      if (!s || stairExitReached(s, act.up, body.px, body.pz, body.footY, NAV_STAIR_EXIT_RADIUS)) {
+    // 昇降判断（Squad / Suspect 共通の stairRunPlan）: 継続・退出・停滞放棄・階段途中の目的地への到達/進入
+    let forcedStair: { stair: StairMark; up: boolean } | null = null;
+    const allStairs = this.ctx.stairs;
+    if (allStairs && allStairs.length > 0) {
+      const plan = stairRunPlan({
+        stairs: allStairs,
+        active: this.activeStair,
+        px: body.px,
+        pz: body.pz,
+        footY: body.footY,
+        stalled: this.stalled,
+        stallResetSec: NAV_STAIR_STALL_RESET,
+        exitRadius: NAV_STAIR_EXIT_RADIUS,
+        arriveTol: arriveDist,
+        dest: { x: dest.x, z: dest.z, y: dest.y },
+      });
+      if (plan.kind === 'arrived') {
+        // 階段途中の目的地に着いた: その場で止まる（行き過ぎて遠い床へ出ない）
         this.activeStair = null;
-      } else if (this.stalled >= NAV_STAIR_STALL_RESET) {
-        this.activeStair = null;
-        this.stairPick = null;
         this.stalled = 0;
         this.anchor = { x: body.px, z: body.pz };
-      } else {
+        this.curSpeed = 0;
+        return 'arrived';
+      }
+      if (plan.kind === 'exit') {
+        this.activeStair = null;
+      } else if (plan.kind === 'giveup') {
+        // 停滞カウンタ（stalled）は戻さない: NAV_STUCK_ABORT の強い復帰を必ず動かすため
+        this.activeStair = null;
+      } else if (plan.kind === 'run' && plan.stair) {
+        this.activeStair = { id: plan.stair.id, up: plan.up ?? true };
         onStairRun = true;
-        routeDest = stairRunTarget(s, act.up, body.px, body.pz);
+        routeDest = plan.target ?? routeDest;
+      } else if (plan.kind === 'enter' && plan.stair && opts.canUseStairs) {
+        forcedStair = { stair: plan.stair, up: plan.up ?? true };
       }
     }
 
-    // 別階目的地なら階段を選択
-    if (!onStairRun && !sameFloor) {
+    // 別階目的地（または階段途中の目的地）なら階段を選択
+    if (!onStairRun && (forcedStair || !sameFloor)) {
       if (!opts.canUseStairs || !this.ctx.stairs || this.ctx.stairs.length === 0) {
         return 'blocked';
       }
-      const up = dest.y > body.footY;
-      const stair = this.chooseStair(up, dt, opts, dest);
+      const up = forcedStair ? forcedStair.up : dest.y > body.footY;
+      const stair = forcedStair?.stair ?? this.chooseStair(up, dt, opts, dest);
       if (!stair) return 'blocked';
       const entry = stairEntry(stair, up);
       const onFlight =
