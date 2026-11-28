@@ -23,6 +23,8 @@ export type Action =
   | 'regroup'
   | 'cycleElement'
   | 'useMedkit'
+  | 'nightVision'
+  | 'flashlight'
   | 'endMission';
 
 export type ActionMap = Record<string, string[]>;
@@ -55,6 +57,10 @@ export const DEFAULT_ACTION_MAP: ActionMap = {
   cycleElement: ['KeyT'],
   // 救急キットを使う（容疑者モード。押し続ける）
   useMedkit: ['KeyH'],
+  // 暗視装置の装着 / 跳ね上げ（SWAT モード）
+  nightVision: ['KeyN'],
+  // ライトの点灯 / 消灯（容疑者モード）
+  flashlight: ['KeyV'],
   endMission: ['Backspace', 'Enter'],
 };
 

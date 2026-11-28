@@ -6,7 +6,7 @@ import { GameLoop } from './core/GameLoop';
 import { InputManager } from './core/InputManager';
 import { disposeObject } from './core/dispose';
 import { DataLoader } from './core/DataLoader';
-import type { AIProfile, AimSettleParams, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, SiegeConfig, SquadConfig, StageEntry, SuspectAlertConfig, Vec3, WeaponDef } from './core/types';
+import type { AIProfile, AimSettleParams, DoorConfig, MapData, PerceptionConfig, PlayerConfig, RoeConfig, RoomDef, SiegeConfig, SquadConfig, StageEntry, SuspectAlertConfig, Vec3, WeaponDef } from './core/types';
 import { CivilianState, SuspectState, createGameEventBus, type GameEventBus } from './core/events';
 import type { Civilian } from './ai/Civilian';
 import { AudioEngine } from './core/Audio';
@@ -51,6 +51,11 @@ import { HostageThreat } from './ai/HostageThreat';
 import { DoorTrapSystem, rigCount, type BlastVictim } from './world/DoorTraps';
 import { SquadSystem, scaleInventory, type Cell } from './ai/Squad';
 import { SwatTeam } from './modes/SwatTeam';
+import { PowerGrid, type PowerChange } from './rules/Power';
+import { BreakerControl, BreakerPanelMesh, findPanelPlacement } from './world/BreakerPanel';
+import { FlashlightSystem } from './world/Flashlights';
+import { NightVision } from './player/NightVision';
+import type { NegotiationPowerCtl } from './modes/PreAssaultNegotiation';
 import { applyMissionRoster } from './rules/MissionRoster';
 import { PauseMenu } from './ui/PauseMenu';
 import type { SeedShareInfo } from './ui/shareLinks';
@@ -136,6 +141,7 @@ class App {
   private readonly replyProjScratch = new THREE.Vector3();
   private readonly replyEyeScratch = new THREE.Vector3();
   private readonly minimapEyeScratch = new THREE.Vector3();
+  private readonly camDirScratch = new THREE.Vector3();
   private readonly enemySightings = new Map<string, { x: number; y: number; z: number; t: number }>();
   private readonly scene = new THREE.Scene();
   private readonly equipmentScene = new THREE.Scene();
@@ -206,6 +212,32 @@ class App {
   private negotiationInfo: NegotiationAlertInfo = { tension: 0, trust: 0, ultimatums: 0, broken: false };
   private readonly mapId: string;
   private phase: AppPhase = 'briefing';
+  /** 建物の電源（外部の供給 × 屋内の配電盤） */
+  private readonly power = new PowerGrid();
+  private readonly breakerMesh: BreakerPanelMesh | null = null;
+  private readonly breaker: BreakerControl | null = null;
+  /** 配電盤のある部屋の名前（表示用） */
+  private readonly panelRoomName: string | null = null;
+  /** 停電中のライト（容疑者 NPC・容疑者モードのプレイヤー） */
+  private readonly flashlights: FlashlightSystem;
+  /** 暗視装置（SWAT モードのみ） */
+  private readonly nightVision: NightVision | null = null;
+  private readonly equipLights: { light: THREE.Light; color: number; intensity: number }[] = [];
+  /** SWAT モード: 突入と同時に停電させる（交渉の突入プラン） */
+  private breachBlackout = false;
+  /** 容疑者モード: SWAT が突入と同時に電源を落とす確率（交渉で決まる） */
+  private swatBlackoutChance = 0.3;
+  /** スローフォンの盗聴器を仕掛けた部屋（SWAT モード） */
+  private bugRoom: RoomDef | null = null;
+  private readonly rooms: readonly RoomDef[];
+  /** SWAT モード: 容疑者 AI が配電盤でブレーカーを落とすまでの手間（秒） */
+  private aiBreakerSec = 0;
+  private aiBreakerDone = false;
+  /** 容疑者モード: プレイヤーのライトで SWAT の暗視装置を眩ませたあとの再判定までの秒数 */
+  private readonly dazzleCd = new Map<string, number>();
+  private dazzleSayCd = 0;
+  private readonly powerChip = document.createElement('div');
+  private powerChipText = '';
 
   constructor(
     container: HTMLElement,
@@ -324,6 +356,40 @@ class App {
     );
     this.roe.attach(this.entities);
     this.scene.add(this.entities.root);
+    this.rooms = map.rooms;
+    // 配電盤（屋内の 1 階の壁）。容疑者も SWAT も F 長押しでメインブレーカーを落とす / 上げる
+    const placement = findPanelPlacement(
+      { rooms: map.rooms, doors: map.doors, windows: map.windows, colliders: this.world.colliders },
+      map.seed ?? 0,
+    );
+    if (placement) {
+      this.breakerMesh = new BreakerPanelMesh(placement);
+      this.scene.add(this.breakerMesh.root);
+      this.panelRoomName = tRoomName(placement.room.name);
+      this.breaker = new BreakerControl({
+        mesh: this.breakerMesh,
+        interaction: this.interaction,
+        eye: () => this.player.getEyePosition(this.replyEyeScratch),
+        viewDir: () => this.camera.getWorldDirection(this.camDirScratch),
+        power: this.power,
+        actor: suspect ? 'suspect' : 'swat',
+        showGauge: suspect ? (label, ratio) => this.suspectMission?.showGauge(label, ratio) : undefined,
+        onFlip: () => {
+          const p = this.player.getEyePosition(this.replyEyeScratch);
+          this.audio.playReload('rack');
+          this.bus.emit('noise', { pos: { x: p.x, y: p.y, z: p.z }, radius: 7, kind: 'door', source: 'player' });
+        },
+      });
+    }
+    this.flashlights = new FlashlightSystem({
+      scene: this.scene,
+      camera: this.camera,
+      colliders: this.world.colliders,
+      suspects: () => this.entities.suspects.values(),
+      playerLight: suspect,
+    });
+    this.entities.attachDarkness(this.flashlights);
+    this.power.onChange((c) => this.onPowerChange(c));
     if (!suspect) {
       this.doorTraps = new DoorTrapSystem({
         doors: this.doors,
@@ -375,6 +441,20 @@ class App {
     const equipmentLight = new THREE.DirectionalLight(0xfff1d6, 2.6);
     equipmentLight.position.set(-1, 2, 1);
     this.equipmentScene.add(equipmentLight);
+    for (const c of this.equipmentScene.children) {
+      const l = c as THREE.Light;
+      if (l.isLight) this.equipLights.push({ light: l, color: l.color.getHex(), intensity: l.intensity });
+    }
+    if (!suspect) {
+      this.nightVision = new NightVision({
+        postfx: this.postfx,
+        scene: this.scene,
+        camera: this.camera,
+        host: document.body,
+        equipmentLights: this.equipLights,
+        click: () => this.audio.playReload('click'),
+      });
+    }
     this.subtitle = new Subtitle(document.body);
     if (!suspect) {
       // オプティワンド（プレイヤー）・ミラー確認（隊員）で見つけた容疑者もミニマップに一時表示
@@ -506,7 +586,11 @@ class App {
         this.interaction,
         (report, failed) => this.endMission(failed, report),
         // 突入開始の瞬間に、仲間の容疑者へ消耗による士気ペナルティを 1 回だけ適用する
-        () => this.applySiegeMorale(),
+        // （SWAT が交渉の状況しだいで突入と同時に電源を落とす）
+        () => {
+          this.applySiegeMorale();
+          this.maybeSwatBreachBlackout();
+        },
       );
       const sm = this.suspectMission;
       this.allyDirector = new SuspectAllyDirector({
@@ -597,6 +681,10 @@ class App {
           siegeHour: () => this.siegeCfg.startHour,
           fatigueTier: () => fatigueTier(this.siegeFatigue, this.siegeCfg.player.tiers),
           markScouted: () => team.setScouted(true),
+          power: this.negotiationPower(),
+          setBreachBlackoutChance: (p) => {
+            this.swatBlackoutChance = p;
+          },
         }),
         () => this.startMission(),
       );
@@ -623,6 +711,20 @@ class App {
           supplyFatigue: () => this.siegeCfg.supplyFatigue,
           siegeHour: () => this.siegeCfg.startHour,
           fatigueTier: () => fatigueTier(this.siegeFatigue, this.siegeCfg.player.tiers),
+          power: {
+            ...this.negotiationPower(),
+            breachBlackout: () => this.breachBlackout,
+            setBreachBlackout: (v) => {
+              this.breachBlackout = v;
+            },
+          },
+          bug: {
+            plant: (s) => {
+              this.bugRoom = this.roomAt(s.body.px, s.body.footY, s.body.pz);
+              return tRoomName(this.bugRoom?.name ?? '不明な区画');
+            },
+            planted: () => this.bugRoom !== null,
+          },
           roomName: (s) => {
             const raw =
               map.rooms.find(
@@ -662,6 +764,11 @@ class App {
       const kit = this.medkit;
       this.hud.medkitProvider = () => kit.count;
     }
+    // 停電・暗視装置・ライトの状態（上部中央。プレイ中だけ表示）
+    this.powerChip.style.cssText =
+      `position:fixed;top:${suspect ? 98 : 12}px;left:50%;transform:translateX(-50%);z-index:5;pointer-events:none;display:none;` +
+      'padding:4px 12px;border-radius:999px;background:rgba(0,0,0,.62);border:1px solid rgba(255,210,77,.5);font:bold 13px/1.4 sans-serif';
+    document.body.appendChild(this.powerChip);
     if (this.optiwand) {
       const wand = this.optiwand;
       this.hud.toolLabel = () => wand.toolLabel();
@@ -841,7 +948,10 @@ class App {
     this.fortify?.setVisible(true);
     this.squadTour?.setVisible(true);
     this.applySiegeFatigue();
+    // 交渉中に外部から電気を止められたまま突入なら、容疑者は暗闇に慣れて最初からライトを点けている
+    this.flashlights.adapted = !this.power.utility;
     this.beginSwatMission();
+    this.refreshPowerChip();
     try {
       void Promise.resolve(this.renderer.domElement.requestPointerLock()).catch(() => {
         // ポインタロックが拒否された場合は通常の画面クリック待機にフォールバック
@@ -923,6 +1033,9 @@ class App {
     this.briefingScreen.hide();
     this.minimap.setVisible(false);
     this.optiwand?.setEquipped(false);
+    this.nightVision?.forceOff();
+    this.powerChip.style.display = 'none';
+    this.powerChipText = '';
     this.suspectMission?.setVisible(false);
     this.fortify?.setVisible(false);
     // 途中まで見たツアーは既読扱い（毎回出ると煩わしいため）
@@ -957,6 +1070,7 @@ class App {
     this.flashbang.update(dt);
     this.tearGas.update(dt);
     this.weapons.update(dt);
+    this.updateDarkness(dt);
     this.entities.update(dt);
     this.suspectAlert?.update(dt);
     this.hostageThreat?.update(dt);
@@ -1132,10 +1246,182 @@ class App {
    * 一度だけ実行する（再開では呼ばれない）。
    */
   private swatMissionBegun = false;
+
+  /** 交渉から電源を操作する窓口（外部の供給だけ。配電盤は現地で操作する） */
+  private negotiationPower(): NegotiationPowerCtl {
+    return {
+      isOn: () => this.power.on,
+      utilityOn: () => this.power.utility,
+      cutUtility: () => this.power.setUtility(false, 'negotiation'),
+      restoreUtility: () => this.power.setUtility(true, 'restore'),
+      panelRoom: () => this.panelRoomName,
+    };
+  }
+
+  private roomAt(x: number, y: number, z: number): RoomDef | null {
+    return (
+      this.rooms.find(
+        (r) =>
+          Math.abs((r.floorY ?? 0) - y) < 0.75 && Math.abs(x - r.x) <= r.width / 2 && Math.abs(z - r.z) <= r.depth / 2,
+      ) ?? null
+    );
+  }
+
+  /** 電源が切り替わった: 照明・環境光・配電盤のランプ・HUD を合わせ、プレイ中なら字幕で知らせる */
+  private onPowerChange(c: PowerChange): void {
+    const playing = this.phase === 'playing';
+    this.world.setPower(c.on, !playing);
+    this.scene.environmentIntensity = c.on ? 0.35 : 0.06;
+    this.breakerMesh?.setOn(this.power.breaker);
+    this.refreshPowerChip();
+    if (!playing) return;
+    if (!c.on) {
+      const who =
+        c.cause === 'breach'
+          ? t('SWAT が突入と同時に電源を落とした！', 'SWAT killed the power as they breached!')
+          : c.by === 'suspect' && this.mode === 'swat'
+            ? t('バチン——照明が落ちた。容疑者がブレーカーを落とした！', 'Clunk — the lights died. A suspect hit the breaker!')
+            : t('停電した。', 'The power is out.');
+      const hint =
+        this.mode === 'swat'
+          ? this.nightVision?.active
+            ? ''
+            : t(' N で暗視装置', ' Press N for night vision')
+          : this.flashlights.playerLightOn
+            ? ''
+            : t(' V でライト', ' Press V for your flashlight');
+      this.subtitle.show(`${who}${hint}`, 3);
+    } else {
+      this.subtitle.show(t('電気が戻った。', 'The power is back on.'), 2);
+    }
+  }
+
+  private refreshPowerChip(): void {
+    const dark = !this.power.on;
+    let text: string;
+    if (this.mode === 'swat') {
+      const nv = this.nightVision?.active ? 'ON' : 'OFF';
+      text = dark
+        ? t(`🌑 停電中 ・ N 暗視装置 ${nv}`, `🌑 POWER OUT · N Night Vision ${nv}`)
+        : this.nightVision?.active
+          ? t(`💡 通電中 ・ N 暗視装置 ${nv}`, `💡 POWER ON · N Night Vision ${nv}`)
+          : '';
+    } else {
+      const fl = this.flashlights.playerLightOn ? 'ON' : 'OFF';
+      text = dark
+        ? t(`🌑 停電中 ・ V ライト ${fl}`, `🌑 POWER OUT · V Flashlight ${fl}`)
+        : this.flashlights.playerLightOn
+          ? t(`💡 通電中 ・ V ライト ${fl}`, `💡 POWER ON · V Flashlight ${fl}`)
+          : '';
+    }
+    if (text && this.panelRoomName && dark && this.power.utility) {
+      text += t(` ・ 配電盤: ${this.panelRoomName}`, ` · Breaker: ${this.panelRoomName}`);
+    }
+    if (text === this.powerChipText) return;
+    this.powerChipText = text;
+    this.powerChip.textContent = text;
+    this.powerChip.style.display = text ? 'block' : 'none';
+    this.powerChip.style.color = dark ? '#ffd24d' : '#c7d6e6';
+  }
+
+  /** 容疑者モードの突入開始: 交渉で決まった確率で、SWAT が突入と同時に電源を落とす */
+  private maybeSwatBreachBlackout(): void {
+    if (this.power.utility && Math.random() < this.swatBlackoutChance) this.power.setUtility(false, 'breach');
+  }
+
+  /**
+   * 停電まわりの毎フレーム処理（容疑者の知覚より先）。
+   * ライトと暗視装置の切替、暗視装置の白飛び、SWAT AI の暗視視野、プレイヤーのライトによる目眩まし、
+   * 容疑者 AI の配電盤操作、盗聴器の傍受。
+   */
+  private updateDarkness(dt: number): void {
+    const dark = !this.power.on;
+    this.flashlights.dark = dark;
+    if (this.mode === 'suspect' && this.input.wasPressed('flashlight')) {
+      this.flashlights.togglePlayer();
+      this.audio.playReload('click');
+      this.refreshPowerChip();
+    }
+    if (this.nightVision && this.input.wasPressed('nightVision')) {
+      this.nightVision.toggle();
+      this.refreshPowerChip();
+    }
+    this.flashlights.update(dt);
+    const eye = this.player.getEyePosition(this.replyEyeScratch);
+    const dir = this.camera.getWorldDirection(this.camDirScratch);
+    if (this.nightVision) {
+      const glare = this.nightVision.level > 0 && dark ? this.flashlights.glareAt(eye, dir) : 0;
+      this.nightVision.update(dt, dark, glare);
+    } else {
+      // 容疑者モード: 停電中の手元は暗い（ライトを点ければ少し見える）
+      const k = dark ? (this.flashlights.playerLightOn ? 0.6 : 0.2) : 1;
+      for (const e of this.equipLights) e.light.intensity = e.intensity * k;
+    }
+    if (this.swatTeam) {
+      this.swatTeam.setDarkness(dark, this.flashlights.playerLightOn);
+      this.dazzleSayCd = Math.max(0, this.dazzleSayCd - dt);
+      for (const [id, cd] of this.dazzleCd) this.dazzleCd.set(id, cd - dt);
+      if (dark && this.flashlights.playerLightOn) {
+        for (const h of this.swatTeam.hunters) {
+          if (!h.alive || h.blindLeft > 0 || (this.dazzleCd.get(h.id) ?? 0) > 0) continue;
+          const chest = h.body.chestPos();
+          const head = { x: chest.x, y: chest.y + 0.35, z: chest.z };
+          const f = this.flashlights.playerBeamOn(eye, dir, head);
+          if (f < 0.25) continue;
+          // 隊員がこちらを向いているとき（暗視装置の対物レンズに光が入る）だけ眩む
+          const fx = -Math.sin(h.body.yawRad);
+          const fz = -Math.cos(h.body.yawRad);
+          const tx = eye.x - head.x;
+          const tz = eye.z - head.z;
+          const tl = Math.hypot(tx, tz) || 1;
+          if ((fx * tx + fz * tz) / tl < 0.4) continue;
+          h.onFlashed(0.8 + f * 0.9);
+          this.dazzleCd.set(h.id, 5);
+          if (this.dazzleSayCd <= 0) {
+            this.dazzleSayCd = 6;
+            this.subtitle.show(t('SWAT「くっ……暗視が焼ける！」', 'SWAT: "Argh... my NODs are washed out!"'), 1.8);
+          }
+        }
+      }
+    }
+    // SWAT モード: 警戒した容疑者が配電盤の近くにいれば、ブレーカーを落として暗闇に持ち込む
+    if (this.mode === 'swat' && this.breakerMesh && this.power.breaker && !this.aiBreakerDone && this.suspectAlert) {
+      const at = this.breakerMesh.frontPoint(0.6);
+      const floorY = this.breakerMesh.at.room.floorY ?? 0;
+      const near =
+        this.suspectAlert.tier >= 2 &&
+        [...this.entities.suspects.values()].some(
+          (s) =>
+            s.alive &&
+            (s.state === SuspectState.BARRICADED || s.state === SuspectState.ALERT) &&
+            Math.abs(s.body.footY - floorY) < 1 &&
+            Math.hypot(s.body.px - at.x, s.body.pz - at.z) < 4.5,
+        );
+      this.aiBreakerSec = near ? this.aiBreakerSec + dt : 0;
+      if (this.aiBreakerSec >= 2.5) {
+        this.aiBreakerDone = true;
+        this.power.setBreaker(false, 'suspect');
+        this.bus.emit('noise', { pos: { x: at.x, y: this.breakerMesh.at.y, z: at.z }, radius: 7, kind: 'door', source: 'suspect' });
+      }
+    }
+    // 盗聴器: その部屋にいる容疑者はミニマップに映り続ける
+    if (this.bugRoom) {
+      const r = this.bugRoom;
+      for (const s of this.entities.suspects.values()) {
+        if (!s.alive || s.state === SuspectState.ARRESTED) continue;
+        if (this.roomAt(s.body.px, s.body.footY, s.body.pz) === r) this.recordEnemySighting(s.id, s.body.px, s.body.footY, s.body.pz);
+      }
+    }
+  }
   private beginSwatMission(): void {
     if (this.swatMissionBegun || !this.suspectAlert || !this.doorTraps) return;
     this.swatMissionBegun = true;
     this.suspectAlert.setBaseline(this.negotiationBaseline);
+    if (this.breachBlackout && this.power.utility) {
+      // 突入プラン: 突入と同時に停電。容疑者は不意を突かれる（ライト無しで始まる）が、異変には気付く
+      this.power.setUtility(false, 'breach');
+      this.suspectAlert.add('breach', 0.8);
+    }
     const n = rigCount(this.squadCfg.doorTrap, this.negotiationBaseline);
     const p = this.player.position;
     this.doorTraps.rig(n, { x: p.x, y: p.y, z: p.z });
@@ -1316,6 +1602,11 @@ class App {
     delete (window as unknown as { __cqbStep?: unknown }).__cqbStep;
     delete (window as unknown as { __cqbApp?: unknown }).__cqbApp;
     this.loop.destroy();
+    this.nightVision?.dispose();
+    this.flashlights.dispose();
+    this.breaker?.dispose();
+    this.breakerMesh?.dispose();
+    this.powerChip.remove();
     this.unsubSettings();
     window.removeEventListener('keydown', this.onGlobalKeyDown);
     this.pauseMenu.dispose();

@@ -51,6 +51,10 @@ export const FLASH_REFILL_SEC = 45;
 
 export const DEG2RAD = Math.PI / 180;
 export const VISION_FOV_DEG = 120;
+/** 暗視装置を通した視野角（双眼の増幅管で約 40〜97°。周辺視野が無いぶん気付きにくい） */
+export const NVG_FOV_DEG = 75;
+/** 停電中にプレイヤーのライトが見えるときの視認距離の倍率 */
+export const LIT_TARGET_RANGE_MUL = 1.5;
 export const VISION_RANGE = 16;
 export const VISION_RANGE_CROUCH = 11;
 /** 視認してから反応して交戦に入るまで。圧力で短くなる（SwatTeam が更新） */
@@ -334,6 +338,10 @@ export interface SwatTeamHost {
   readonly currentPressure: number;
   readonly playerCrouching: boolean;
   readonly reactionSec: number;
+  /** 視野角（度）。停電中は暗視装置の狭い視野になる（プレイヤーがライトを点けていれば光で気付く） */
+  readonly visionFovDeg: number;
+  /** 視認距離の倍率（停電中にプレイヤーがライトを点けていると遠くから見える） */
+  readonly visionRangeMul: number;
   readonly lastSighting: Vec3 | null;
   readonly lastSightingAge: number;
   readonly clock: number;

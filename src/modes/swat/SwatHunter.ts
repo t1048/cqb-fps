@@ -109,7 +109,6 @@ import {
   SWAT_COMBAT,
   SWAT_MOBILITY,
   SWEEP_SPEED,
-  VISION_FOV_DEG,
   VISION_RANGE,
   VISION_RANGE_CROUCH,
   type CoverCell,
@@ -898,7 +897,9 @@ export class SwatHunter implements HitTarget {
     const p = this.ctx.player;
     if (p.alive === false) return;
     const engaged = this.state === 'engage' || this.state === 'rush';
-    const range = engaged ? this.combat.engageRange : this.team.playerCrouching ? VISION_RANGE_CROUCH : VISION_RANGE;
+    const range =
+      (engaged ? this.combat.engageRange : this.team.playerCrouching ? VISION_RANGE_CROUCH : VISION_RANGE) *
+      this.team.visionRangeMul;
     const eyeY = this.body.footY + 1.55;
     const threat = findNearestVisibleThreat(this.ctx, this.body.px, this.body.pz, eyeY, range, prevThreatId);
     if (!threat) {
@@ -911,7 +912,7 @@ export class SwatHunter implements HitTarget {
       const d = Math.hypot(dx, dz);
       const fx = -Math.sin(this.body.yawRad);
       const fz = -Math.cos(this.body.yawRad);
-      if (d > 1.2 && (dx * fx + dz * fz) / d < Math.cos((VISION_FOV_DEG / 2) * DEG2RAD)) {
+      if (d > 1.2 && (dx * fx + dz * fz) / d < Math.cos((this.team.visionFovDeg / 2) * DEG2RAD)) {
         this.spotTimer = Math.max(0, this.spotTimer - dt);
         return;
       }
