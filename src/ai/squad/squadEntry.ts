@@ -18,7 +18,7 @@ import {
   pickRadio,
 } from '../radioLines';
 import type { RoomDef, SquadOrder, Vec3 } from '../../core/types';
-import { hasLineOfSight } from '../../weapons/Flashbang';
+import { hasThrowLineOfSight } from '../../weapons/Flashbang';
 import type { Door } from '../../world/Door';
 import type { Collider } from '../../world/WorldBuilder';
 import { pathSegmentClear } from '../SquadRoute';
@@ -518,7 +518,7 @@ export function throwFlashbangIntoRoom(ctx: SquadContext, thrower: AllyUnit, por
     const tz = portal.centerZ + intoZ * d;
     if (
       !blockedAt(ctx.colliders, tx, tz, 0.2, portal.sillY) &&
-      hasLineOfSight(ctx.colliders, doorMid, { x: tx, y: portal.sillY + 0.3, z: tz })
+      hasThrowLineOfSight(ctx.colliders, doorMid, { x: tx, y: portal.sillY + 0.3, z: tz })
     ) {
       landX = tx;
       landZ = tz;
@@ -527,6 +527,11 @@ export function throwFlashbangIntoRoom(ctx: SquadContext, thrower: AllyUnit, por
   }
 
   const target: Vec3 = { x: landX, y: portal.sillY + 0.08, z: landZ };
+  throwFlashbangAt(ctx, thrower, start, target);
+}
+
+/** start（投擲者の目の位置付近）から target の床へ閃光弾を投げる。携行数を 1 減らす。 */
+export function throwFlashbangAt(ctx: SquadContext, thrower: AllyUnit, start: THREE.Vector3, target: Vec3): void {
   const fuseSec = Math.max(0.35, ctx.cfg.flashDelay);
 
   if (ctx.flashbang) {
@@ -583,7 +588,7 @@ export function throwGasIntoRoom(ctx: SquadContext, thrower: AllyUnit, portal: E
     const tz = portal.centerZ + intoZ * d;
     if (
       !blockedAt(ctx.colliders, tx, tz, 0.2, portal.sillY) &&
-      hasLineOfSight(ctx.colliders, doorMid, { x: tx, y: portal.sillY + 0.3, z: tz })
+      hasThrowLineOfSight(ctx.colliders, doorMid, { x: tx, y: portal.sillY + 0.3, z: tz })
     ) {
       landX = tx;
       landZ = tz;

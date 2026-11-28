@@ -455,6 +455,38 @@ export const HOT_STAIR_FLASH: readonly RadioLine[] = [
   ['階段室へ閃光弾を投げ込む！上る前に目を潰せ！', 'Flashing the stairwell before we climb!'],
   ['閃光弾を階段へ！爆発するまで上るな！', 'Bang up the stairs! Hold until it pops!'],
 ];
+/** 階段クリアの了解（上り / 下り） */
+export const STAIR_ACK_UP: readonly RadioLine[] = [
+  ['了解、階段を上がる。銃口は上だ。', 'Copy, taking the stairs up. Muzzles high.'],
+  ['階段クリアに入る。上の階から目を離すな。', 'Clearing the stairs. Eyes on the upper floor.'],
+];
+export const STAIR_ACK_DOWN: readonly RadioLine[] = [
+  ['了解、階段を下りる。下の階を警戒。', 'Copy, taking the stairs down. Watch below.'],
+  ['階段クリアに入る。下の踊り場に照準。', 'Clearing the stairs. Sights on the bottom landing.'],
+];
+/** 階段口へのスタック指示の了解 */
+export const STAIR_STACK: readonly RadioLine[] = [
+  ['階段口にスタックする。', 'Stacking at the stairs.'],
+  ['階段の下に付く。合図を待つ。', 'Holding at the foot of the stairs. Waiting on your call.'],
+];
+/** 縦列で昇降を始めるとき */
+export const STAIR_MOVE_UP: readonly RadioLine[] = [
+  ['上がるぞ。ゆっくりだ、上の階口を押さえろ。', 'Moving up. Slow, cover the top of the stairs.'],
+  ['ムーブ。間隔を空けて付いて来い。', 'Moving. Keep your spacing and follow.'],
+];
+export const STAIR_MOVE_DOWN: readonly RadioLine[] = [
+  ['下りるぞ。下の階口に照準を置け。', 'Moving down. Keep your sights on the bottom.'],
+  ['ムーブ。足元より下の階を見ろ。', 'Moving. Watch the floor below, not your feet.'],
+];
+/** 出口を確保したとき */
+export const STAIR_CLEAR_UP: readonly RadioLine[] = [
+  ['階段上クリア！上階の階段口を確保。', 'Top of the stairs clear! Landing secure.'],
+  ['上の階口クリア。周囲を押さえた。', 'Upstairs landing clear. We have the area.'],
+];
+export const STAIR_CLEAR_DOWN: readonly RadioLine[] = [
+  ['階段下クリア！下階の階段口を確保。', 'Bottom of the stairs clear! Landing secure.'],
+  ['下の階口クリア。周囲を押さえた。', 'Downstairs landing clear. We have the area.'],
+];
 export const HOT_KICK: readonly RadioLine[] = [
   ['半開きのドアだ。蹴り開ける、警戒！', 'Door cracked open. Kicking it wide, cover!'],
 ];

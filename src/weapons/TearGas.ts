@@ -317,6 +317,7 @@ export class TearGas {
 
     const near = collidersNear(this.colliders, p.x - r - 0.05, p.z - r - 0.05, p.x + r + 0.05, p.z + r + 0.05);
     for (let i = 0; i < near.length; i++) {
+      if (near[i]!.throwPass) continue; // 開き動作中のドア板はすり抜ける
       const a = near[i]!.aabb;
       if (p.x < a.min.x - r || p.x > a.max.x + r || p.y < a.min.y - r || p.y > a.max.y + r) continue;
       if (p.z < a.min.z - r || p.z > a.max.z + r) continue;

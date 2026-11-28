@@ -8,6 +8,8 @@ export interface LightSpot {
   intensity: number;
   distance: number;
   decay: number;
+  /** 屋外の照明（建物の電源が落ちても消えない。投光器・街灯の想定） */
+  outdoor?: boolean;
 }
 
 /**
@@ -40,6 +42,9 @@ export class RoomLightPool {
   private nearest: LightSpot | null = null;
   private lastShadowSpot: LightSpot | null = null;
   private shadowTimer = 0;
+  /** 屋内照明の明るさの倍率（停電で 0）。フェードで切り替える */
+  private indoorTarget = 1;
+  private indoorScale = 1;
 
   constructor(
     private readonly spots: readonly LightSpot[],
@@ -65,7 +70,29 @@ export class RoomLightPool {
     }
   }
 
+  /** 建物の電源。off で屋内照明だけを素早く落とす（屋外の照明は残す） */
+  setIndoorPower(on: boolean, instant = false): void {
+    const next = on ? 1 : 0;
+    if (this.indoorTarget !== next) {
+      this.indoorTarget = next;
+      this.timer = 0;
+    }
+    if (instant) this.indoorScale = this.indoorTarget;
+  }
+
+  get indoorPower(): number {
+    return this.indoorScale;
+  }
+
+  private scaleOf(spot: LightSpot): number {
+    return spot.outdoor ? 1 : this.indoorScale;
+  }
+
   update(dt: number, eye: { x: number; y: number; z: number }): void {
+    // 停電は一瞬で落ち（瞬き 1 回ぶん）、復旧は少しかけて点く
+    const k = this.indoorTarget < this.indoorScale ? 14 : 2.5;
+    this.indoorScale += (this.indoorTarget - this.indoorScale) * Math.min(1, dt * k);
+    if (Math.abs(this.indoorTarget - this.indoorScale) < 0.002) this.indoorScale = this.indoorTarget;
     this.timer -= dt;
     if (this.timer <= 0) {
       this.timer = RESELECT_SEC;
@@ -102,7 +129,7 @@ export class RoomLightPool {
       if (!free) break;
       this.assign(free, spot, 0);
     }
-    for (const s of this.slots) s.light.intensity = s.spot ? s.spot.intensity * s.w : 0;
+    for (const s of this.slots) s.light.intensity = s.spot ? s.spot.intensity * s.w * this.scaleOf(s.spot) : 0;
 
     if (shadow.light.castShadow) {
       if (shadow.spot !== null && shadow.light.intensity > 0.01) {
@@ -137,7 +164,7 @@ export class RoomLightPool {
     this.update(0, eye);
     for (const s of this.slots) {
       s.w = 1;
-      s.light.intensity = s.spot ? s.spot.intensity : 0;
+      s.light.intensity = s.spot ? s.spot.intensity * this.scaleOf(s.spot) : 0;
     }
     const s0 = this.slots[0];
     if (s0 && s0.light.castShadow && s0.spot !== null && s0.light.intensity > 0.01) {
@@ -150,7 +177,8 @@ export class RoomLightPool {
 
   private select(eye: { x: number; y: number; z: number }): void {
     const n = this.slots.length;
-    const scored = this.spots.map((spot) => {
+    const activeSpots = this.indoorTarget > 0 ? this.spots : this.spots.filter((s) => s.outdoor);
+    const scored = activeSpots.map((spot) => {
       const dx = spot.x - eye.x;
       const dz = spot.z - eye.z;
       const dy = (spot.y - eye.y) * VERTICAL_WEIGHT;
@@ -159,6 +187,11 @@ export class RoomLightPool {
     });
     scored.sort((a, b) => a.d - b.d);
     const candidateNearest = scored[0]?.spot ?? null;
+    if (scored.length === 0) {
+      this.wanted.clear();
+      this.nearest = null;
+      return;
+    }
     if (this.wanted.size > 0) {
       const candidateSet = new Set<LightSpot>();
       for (let i = 0; i < n && i < scored.length; i++) candidateSet.add(scored[i]!.spot);

@@ -1,5 +1,5 @@
 import type { RoomDef, Vec3, WindowDef } from '../core/types';
-import { hasLineOfSight } from '../weapons/Flashbang';
+import { hasThrowLineOfSight } from '../weapons/Flashbang';
 import { raycastWallCollidersXZ } from '../world/ColliderIndex';
 import type { StairMark } from '../world/Walk';
 import type { Collider } from '../world/WorldBuilder';
@@ -268,8 +268,8 @@ export function planDoorwayFlashThrow(
       y: door.sillY + 0.7,
       z: door.centerZ - door.normalZ * side * 1.8,
     };
-    if (!hasLineOfSight(colliders, origin, portalPt)) continue;
-    if (!hasLineOfSight(colliders, portalPt, inPt)) continue;
+    if (!hasThrowLineOfSight(colliders, origin, portalPt)) continue;
+    if (!hasThrowLineOfSight(colliders, portalPt, inPt)) continue;
     const score = distToDoor + distDoorToTarget;
     if (score < bestScore) {
       bestScore = score;
@@ -314,8 +314,8 @@ export function planWindowFlashThrow(
       y: floorY + Math.max(0.6, w.sill),
       z: w.z - nz * side * 1.6,
     };
-    if (!hasLineOfSight(colliders, origin, winPt)) continue;
-    if (!hasLineOfSight(colliders, winPt, inPt)) continue;
+    if (!hasThrowLineOfSight(colliders, origin, winPt)) continue;
+    if (!hasThrowLineOfSight(colliders, winPt, inPt)) continue;
     const score = distToWin + distWinToTarget;
     if (score < bestScore) {
       bestScore = score;
@@ -380,8 +380,8 @@ export function planWallBankFlashThrow(
     if (distAfter < 0.8 || distAfter > 7.5) continue;
     const dot = (rx * toTx + rz * toTz) / (rLen * distAfter);
     if (dot < 0.78) continue;
-    if (!hasLineOfSight(colliders, origin, bPt)) continue;
-    if (!hasLineOfSight(colliders, bPt, targetAim)) continue;
+    if (!hasThrowLineOfSight(colliders, origin, bPt)) continue;
+    if (!hasThrowLineOfSight(colliders, bPt, targetAim)) continue;
     const score = dot - distAfter * 0.04;
     if (score > bestScore) {
       bestScore = score;
@@ -410,7 +410,7 @@ export function planFlashThrow(
 ): FlashThrowPlan | null {
   const horiz = Math.hypot(target.x - origin.x, target.z - origin.z);
   const directAim: Vec3 = { x: target.x, y: target.y + 0.4, z: target.z };
-  if (horiz >= minDirectDist && horiz <= maxDist && hasLineOfSight(colliders, origin, directAim)) {
+  if (horiz >= minDirectDist && horiz <= maxDist && hasThrowLineOfSight(colliders, origin, directAim)) {
     return {
       velocity: computeBallisticVelocity(origin, { x: target.x, y: target.y + 0.3, z: target.z }, gravity, 9, 0.35, 0.9),
       aimPoint: directAim,

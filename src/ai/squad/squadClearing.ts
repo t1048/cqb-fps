@@ -4,6 +4,7 @@ import { t } from '../../core/i18n';
 import { AREA_SECURE, CIVILIAN_SECURE, CUFF, WEAPON_SECURE, pickRadio, roomClearLine } from '../radioLines';
 import type { RoomDef, Vec3 } from '../../core/types';
 import { hasLineOfSight } from '../../weapons/Flashbang';
+import { pointInWandView } from '../../player/optiwandGeometry';
 import { pathSegmentClear, squadRoute } from '../SquadRoute';
 import { blockedAt, type XZ } from '../EngageBehavior';
 import {
@@ -12,6 +13,7 @@ import {
   SECURED_TURN_SEC,
   type AllyUnit,
   type Cell,
+  type CoverageCamera,
   type EntryPortal,
   type RestrainTask,
   type SquadContext,
@@ -74,6 +76,7 @@ export function updateCoverage(ctx: SquadContext, dt: number): void {
     a.body.gaze(slot.dir);
     obsCount++;
   }
+  const cams: readonly CoverageCamera[] = ctx.extraCoverageViews?.() ?? [];
   for (let n = 0; n < chunk; n++) {
     if (ctx.coverageCursor >= total) ctx.coverageCursor = 0;
     const cell = ctx.coverage[ctx.coverageCursor++]!;
@@ -94,6 +97,18 @@ export function updateCoverage(ctx: SquadContext, dt: number): void {
         const fLen = Math.hypot(a.dir.x, a.dir.z) || 1;
         if (hDist > 0.2 && (dx * a.dir.x + dz * a.dir.z) < hDist * fLen * 0.45) continue;
         if (hasLineOfSight(ctx.colliders, a.eye, cellTargetTmp)) {
+          cell.visible = true;
+          break;
+        }
+      }
+    }
+    if (!cell.visible) {
+      for (let i = 0; i < cams.length; i++) {
+        const cam = cams[i]!;
+        if (Math.abs(cam.floorY - cell.y) > 0.7) continue;
+        const v = pointInWandView(cam, cam.fovDeg, cam.aspect, cellTargetTmp);
+        if (!v.inView || v.dist > cam.range) continue;
+        if (hasLineOfSight(ctx.colliders, cam, cellTargetTmp)) {
           cell.visible = true;
           break;
         }

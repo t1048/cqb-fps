@@ -194,7 +194,8 @@ describe('交渉の結果 → 警戒度ベースライン', () => {
     const initial = outcomes[outcomes.length - 1]!;
     const meter = (): { label: string; value: number } | undefined => scenario.meters().find((m) => /警戒度予測|Forecast Alert/.test(m.label));
     expect(meter()?.value).toBe(initial);
-    const [trustOpt, , , , ultimatum] = scenario.options;
+    const trustOpt = scenario.options.find((o) => o.icon === '🥪');
+    const ultimatum = scenario.options.find((o) => o.icon === '⚡');
     trustOpt!.run();
     trustOpt!.run();
     const afterTrust = outcomes[outcomes.length - 1]!;

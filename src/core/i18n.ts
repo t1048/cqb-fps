@@ -190,6 +190,8 @@ const ORDER_EN: Record<string, string> = {
   mirror: 'Mirror Under Door',
   check: 'Check Door',
   disarm: 'Disarm Trap',
+  stair_clear: 'Clear Stairs',
+  stair_flash_clear: 'Flash & Clear Stairs',
 };
 
 export function tOrderLabel(order: string, fallback: string): string {

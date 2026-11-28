@@ -12,7 +12,7 @@ export const SCENERY_PROPS: ReadonlySet<string> = new Set([
   'bed', 'hbed', 'piano', 'stretcher', 'ivstand', 'curtain', 'medcab', 'bar', 'sofa', 'table', 'low_table',
   'teller', 'vault', 'bench', 'column', 'desk', 'chair', 'partition', 'shelf', 'metal_rack', 'tool_shelf',
   'pallet', 'container', 'crates', 'toilet', 'sink', 'stall', 'rail', 'wardrobe', 'fridge', 'bathtub',
-  'counter', 'tv_board', 'beam', 'lamp', 'engawa', 'post', 'planter', 'island', 'banquet_table', 'dining_table', 'conf_table',
+  'counter', 'tv_board', 'lamp', 'engawa', 'post', 'planter', 'island', 'banquet_table', 'dining_table', 'conf_table',
 ]);
 
 type Builder = (g: THREE.Group, def: BoxDef, mat: SceneMat) => void;
@@ -422,13 +422,6 @@ function post(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   box(g, mat('wood', 0x5c4030), w, h * 0.05, d, 0, h * 0.08, 0);
 }
 
-function beam(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
-  const { width: w, height: h, depth: d } = def;
-  const wood = mat('wood', 0xffffff);
-  box(g, wood, w, h * 0.72, d, 0, h * 0.6, 0);
-  box(g, mat('wood', 0xc4a574), w, h * 0.22, d * 0.72, 0, h * 0.16, 0);
-}
-
 function lamp(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
   const { height: h } = def;
   const metal = mat('metal', 0xc8a860);
@@ -446,7 +439,7 @@ function lamp(g: THREE.Group, def: BoxDef, mat: SceneMat): void {
 const BUILDERS: Record<string, Builder> = {
   bed, hbed, piano, stretcher, ivstand, curtain, medcab, bar, sofa, table, low_table: table, teller, vault, bench,
   column, desk, chair, partition, shelf, metal_rack: shelf, tool_shelf: shelf, pallet, container, crates: container,
-  toilet, sink, stall, rail, wardrobe, fridge, bathtub, counter, tv_board: desk, beam, lamp, engawa, post,
+  toilet, sink, stall, rail, wardrobe, fridge, bathtub, counter, tv_board: desk, lamp, engawa, post,
   planter, island: counter, banquet_table: table, dining_table: table, conf_table: table,
 };
 

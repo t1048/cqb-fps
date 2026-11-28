@@ -26,8 +26,14 @@ const STAIR_DEST_Y_MARGIN = 0.2;
 /** 途中到達: 進捗差（m）と足元高との差（m） */
 const STAIR_DEST_ARRIVE_ALONG = 0.3;
 const STAIR_DEST_ARRIVE_Y = 0.5;
-/** 段の上にいるとみなす中心線からの横距離（m） */
-const STAIR_ON_FLIGHT_LATERAL = 1.0;
+/** 段の上にいるとみなす中心線からの横距離（m）。階段幅の半分（約 0.93m）＋体の半径（0.3m）: 段の縁に足が掛かっている位置も含める */
+const STAIR_ON_FLIGHT_LATERAL = 1.25;
+/**
+ * 段の上での昇降再開を見送る、向かう側の床高との差（m）。呼び出し側（Squad / Suspect の移動）が
+ * 「同じ階」とみなす高さ差（0.75m）と揃える: その範囲なら床の通常経路で降り切れる（昇り切れる）。
+ * ここで昇降を再開すると、端の数段を横切る経路を踏むたびに階段の奥へ押し戻され、昇降口で往復し続ける。
+ */
+const STAIR_RESUME_END_EPS = 0.75;
 /** 昇降中に中心線上で先読みする距離（m） */
 const STAIR_LOOKAHEAD = 0.35;
 
@@ -620,6 +626,7 @@ export function stairRunPlan(inp: StairRunInput): StairRunPlan {
       footY < m.topY - 0.1 &&
       distToSegment(px, pz, m.approachLow, m.approachHigh) <= STAIR_ON_FLIGHT_LATERAL &&
       Math.abs(dest.y - footY) > STAIR_DEST_Y_MARGIN &&
+      Math.abs(footY - (dest.y > footY ? m.topY : m.baseY)) > STAIR_RESUME_END_EPS &&
       !(hit && Math.abs(dest.y - footY) <= STAIR_DEST_ARRIVE_Y)
     ) {
       const up = dest.y > footY;

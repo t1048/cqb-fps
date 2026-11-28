@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareSuspectMode } from '../../src/modes/SuspectMode';
 import { generateRealMap, makeSingleRoomMap, makeTwoDoorHouseMap } from './helpers/headlessWorld';
 import { createSwatHarness, type SwatHarness } from './helpers/simDriver';
+import { seedRandom } from './helpers/seededRandom';
 
 const active: SwatHarness[] = [];
+// SWAT の反応（撃たれた直後に突撃するか・どの対抗策を選ぶか）は乱数で分かれる。
+// 乱数を固定し、狙った分岐（ホットスポットへの対抗策）を毎回同じに検証する
+beforeEach(() => {
+  seedRandom(1);
+});
 afterEach(() => {
   while (active.length) active.pop()!.dispose();
+  vi.restoreAllMocks();
 });
 
 /** 南北 2 室 + 間仕切りの扉(door_mid)。SWAT は南室、プレイヤーは扉の向こう（北室） */

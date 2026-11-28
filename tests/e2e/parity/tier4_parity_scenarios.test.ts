@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SuspectState } from '../../../src/core/events';
 import type { AllyDef, EntityDef } from '../../../src/core/types';
 import { applyMissionRoster, indoorFloorArea, missionRoster } from '../../../src/rules/MissionRoster';
@@ -17,12 +17,14 @@ import {
   makeSingleRoomMap,
   makeTwoDoorHouseMap,
 } from '../helpers/squadSimDriver';
+import { seedRandom } from '../helpers/seededRandom';
 
 const activeHarnesses: Array<{ dispose(): void }> = [];
 afterEach(() => {
   while (activeHarnesses.length > 0) {
     activeHarnesses.pop()!.dispose();
   }
+  vi.restoreAllMocks();
 });
 
 function track<T extends { dispose(): void }>(h: T): T {
@@ -224,10 +226,15 @@ describe('Tier 4 — Real-World Raid & Head-to-Head Parity Scenarios', () => {
   });
 
   it('Scenario 5: Multi-room house raid (house seed 202) — squad order progression, enemy contact, civilian safety, optics & clean disposal', () => {
+    // 武装した容疑者との実際の撃ち合いを含むため、乱数を固定して結果を再現可能にする
+    seedRandom(202);
     const map = applyMissionRoster(generateRealMap('house', 202));
     const h = track(createSquadHarness({ map }));
 
-    expect(h.squad.count).toBeGreaterThanOrEqual(4);
+    // 隊員数はミッション規模で決まる（SWAT 合計 = プレイヤー 1 + 隊員）。最小 4 名 = 隊員 3 名
+    const rosterSpec = missionRoster(indoorFloorArea(map.rooms));
+    expect(h.squad.count).toBe(rosterSpec.swat - 1);
+    expect(h.squad.count).toBeGreaterThanOrEqual(3);
     expect(h.doors.doors.length).toBeGreaterThanOrEqual(2);
 
     // Find nearest exterior door to player spawn and order ALPHA to stack + GOLD to flashClear

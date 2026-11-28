@@ -34,6 +34,8 @@ export interface Collider {
    * 空間索引（ColliderIndex）はこれがあればこの範囲で登録し、無い動的コライダは常に候補へ含める。
    */
   sweep?: { minX: number; minZ: number; maxX: number; maxZ: number };
+  /** true の間、投擲物（フラッシュバン・CS ガス）の衝突と投擲計画の射線から外す（開き動作中のドア板） */
+  throwPass?: boolean;
 }
 
 const DEG2RAD = Math.PI / 180;
@@ -121,6 +123,12 @@ export class WorldBuilder {
   /** 部屋照明。全室分の PointLight を常時置くとフラグメントシェーダが室数ぶん重くなるため、近傍だけに割り当てる。 */
   lights!: RoomLightPool;
   private sun!: THREE.DirectionalLight;
+  private sunBase = 2.4;
+  private hemi!: THREE.HemisphereLight;
+  private hemiBase = 0.5;
+  /** 屋内照明の拡散板（停電で暗くする）。元の色を userData.lit に持つ */
+  private readonly diffuserMats: THREE.MeshBasicMaterial[] = [];
+  private powered = true;
   private readonly motif: MotifDef | null;
 
   constructor(
@@ -803,9 +811,12 @@ export class WorldBuilder {
   private buildLights(): void {
     // 環境光は控えめにして、部屋照明の減衰と影で奥行きを作る
     const atm = this.motif?.atmosphere;
-    this.root.add(new THREE.HemisphereLight(atm?.hemiSky ?? 0xb8c6dc, atm?.hemiGround ?? 0x2a2620, atm?.hemiIntensity ?? 0.5));
+    this.hemiBase = atm?.hemiIntensity ?? 0.5;
+    this.hemi = new THREE.HemisphereLight(atm?.hemiSky ?? 0xb8c6dc, atm?.hemiGround ?? 0x2a2620, this.hemiBase);
+    this.root.add(this.hemi);
     // 太陽は影付き: 屋外と窓から差す光だけが明るくなり、屋内は部屋照明が主になる
-    const sun = new THREE.DirectionalLight(atm?.sunColor ?? 0xffe6c4, atm?.sunIntensity ?? 2.4);
+    this.sunBase = atm?.sunIntensity ?? 2.4;
+    const sun = new THREE.DirectionalLight(atm?.sunColor ?? 0xffe6c4, this.sunBase);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const cam = sun.shadow.camera;
@@ -829,7 +840,7 @@ export class WorldBuilder {
       if (room.outdoor) {
         spots.push({
           x: room.x, y: floorY + 4.8, z: room.z,
-          color: 0xc8d8f0, intensity: 7, distance: Math.max(room.width, room.depth) * 1.9, decay: 1.3,
+          color: 0xc8d8f0, intensity: 4.5, distance: Math.max(room.width, room.depth) * 1.1, decay: 1.4, outdoor: true,
         });
         return;
       }
@@ -848,8 +859,10 @@ export class WorldBuilder {
       let diffuserMat = this.diffuserCache.get(dimmed);
       if (!diffuserMat) {
         diffuserMat = new THREE.MeshBasicMaterial({ color: dimmed });
+        diffuserMat.userData.lit = dimmed;
         this.diffuserCache.set(dimmed, diffuserMat);
         this.materials.push(diffuserMat);
+        this.diffuserMats.push(diffuserMat);
       }
       const diffuser = new THREE.Mesh(this.diffuserGeo ??= new THREE.BoxGeometry(0.94, 0.028, 0.2), diffuserMat);
       diffuser.position.y = -0.054;
@@ -857,6 +870,27 @@ export class WorldBuilder {
       this.root.add(housing);
     });
     this.lights = new RoomLightPool(spots, this.root);
+  }
+
+  /** 停電中の環境光の倍率（窓から差す微かな月明かり・街明かり程度） */
+  static readonly DARK_AMBIENT = 0.025;
+  /** 停電中の指向性ライト倍率（屋内への強い昼光漏れを抑えつつ窓際の明暗を残す） */
+  static readonly DARK_SUN = 0.22;
+
+  get isPowered(): boolean {
+    return this.powered;
+  }
+
+  /**
+   * 建物の電源。off で屋内照明・拡散板を落とし、環境光と指向性ライトを絞る（屋外の照明は残す）。
+   * ライト数は変えない（シェーダ再コンパイルを避ける）。
+   */
+  setPower(on: boolean, instant = false): void {
+    this.powered = on;
+    this.lights.setIndoorPower(on, instant);
+    this.hemi.intensity = this.hemiBase * (on ? 1 : WorldBuilder.DARK_AMBIENT);
+    this.sun.intensity = this.sunBase * (on ? 1 : WorldBuilder.DARK_SUN);
+    for (const m of this.diffuserMats) m.color.setHex(on ? (m.userData.lit as number) : 0x16171a);
   }
 
   dispose(): void {
